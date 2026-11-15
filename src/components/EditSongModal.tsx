@@ -40,10 +40,20 @@ export const EditSongModal: React.FC<EditSongModalProps> = ({
         album: song.album || '',
         folder: song.folder || '',
         year: song.year || '',
+        lyrics: song.lyrics || '',
         cover: song.cover || '',
       });
     }
   }, [isOpen, song]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isOpen, onClose]);
 
   /** تغییر تصویر کاور با انتخاب فایل از گالری یا سیستم */
   const handleCoverFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -82,6 +92,7 @@ export const EditSongModal: React.FC<EditSongModalProps> = ({
         album: (formData.album || '').trim() || song.album,
         folder: (formData.folder || '').trim() || undefined,
         year: (formData.year || '').trim() || song.year,
+        lyrics: (formData.lyrics || '').trim() || undefined,
         cover: formData.cover || song.cover,
       };
       onSave(updated);
@@ -114,6 +125,8 @@ export const EditSongModal: React.FC<EditSongModalProps> = ({
           }}
         >
           <motion.div
+            role="dialog"
+            aria-modal="true"
             initial={{ opacity: 0, scale: 0.94, y: 15 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.94, y: 15 }}
@@ -151,7 +164,7 @@ export const EditSongModal: React.FC<EditSongModalProps> = ({
               <h2
                 style={{
                   margin: 0,
-                  fontSize: '17px',
+                  fontSize: '1.0625rem',
                   color: theme.colors.textPrimary,
                   fontWeight: '700',
                   textAlign: 'center',
@@ -218,7 +231,7 @@ export const EditSongModal: React.FC<EditSongModalProps> = ({
                   }}
                 >
                   <Camera size={26} />
-                  <span style={{ fontSize: '11px', fontWeight: '600' }}>
+                  <span style={{ fontSize: '0.6875rem', fontWeight: '600' }}>
                     {t.changeCover || 'تغییر کاور'}
                   </span>
                 </div>
@@ -239,7 +252,7 @@ export const EditSongModal: React.FC<EditSongModalProps> = ({
                   onClick={() => fileInputRef.current?.click()}
                   style={{
                     ...btnSecondaryStyle(theme),
-                    fontSize: '12px',
+                    fontSize: '0.75rem',
                     padding: '6px 12px',
                     display: 'flex',
                     alignItems: 'center',
@@ -256,7 +269,7 @@ export const EditSongModal: React.FC<EditSongModalProps> = ({
                     onClick={handleResetCover}
                     style={{
                       ...btnSecondaryStyle(theme),
-                      fontSize: '12px',
+                      fontSize: '0.75rem',
                       padding: '6px 12px',
                       display: 'flex',
                       alignItems: 'center',
@@ -270,7 +283,7 @@ export const EditSongModal: React.FC<EditSongModalProps> = ({
                 )}
               </div>
               {imageError && (
-                <div style={{ fontSize: '12px', color: theme.colors.danger || '#ff453a', textAlign: 'center' }}>
+                <div style={{ fontSize: '0.75rem', color: theme.colors.danger || '#ff453a', textAlign: 'center' }}>
                   {imageError}
                 </div>
               )}
@@ -332,6 +345,23 @@ export const EditSongModal: React.FC<EditSongModalProps> = ({
                   style={inputStyle(theme)}
                 />
               </div>
+
+              <div>
+                <label style={labelStyle(theme)}>{t.lyrics || 'متن ترانه'}</label>
+                <textarea
+                  rows={4}
+                  placeholder={t.lyricsPlaceholder || 'متن ترانه...'}
+                  value={formData.lyrics || ''}
+                  onChange={(e) => setFormData({ ...formData, lyrics: e.target.value })}
+                  style={{
+                    ...inputStyle(theme),
+                    resize: 'vertical',
+                    minHeight: '88px',
+                    lineHeight: 1.55,
+                    fontFamily: theme.fonts?.main,
+                  }}
+                />
+              </div>
             </div>
           </motion.div>
         </motion.div>
@@ -343,7 +373,7 @@ export const EditSongModal: React.FC<EditSongModalProps> = ({
 
 const labelStyle = (theme: any) => ({
   display: 'block',
-  fontSize: '12px',
+  fontSize: '0.75rem',
   fontWeight: '600',
   marginBottom: '4px',
   color: theme.colors.textSecondary,
@@ -357,7 +387,7 @@ const inputStyle = (theme: any) => ({
   border: `1px solid ${theme.colors.border}`,
   backgroundColor: theme.colors.background,
   color: theme.colors.textPrimary,
-  fontSize: '14px',
+  fontSize: '0.875rem',
   outline: 'none',
   transition: 'border-color 0.2s',
 });
@@ -367,10 +397,10 @@ const btnPrimaryStyle = (theme: any) => ({
   borderRadius: theme.radius.sm,
   border: 'none',
   backgroundColor: theme.colors.primary,
-  color: '#ffffff',
+  color: theme.colors.onPrimary || '#ffffff',
   cursor: 'pointer',
   fontWeight: '600',
-  fontSize: '14px',
+  fontSize: '0.875rem',
   transition: 'opacity 0.2s',
 });
 
@@ -382,6 +412,6 @@ const btnSecondaryStyle = (theme: any) => ({
   color: theme.colors.textPrimary,
   cursor: 'pointer',
   fontWeight: '500',
-  fontSize: '14px',
+  fontSize: '0.875rem',
   transition: 'background-color 0.2s',
 });

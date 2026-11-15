@@ -15,25 +15,17 @@ button, input {
   outline: none;
 }
 
-/* # انیمیشن ساده، سبک و نرم برای تمام دکمه‌ها (بدون تارشدن یا پرش پیکسل در هاور) */
-:where(button, [role="button"], .interactive-tap, label:has(input[type="file"])) {
+/* # انیمیشن تمیز و بدون تاری برای دکمه‌های واقعی (بدون اعمال scale/opacity روی کانتینرهای کارت) */
+:where(button, .interactive-tap, label:has(input[type="file"])) {
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
-  scale: 1;
   transition:
-    scale 0.2s cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 0.18s ease;
+    transform 0.16s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.16s ease;
 }
 
-@media (hover: hover) and (pointer: fine) {
-  :where(button, [role="button"], .interactive-tap, label:has(input[type="file"])):not(:disabled):not([aria-disabled="true"]):hover {
-    opacity: 0.85;
-  }
-}
-
-:where(button, [role="button"], .interactive-tap, label:has(input[type="file"])):not(:disabled):not([aria-disabled="true"]):active {
-  scale: 0.965;
-  opacity: 0.72;
+:where(button, .interactive-tap, label:has(input[type="file"])):not(:disabled):not([aria-disabled="true"]):active {
+  opacity: 0.76;
   transition-duration: 0.08s;
 }
 

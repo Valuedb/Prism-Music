@@ -1,6 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { nextInOrder, pickNextShuffled, prevInOrder } from '../../src/player/navigation.ts';
+import {
+  nextInOrder,
+  nextInOrderWithIndex,
+  pickNextShuffled,
+  prevInOrder,
+  prevInOrderWithIndex,
+} from '../../src/player/navigation.ts';
 import type { Song } from '../../src/types/index.ts';
 
 const makeSong = (id: string): Song => ({
@@ -82,4 +88,20 @@ test('pickNextShuffled: ورودی (played) تغییر نمی‌کنه', () => {
 
 test('pickNextShuffled: لیست خالی => null', () => {
   assert.equal(pickNextShuffled([], null, new Set(), true).song, null);
+});
+
+test('nextInOrderWithIndex & prevInOrderWithIndex: پیمایش دقیق صف دارای آهنگ تکراری بدون حلقه', () => {
+  const dupQueue = ['a', 'e', 'b', 'c', 'd', 'e', 'f'].map(makeSong);
+
+  const afterFirstE = nextInOrderWithIndex(dupQueue, 'e', false, 1);
+  assert.equal(afterFirstE.song?.id, 'b');
+  assert.equal(afterFirstE.index, 2);
+
+  const afterSecondE = nextInOrderWithIndex(dupQueue, 'e', false, 5);
+  assert.equal(afterSecondE.song?.id, 'f');
+  assert.equal(afterSecondE.index, 6);
+
+  const beforeSecondE = prevInOrderWithIndex(dupQueue, 'e', false, 5);
+  assert.equal(beforeSecondE.song?.id, 'd');
+  assert.equal(beforeSecondE.index, 4);
 });

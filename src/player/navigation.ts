@@ -5,25 +5,77 @@ import type { Song } from '../types/index';
  * همه‌ی منطق جابه‌جایی اینجاست تا بدون مرورگر قابل تست باشه.
  */
 
-/** آهنگ بعدی به ترتیب لیست. اگه به انتها برسیم: با loop به اول برمی‌گرده، وگرنه null */
-export const nextInOrder = (list: readonly Song[], currentId: string | null, loop: boolean): Song | null => {
-  if (list.length === 0) return null;
+export interface IndexedTrackPick {
+  song: Song | null;
+  index: number;
+}
 
-  const index = list.findIndex((song) => song.id === currentId);
-  if (index === -1) return list[0];
-  if (index < list.length - 1) return list[index + 1];
-  return loop ? list[0] : null;
+const resolveCurrentIndex = (
+  list: readonly Song[],
+  currentId: string | null,
+  currentIndex: number
+): number => {
+  if (
+    Number.isInteger(currentIndex) &&
+    currentIndex >= 0 &&
+    currentIndex < list.length &&
+    (!currentId || list[currentIndex].id === currentId)
+  ) {
+    return currentIndex;
+  }
+  if (!currentId) return -1;
+  return list.findIndex((song) => song.id === currentId);
 };
+
+/** آهنگ بعدی و اندیس دقیق آن به ترتیب لیست (پشتیبانی از آهنگ‌های تکراری در صف) */
+export const nextInOrderWithIndex = (
+  list: readonly Song[],
+  currentId: string | null,
+  loop: boolean,
+  currentIndex = -1
+): IndexedTrackPick => {
+  if (list.length === 0) return { song: null, index: -1 };
+
+  const index = resolveCurrentIndex(list, currentId, currentIndex);
+  if (index === -1) return { song: list[0], index: 0 };
+  if (index < list.length - 1) return { song: list[index + 1], index: index + 1 };
+  return loop ? { song: list[0], index: 0 } : { song: null, index: -1 };
+};
+
+/** آهنگ قبلی و اندیس دقیق آن به ترتیب لیست (پشتیبانی از آهنگ‌های تکراری در صف) */
+export const prevInOrderWithIndex = (
+  list: readonly Song[],
+  currentId: string | null,
+  loop: boolean,
+  currentIndex = -1
+): IndexedTrackPick => {
+  if (list.length === 0) return { song: null, index: -1 };
+
+  const index = resolveCurrentIndex(list, currentId, currentIndex);
+  if (index === -1) return { song: list[0], index: 0 };
+  if (index > 0) return { song: list[index - 1], index: index - 1 };
+  if (loop) {
+    const lastIdx = list.length - 1;
+    return { song: list[lastIdx], index: lastIdx };
+  }
+  return { song: null, index: -1 };
+};
+
+/** آهنگ بعدی به ترتیب لیست. اگه به انتها برسیم: با loop به اول برمی‌گرده، وگرنه null */
+export const nextInOrder = (
+  list: readonly Song[],
+  currentId: string | null,
+  loop: boolean,
+  currentIndex = -1
+): Song | null => nextInOrderWithIndex(list, currentId, loop, currentIndex).song;
 
 /** آهنگ قبلی به ترتیب لیست. اگه به ابتدا برسیم: با loop به آخر می‌ره، وگرنه null */
-export const prevInOrder = (list: readonly Song[], currentId: string | null, loop: boolean): Song | null => {
-  if (list.length === 0) return null;
-
-  const index = list.findIndex((song) => song.id === currentId);
-  if (index === -1) return list[0];
-  if (index > 0) return list[index - 1];
-  return loop ? list[list.length - 1] : null;
-};
+export const prevInOrder = (
+  list: readonly Song[],
+  currentId: string | null,
+  loop: boolean,
+  currentIndex = -1
+): Song | null => prevInOrderWithIndex(list, currentId, loop, currentIndex).song;
 
 export interface ShufflePick {
   /** آهنگ انتخاب‌شده. null یعنی همه‌ی آهنگ‌ها یک بار پخش شدن و loop خاموشه */

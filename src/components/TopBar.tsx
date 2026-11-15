@@ -2,6 +2,7 @@ import { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { Settings } from 'lucide-react';
 import { SearchBar, type SearchNavigateTarget } from './SearchBar';
+import { withAlpha } from '../utils/color';
 
 import type { AppTab, Playlist, Song } from '../types';
 
@@ -15,6 +16,10 @@ interface TopBarProps {
   playlists?: Playlist[];
   customFolders?: string[];
   onPlaySong?: (song: Song, list: Song[]) => void;
+  onPlayNext?: (songs: Song[]) => void;
+  onAddToQueue?: (song: Song) => void;
+  onAddSongsToPlaylist?: (playlistId: string, songs: Song[]) => void;
+  onCreatePlaylist?: (name: string, songs: Song[]) => void;
   onSearchNavigate?: (target: SearchNavigateTarget) => void;
 }
 
@@ -54,6 +59,10 @@ export const TopBar = ({
   playlists,
   customFolders,
   onPlaySong,
+  onPlayNext,
+  onAddToQueue,
+  onAddSongsToPlaylist,
+  onCreatePlaylist,
   onSearchNavigate,
 }: TopBarProps) => {
   const menuItems = useMemo(
@@ -110,7 +119,11 @@ export const TopBar = ({
     };
   }, [centerActiveTab]);
 
-  const hoverBg = theme.colors.surfaceHover || 'rgba(255, 255, 255, 0.08)';
+  const hoverBg = withAlpha(theme.colors.primary, theme.isDark ? 0.16 : 0.1);
+  const topBarBg = withAlpha(
+    theme.colors.surfaceSolid || theme.colors.background,
+    theme.isDark ? 0.78 : 0.84
+  );
 
   return (
     <div
@@ -123,10 +136,10 @@ export const TopBar = ({
         zIndex: 50,
         paddingTop: '18px',
         paddingBottom: '8px',
-        backgroundColor: theme.isDark ? 'rgba(12, 10, 24, 0.72)' : 'rgba(255, 255, 255, 0.72)',
+        backgroundColor: topBarBg,
         backdropFilter: 'blur(28px) saturate(180%)',
         WebkitBackdropFilter: 'blur(28px) saturate(180%)',
-        borderBottom: `1px solid ${theme.isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)'}`,
+        borderBottom: `1px solid ${theme.colors.border}`,
         boxSizing: 'border-box',
         overflow: 'hidden',
       }}
@@ -145,7 +158,7 @@ export const TopBar = ({
       >
         <h1
           style={{
-            fontSize: '22px',
+            fontSize: '1.375rem',
             fontWeight: '800',
             letterSpacing: '-0.4px',
             color: theme.colors.textPrimary,
@@ -164,6 +177,10 @@ export const TopBar = ({
             playlists={playlists}
             customFolders={customFolders}
             onPlaySong={onPlaySong}
+            onPlayNext={onPlayNext}
+            onAddToQueue={onAddToQueue}
+            onAddSongsToPlaylist={onAddSongsToPlaylist}
+            onCreatePlaylist={onCreatePlaylist}
             onNavigate={onSearchNavigate}
             t={t}
           />
@@ -179,7 +196,7 @@ export const TopBar = ({
               cursor: 'pointer',
               color: currentTab === 'settings' ? theme.colors.primary : theme.colors.textSecondary,
               borderRadius: theme.radius?.md || '10px',
-              transition: 'background-color 0.15s ease, color 0.15s ease, scale 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
+              transition: 'background-color 0.15s ease, color 0.15s ease',
             }}
             title={t.settings}
             onMouseEnter={(e) => {
@@ -245,20 +262,17 @@ export const TopBar = ({
                   flexDirection: 'column',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  padding: '6px 8px 4px 8px',
-                  fontSize: 'clamp(13.5px, 1.4vw, 15.5px)',
-                  fontWeight: isActive ? '700' : '500',
+                  padding: '6px 10px 4px 10px',
+                  fontSize: 'clamp(0.875rem, 1.45vw, 0.9688rem)',
+                  fontWeight: 700,
                   color: isActive ? theme.colors.primary : theme.colors.textSecondary,
                   whiteSpace: 'nowrap',
                   flexShrink: 0,
                   outline: 'none',
                   userSelect: 'none',
-                  transform: isActive ? 'scale(1.12)' : 'scale(0.88)',
-                  // # تب غیرفعال خوانا بماند (قبلاً در تم روشن با بلور و شفافیت محو می‌شد)
-                  opacity: isActive ? 1 : theme.isDark ? 0.55 : 0.8,
-                  filter: 'none',
+                  opacity: isActive ? 1 : theme.isDark ? 0.62 : 0.78,
                   zIndex: isActive ? 2 : 1,
-                  transition: 'transform 0.35s cubic-bezier(0.25, 1, 0.5, 1), scale 0.2s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.35s ease, filter 0.35s ease, color 0.35s ease',
+                  transition: 'opacity 0.25s ease, color 0.25s ease',
                 }}
               >
                 <span style={{ lineHeight: '1.2' }}>{item.label}</span>

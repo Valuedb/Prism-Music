@@ -17,7 +17,9 @@ import {
 import type { Song, Playlist } from '../types';
 import { AllSongs } from './AllSongs';
 import { CoverImage } from '../components/CoverImage';
-import { extractSongsBatched } from '../utils/audioMetadata';
+import { extractSongsBatched, partitionDuplicateSongs } from '../utils/audioMetadata';
+import { deleteAudioBlob } from '../storage/mediaStore';
+import { withAlpha } from '../utils/color';
 
 interface FoldersProps {
   songs: Song[];
@@ -33,6 +35,7 @@ interface FoldersProps {
   onPlaySongFromList: (song: Song, list: Song[]) => void;
   onCreatePlaylist: (name: string, selectedSongs: Song[]) => void;
   addToQueue: (song: Song) => void;
+  onPlayNext?: (songs: Song | Song[]) => void;
   onDeleteSong: (id: string) => void;
   onUpdateSong: (updatedSong: Song) => void;
   onAddSongToPlaylist: (playlistId: string, song: Song) => void;
@@ -42,6 +45,9 @@ interface FoldersProps {
   language: 'fa' | 'en';
   glassCardCovers?: boolean;
   initialFolder?: { id: string; token: number } | null;
+  skipDuplicatesOnImport?: boolean;
+  onBulkDeleteSongs?: (ids: string[]) => void;
+  confirmBeforeDelete?: boolean;
 }
 
 const UNCATEGORIZED_ID = '__uncategorized__';
@@ -87,6 +93,8 @@ const FolderModal: React.FC<{
           }}
         >
           <motion.div
+            role="dialog"
+            aria-modal="true"
             initial={{ opacity: 0, scale: 0.95, y: 10 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 10 }}
@@ -128,6 +136,7 @@ export const Folders: React.FC<FoldersProps> = ({
   onPlaySongFromList,
   onCreatePlaylist,
   addToQueue,
+  onPlayNext,
   onDeleteSong,
   onUpdateSong,
   onAddSongToPlaylist,
@@ -137,6 +146,9 @@ export const Folders: React.FC<FoldersProps> = ({
   language,
   glassCardCovers = true,
   initialFolder = null,
+  skipDuplicatesOnImport = true,
+  onBulkDeleteSongs,
+  confirmBeforeDelete = true,
 }) => {
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(() =>
     initialFolder ? initialFolder.id : null
@@ -238,7 +250,18 @@ export const Folders: React.FC<FoldersProps> = ({
       const fallbackName = activeFolder && !activeFolder.isUncategorized ? activeFolder.name : undefined;
       const imported = await extractSongsBatched(Array.from(files), fallbackName);
       if (imported.length > 0) {
-        setSongs((prev) => [...prev, ...imported]);
+        if (skipDuplicatesOnImport) {
+          const { unique, duplicates } = partitionDuplicateSongs(imported, songs);
+          duplicates.forEach((d) => {
+            if (d.fileUrl?.startsWith('blob:')) URL.revokeObjectURL(d.fileUrl);
+            deleteAudioBlob(d.id).catch(() => {});
+          });
+          if (unique.length > 0) {
+            setSongs((prev) => [...prev, ...unique]);
+          }
+        } else {
+          setSongs((prev) => [...prev, ...imported]);
+        }
       }
     } finally {
       setIsImporting(false);
@@ -315,225 +338,121 @@ export const Folders: React.FC<FoldersProps> = ({
     />
   );
 
-  // نمای داخل یک فولدر
-  if (selectedFolderId && activeFolder) {
-    return (
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-        {hiddenDirectoryInput}
-        {!activeFolder.isUncategorized && (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'flex-end',
-              gap: '10px',
-              padding: '12px clamp(16px, 4vw, 40px) 0',
-              flexWrap: 'wrap',
-            }}
-          >
-            <button
-              type="button"
-              onClick={() => openAddSongsModal(activeFolder.name)}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                padding: '7px 14px',
-                borderRadius: theme.radius.md,
-                border: `1px solid ${theme.colors.border}`,
-                backgroundColor: theme.colors.surface,
-                color: theme.colors.textPrimary,
-                cursor: 'pointer',
-                fontSize: '13px',
-                fontWeight: 600,
-              }}
-            >
-              <Plus size={15} />
-              <span>{t.addSong || 'افزودن آهنگ'}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => folderInputRef.current?.click()}
-              disabled={isImporting}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                padding: '7px 14px',
-                borderRadius: theme.radius.md,
-                border: 'none',
-                backgroundColor: theme.colors.primary,
-                color: '#ffffff',
-                cursor: isImporting ? 'not-allowed' : 'pointer',
-                fontSize: '13px',
-                fontWeight: 600,
-                opacity: isImporting ? 0.65 : 1,
-              }}
-            >
-              <FolderUp size={15} />
-              <span>{isImporting ? (t.loading || 'در حال خواندن...') : (t.importFolder || 'وارد کردن پوشه')}</span>
-            </button>
-          </div>
-        )}
-
-        <AllSongs
-          songs={activeFolder.songs}
-          playlists={playlists}
-          currentSong={currentSong}
-          isPlaying={isPlaying}
-          onPlaySongFromList={onPlaySongFromList}
-          onCreatePlaylist={onCreatePlaylist}
-          addToQueue={addToQueue}
-          onDeleteSong={onDeleteSong}
-          onUpdateSong={onUpdateSong}
-          onAddSongToPlaylist={onAddSongToPlaylist}
-          onToggleFavorite={onToggleFavorite}
-          t={t}
-          theme={theme}
-          title={activeFolder.name}
-          onBack={() => setSelectedFolderId(null)}
-          emptyMessage={t.noSongs}
-          glassCardCovers={glassCardCovers}
-        />
-
-        {/* مودال افزودن آهنگ به فولدر */}
-        <FolderModal open={addSongsFolder !== null} onClose={() => setAddSongsFolder(null)} theme={theme} width={500}>
-          <h2 style={{ margin: '0 0 14px 0', fontSize: 19, color: theme.colors.textPrimary }}>
-            {t.addSongsToFolder || 'افزودن آهنگ به فولدر'}
-          </h2>
-          <input
-            type="text"
-            value={modalQuery}
-            onChange={(e) => setModalQuery(e.target.value)}
-            placeholder={t.search}
-            style={{
-              width: '100%',
-              boxSizing: 'border-box',
-              padding: '10px 14px',
-              borderRadius: theme.radius.md,
-              border: `1.5px solid ${theme.colors.border}`,
-              backgroundColor: theme.colors.surface,
-              color: theme.colors.textPrimary,
-              marginBottom: 14,
-              fontSize: 14,
-              outline: 'none',
-            }}
-          />
-          <div style={{ maxHeight: '48vh', overflowY: 'auto', marginBottom: 16 }}>
-            {filteredModalSongs.map((song) => {
-              const already = song.folder?.trim() === addSongsFolder;
-              const isSelected = selectedSongIds.includes(song.id);
-              return (
-                <div
-                  key={song.id}
-                  onClick={() =>
-                    !already &&
-                    setSelectedSongIds((prev) =>
-                      prev.includes(song.id) ? prev.filter((id) => id !== song.id) : [...prev, song.id]
-                    )
-                  }
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 10,
-                    padding: 8,
-                    borderRadius: theme.radius.sm,
-                    cursor: already ? 'not-allowed' : 'pointer',
-                    opacity: already ? 0.45 : 1,
-                    backgroundColor: isSelected ? theme.colors.surface : 'transparent',
-                  }}
-                >
-                  <div
-                    style={{
-                      width: 20,
-                      height: 20,
-                      borderRadius: 4,
-                      border: isSelected ? `2px solid ${theme.colors.primary}` : `2px solid ${theme.colors.textSecondary}`,
-                      backgroundColor: isSelected ? theme.colors.primary : 'transparent',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      flexShrink: 0,
-                    }}
-                  >
-                    {isSelected && <Check size={14} color="#fff" />}
-                  </div>
-                  <CoverImage
-                    src={song.cover}
-                    alt=""
-                    iconSize={15}
-                    style={{ width: 32, height: 32, borderRadius: 6, objectFit: 'cover', flexShrink: 0 }}
-                  />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 14, color: theme.colors.textPrimary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {song.name}
-                    </div>
-                    <div style={{ fontSize: 12, color: theme.colors.textSecondary }}>{song.artist}</div>
-                  </div>
-                  {already && (
-                    <span style={{ fontSize: 12, color: theme.colors.textSecondary }}>
-                      {t.alreadyAdded || 'قبلاً اضافه شده'}
-                    </span>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
-            <button
-              type="button"
-              onClick={() => setAddSongsFolder(null)}
-              style={{
-                padding: '9px 16px',
-                borderRadius: theme.radius.sm,
-                border: 'none',
-                backgroundColor: theme.colors.border,
-                color: theme.colors.textPrimary,
-                cursor: 'pointer',
-                fontWeight: 600,
-              }}
-            >
-              {t.cancel}
-            </button>
-            <button
-              type="button"
-              disabled={selectedSongIds.length === 0}
-              onClick={handleConfirmAddSongs}
-              style={{
-                padding: '9px 16px',
-                borderRadius: theme.radius.sm,
-                border: 'none',
-                backgroundColor: theme.colors.primary,
-                color: '#fff',
-                cursor: selectedSongIds.length === 0 ? 'not-allowed' : 'pointer',
-                opacity: selectedSongIds.length === 0 ? 0.5 : 1,
-                fontWeight: 600,
-              }}
-            >
-              {t.add} ({selectedSongIds.length})
-            </button>
-          </div>
-        </FolderModal>
-      </div>
-    );
-  }
-
   const isRTL = language === 'fa';
   const hoverBg = theme.colors.surfaceHover || 'rgba(255, 255, 255, 0.08)';
 
   return (
-    <div
-      style={{
-        flex: 1,
-        padding: 'clamp(16px, 3vw, 36px) clamp(16px, 4vw, 40px) 130px',
-        overflowY: 'auto',
-        overflowX: 'hidden',
-        direction: isRTL ? 'rtl' : 'ltr',
-        boxSizing: 'border-box',
-      }}
-    >
+    <div style={{ width: '100%', flex: 1, overflowX: 'clip' }}>
       {hiddenDirectoryInput}
+
+      <AnimatePresence mode="wait" initial={false}>
+        {selectedFolderId && activeFolder ? (
+          <motion.div
+            key={`folder-detail-${activeFolder.id}`}
+            initial={{ opacity: 0, x: isRTL ? -24 : 24 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: isRTL ? -20 : 20 }}
+            transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+            style={{ flex: 1, width: '100%', display: 'flex', flexDirection: 'column' }}
+          >
+            {!activeFolder.isUncategorized && (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'flex-end',
+                  gap: '10px',
+                  padding: '12px clamp(16px, 4vw, 40px) 0',
+                  flexWrap: 'wrap',
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => openAddSongsModal(activeFolder.name)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '7px 14px',
+                    borderRadius: theme.radius.md,
+                    border: `1px solid ${theme.colors.border}`,
+                    backgroundColor: theme.colors.surface,
+                    color: theme.colors.textPrimary,
+                    cursor: 'pointer',
+                    fontSize: '0.8125rem',
+                    fontWeight: 600,
+                  }}
+                >
+                  <Plus size={15} />
+                  <span>{t.addSong || 'افزودن آهنگ'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => folderInputRef.current?.click()}
+                  disabled={isImporting}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '7px 14px',
+                    borderRadius: theme.radius.md,
+                    border: 'none',
+                    backgroundColor: theme.colors.primary,
+                    color: theme.colors.onPrimary || '#ffffff',
+                    cursor: isImporting ? 'not-allowed' : 'pointer',
+                    fontSize: '0.8125rem',
+                    fontWeight: 600,
+                    opacity: isImporting ? 0.65 : 1,
+                  }}
+                >
+                  <FolderUp size={15} />
+                  <span>{isImporting ? (t.loading || 'در حال خواندن...') : (t.importFolder || 'وارد کردن پوشه')}</span>
+                </button>
+              </div>
+            )}
+
+            <AllSongs
+              songs={activeFolder.songs}
+              playlists={playlists}
+              currentSong={currentSong}
+              isPlaying={isPlaying}
+              onPlaySongFromList={onPlaySongFromList}
+              onCreatePlaylist={onCreatePlaylist}
+              addToQueue={addToQueue}
+              onPlayNext={onPlayNext}
+              onDeleteSong={onDeleteSong}
+              onUpdateSong={onUpdateSong}
+              onAddSongToPlaylist={onAddSongToPlaylist}
+              onToggleFavorite={onToggleFavorite}
+              t={t}
+              theme={theme}
+              title={activeFolder.name}
+              onBack={() => setSelectedFolderId(null)}
+              backLabel={t.foldersTitle || t.folders || 'فولدربندی‌ها'}
+              emptyMessage={t.noSongs}
+              glassCardCovers={glassCardCovers}
+              onBulkDeleteSongs={onBulkDeleteSongs}
+              confirmBeforeDelete={confirmBeforeDelete}
+            />
+          </motion.div>
+        ) : (
+          <motion.div
+            key="folders-main"
+            initial={{ opacity: 0, x: isRTL ? 20 : -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: isRTL ? 20 : -20 }}
+            transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+            style={{
+              flex: 1,
+              width: '100%',
+              padding: 'clamp(16px, 3vw, 36px) clamp(16px, 4vw, 40px) 130px',
+              overflowY: 'auto',
+              overflowX: 'hidden',
+              direction: isRTL ? 'rtl' : 'ltr',
+              boxSizing: 'border-box',
+            }}
+          >
 
       {/* هدر فولدربندی‌ها */}
       <div
@@ -549,7 +468,7 @@ export const Folders: React.FC<FoldersProps> = ({
         <div>
           <h1
             style={{
-              fontSize: 'clamp(24px, 3.5vw, 32px)',
+              fontSize: 'clamp(1.5rem, 3.5vw, 2rem)',
               fontWeight: '800',
               color: theme.colors.textPrimary,
               margin: 0,
@@ -561,7 +480,7 @@ export const Folders: React.FC<FoldersProps> = ({
           <div
             style={{
               marginTop: '4px',
-              fontSize: '13px',
+              fontSize: '0.8125rem',
               color: theme.colors.textSecondary,
               fontVariantNumeric: 'tabular-nums',
             }}
@@ -629,7 +548,7 @@ export const Folders: React.FC<FoldersProps> = ({
               backgroundColor: theme.colors.surface,
               color: theme.colors.textPrimary,
               cursor: 'pointer',
-              fontSize: '13.5px',
+              fontSize: '0.8438rem',
               fontWeight: 600,
               whiteSpace: 'nowrap',
             }}
@@ -651,9 +570,9 @@ export const Folders: React.FC<FoldersProps> = ({
               borderRadius: theme.radius.md,
               border: 'none',
               backgroundColor: theme.colors.primary,
-              color: '#ffffff',
+              color: theme.colors.onPrimary || '#ffffff',
               cursor: isImporting ? 'not-allowed' : 'pointer',
-              fontSize: '13.5px',
+              fontSize: '0.8438rem',
               fontWeight: 700,
               whiteSpace: 'nowrap',
               boxShadow: `0 2px 10px ${theme.colors.primary}44`,
@@ -683,7 +602,7 @@ export const Folders: React.FC<FoldersProps> = ({
           }}
         >
           <Folder size={36} style={{ opacity: 0.4 }} />
-          <p style={{ margin: 0, fontSize: '15px', fontWeight: 500 }}>
+          <p style={{ margin: 0, fontSize: '0.9375rem', fontWeight: 500 }}>
             {t.noFolders || 'هنوز فولدری ساخته یا وارد نشده است.'}
           </p>
         </div>
@@ -710,7 +629,7 @@ export const Folders: React.FC<FoldersProps> = ({
                   onMouseLeave={() => setHoveredId(null)}
                   style={{
                     backgroundColor: isHovered
-                      ? (theme.isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(255, 255, 255, 0.88)')
+                      ? (theme.colors.surfaceHover || theme.colors.surface)
                       : theme.colors.surface,
                     backdropFilter: 'blur(26px) saturate(180%)',
                     WebkitBackdropFilter: 'blur(26px) saturate(180%)',
@@ -721,8 +640,7 @@ export const Folders: React.FC<FoldersProps> = ({
                     boxShadow: isHovered
                       ? `0 16px 36px rgba(0, 0, 0, 0.32), 0 0 20px ${theme.colors.glow || theme.colors.primary}28`
                       : (theme.isDark ? '0 8px 24px rgba(0, 0, 0, 0.22)' : '0 4px 14px rgba(0, 0, 0, 0.05)'),
-                    transition: 'all 0.22s cubic-bezier(0.2, 0, 0, 1)',
-                    transform: isHovered ? 'translateY(-3px)' : 'translateY(0)',
+                    transition: 'background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease',
                   }}
                 >
                   <div
@@ -780,7 +698,7 @@ export const Folders: React.FC<FoldersProps> = ({
                           borderRadius: '50%',
                           border: 'none',
                           backgroundColor: theme.colors.primary,
-                          color: '#ffffff',
+                          color: theme.colors.onPrimary || '#ffffff',
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
@@ -791,7 +709,7 @@ export const Folders: React.FC<FoldersProps> = ({
                           boxShadow: `0 4px 12px ${theme.colors.primary}66`,
                         }}
                       >
-                        <Play size={16} fill="#ffffff" />
+                        <Play size={16} fill={theme.colors.onPrimary || '#ffffff'} />
                       </button>
                     )}
                   </div>
@@ -802,7 +720,7 @@ export const Folders: React.FC<FoldersProps> = ({
                       style={{
                         margin: 0,
                         fontWeight: 700,
-                        fontSize: '15px',
+                        fontSize: '0.9375rem',
                         color: theme.colors.textPrimary,
                         whiteSpace: 'nowrap',
                         overflow: 'hidden',
@@ -815,7 +733,7 @@ export const Folders: React.FC<FoldersProps> = ({
                   <p
                     style={{
                       color: theme.colors.textSecondary,
-                      fontSize: '12.5px',
+                      fontSize: '0.7813rem',
                       margin: '3px 0 0 0',
                       fontVariantNumeric: 'tabular-nums',
                     }}
@@ -837,7 +755,7 @@ export const Folders: React.FC<FoldersProps> = ({
                         e.stopPropagation();
                         setActiveMenuId(isMenuOpen ? null : folder.id);
                       }}
-                      aria-label="folder-menu"
+                      aria-label={t.moreActions || 'Actions'}
                       style={{
                         width: 30,
                         height: 30,
@@ -862,7 +780,7 @@ export const Folders: React.FC<FoldersProps> = ({
                           top: 'calc(100% + 6px)',
                           insetInlineEnd: 0,
                           padding: '5px',
-                          backgroundColor: theme.isDark ? 'rgba(22, 18, 42, 0.95)' : 'rgba(255, 255, 255, 0.97)',
+                          backgroundColor: withAlpha(theme.colors.surfaceSolid || theme.colors.background, 0.97),
                           backdropFilter: 'blur(26px)',
                           borderRadius: theme.radius.md,
                           border: `1px solid ${theme.colors.border}`,
@@ -879,9 +797,10 @@ export const Folders: React.FC<FoldersProps> = ({
                             setActiveMenuId(null);
                           }}
                           onMouseEnter={(e) => {
-                            e.currentTarget.style.backgroundColor = theme.isDark
-                              ? 'rgba(255, 255, 255, 0.12)'
-                              : 'rgba(0, 0, 0, 0.07)';
+                            e.currentTarget.style.backgroundColor = withAlpha(
+                              theme.colors.primary,
+                              theme.isDark ? 0.16 : 0.10
+                            );
                           }}
                           onMouseLeave={(e) => {
                             e.currentTarget.style.backgroundColor = 'transparent';
@@ -897,7 +816,7 @@ export const Folders: React.FC<FoldersProps> = ({
                             border: 'none',
                             cursor: 'pointer',
                             color: theme.colors.textPrimary,
-                            fontSize: 13.5,
+                            fontSize: '0.8438rem',
                             fontWeight: 500,
                             transition: 'background-color 0.12s ease, scale 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
                           }}
@@ -926,7 +845,7 @@ export const Folders: React.FC<FoldersProps> = ({
                             border: 'none',
                             cursor: 'pointer',
                             color: theme.colors.textPrimary,
-                            fontSize: 13.5,
+                            fontSize: '0.8438rem',
                             fontWeight: 500,
                             transition: 'background-color 0.12s ease, scale 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
                           }}
@@ -956,7 +875,7 @@ export const Folders: React.FC<FoldersProps> = ({
                             border: 'none',
                             cursor: 'pointer',
                             color: theme.colors.danger,
-                            fontSize: 13.5,
+                            fontSize: '0.8438rem',
                             fontWeight: 500,
                             transition: 'background-color 0.12s ease, scale 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
                           }}
@@ -1015,7 +934,7 @@ export const Folders: React.FC<FoldersProps> = ({
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div
                     style={{
-                      fontSize: '15px',
+                      fontSize: '0.9375rem',
                       fontWeight: 700,
                       color: theme.colors.textPrimary,
                       whiteSpace: 'nowrap',
@@ -1025,7 +944,7 @@ export const Folders: React.FC<FoldersProps> = ({
                   >
                     {folder.name}
                   </div>
-                  <div style={{ fontSize: '12.5px', color: theme.colors.textSecondary, marginTop: '2px', fontVariantNumeric: 'tabular-nums' }}>
+                  <div style={{ fontSize: '0.7813rem', color: theme.colors.textSecondary, marginTop: '2px', fontVariantNumeric: 'tabular-nums' }}>
                     {folder.songs.length} {t.tracksCount || 'آهنگ'}
                   </div>
                 </div>
@@ -1043,7 +962,7 @@ export const Folders: React.FC<FoldersProps> = ({
                       borderRadius: '50%',
                       border: 'none',
                       backgroundColor: theme.colors.primary,
-                      color: '#ffffff',
+                      color: theme.colors.onPrimary || '#ffffff',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
@@ -1051,7 +970,7 @@ export const Folders: React.FC<FoldersProps> = ({
                       flexShrink: 0,
                     }}
                   >
-                    <Play size={15} fill="#ffffff" />
+                    <Play size={15} fill={theme.colors.onPrimary || '#ffffff'} />
                   </button>
                 )}
               </div>
@@ -1059,10 +978,13 @@ export const Folders: React.FC<FoldersProps> = ({
           })}
         </div>
       )}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* مودال ساخت فولدر */}
       <FolderModal open={createOpen} onClose={() => setCreateOpen(false)} theme={theme}>
-        <h2 style={{ margin: '0 0 16px 0', fontSize: 19, color: theme.colors.textPrimary }}>
+        <h2 style={{ margin: '0 0 16px 0', fontSize: '1.1875rem', color: theme.colors.textPrimary }}>
           {t.createFolder || 'ساخت فولدر'}
         </h2>
         <input
@@ -1080,7 +1002,7 @@ export const Folders: React.FC<FoldersProps> = ({
             backgroundColor: theme.colors.surface,
             color: theme.colors.textPrimary,
             marginBottom: 20,
-            fontSize: 15,
+            fontSize: '0.9375rem',
             outline: 'none',
           }}
         />
@@ -1122,7 +1044,7 @@ export const Folders: React.FC<FoldersProps> = ({
 
       {/* مودال تغییر نام فولدر */}
       <FolderModal open={renameTarget !== null} onClose={() => setRenameTarget(null)} theme={theme}>
-        <h2 style={{ margin: '0 0 16px 0', fontSize: 19, color: theme.colors.textPrimary }}>
+        <h2 style={{ margin: '0 0 16px 0', fontSize: '1.1875rem', color: theme.colors.textPrimary }}>
           {t.renameFolder || 'تغییر نام فولدر'}
         </h2>
         <input
@@ -1139,7 +1061,7 @@ export const Folders: React.FC<FoldersProps> = ({
             backgroundColor: theme.colors.surface,
             color: theme.colors.textPrimary,
             marginBottom: 20,
-            fontSize: 15,
+            fontSize: '0.9375rem',
             outline: 'none',
           }}
         />
@@ -1181,10 +1103,10 @@ export const Folders: React.FC<FoldersProps> = ({
 
       {/* مودال حذف فولدر */}
       <FolderModal open={deleteTarget !== null} onClose={() => setDeleteTarget(null)} theme={theme}>
-        <h2 style={{ margin: '0 0 12px 0', fontSize: 19, color: theme.colors.textPrimary }}>
+        <h2 style={{ margin: '0 0 12px 0', fontSize: '1.1875rem', color: theme.colors.textPrimary }}>
           {t.deleteFolder || 'حذف فولدر'}
         </h2>
-        <p style={{ margin: '0 0 20px 0', color: theme.colors.textSecondary, fontSize: 14 }}>
+        <p style={{ margin: '0 0 20px 0', color: theme.colors.textSecondary, fontSize: '0.875rem' }}>
           {t.deleteFolderConfirm || 'آیا از حذف این فولدر مطمئن هستید؟ (آهنگ‌ها در کتابخانه باقی می‌مانند)'}
         </p>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
@@ -1223,7 +1145,7 @@ export const Folders: React.FC<FoldersProps> = ({
 
       {/* مودال افزودن آهنگ از لیست اصلی به یک فولدر */}
       <FolderModal open={addSongsFolder !== null} onClose={() => setAddSongsFolder(null)} theme={theme} width={500}>
-        <h2 style={{ margin: '0 0 14px 0', fontSize: 19, color: theme.colors.textPrimary }}>
+        <h2 style={{ margin: '0 0 14px 0', fontSize: '1.1875rem', color: theme.colors.textPrimary }}>
           {t.addSongsToFolder || 'افزودن آهنگ به فولدر'}
         </h2>
         <input
@@ -1240,7 +1162,7 @@ export const Folders: React.FC<FoldersProps> = ({
             backgroundColor: theme.colors.surface,
             color: theme.colors.textPrimary,
             marginBottom: 14,
-            fontSize: 14,
+            fontSize: '0.875rem',
             outline: 'none',
           }}
         />
@@ -1290,13 +1212,13 @@ export const Folders: React.FC<FoldersProps> = ({
                   style={{ width: 32, height: 32, borderRadius: 6, objectFit: 'cover', flexShrink: 0 }}
                 />
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 14, color: theme.colors.textPrimary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  <div style={{ fontSize: '0.875rem', color: theme.colors.textPrimary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {song.name}
                   </div>
-                  <div style={{ fontSize: 12, color: theme.colors.textSecondary }}>{song.artist}</div>
+                  <div style={{ fontSize: '0.75rem', color: theme.colors.textSecondary }}>{song.artist}</div>
                 </div>
                 {already && (
-                  <span style={{ fontSize: 12, color: theme.colors.textSecondary }}>
+                  <span style={{ fontSize: '0.75rem', color: theme.colors.textSecondary }}>
                     {t.alreadyAdded || 'قبلاً اضافه شده'}
                   </span>
                 )}

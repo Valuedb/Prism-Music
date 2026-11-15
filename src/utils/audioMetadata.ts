@@ -77,6 +77,50 @@ export const extractFolderFromFile = (file: File, explicitFolder?: string): stri
   return parts.join('/');
 };
 
+const formatLrcTimestamp = (ms: number): string => {
+  const totalSeconds = Math.max(0, ms / 1000);
+  const mins = Math.floor(totalSeconds / 60);
+  const secs = totalSeconds % 60;
+  return `${mins < 10 ? '0' : ''}${mins}:${secs < 10 ? '0' : ''}${secs.toFixed(2)}`;
+};
+
+const extractLyricsFromCommon = (rawLyrics: unknown): string | undefined => {
+  if (!rawLyrics) return undefined;
+  if (typeof rawLyrics === 'string') {
+    const trimmed = rawLyrics.trim();
+    return trimmed || undefined;
+  }
+  if (!Array.isArray(rawLyrics)) return undefined;
+
+  const chunks: string[] = [];
+  for (const entry of rawLyrics) {
+    if (typeof entry === 'string') {
+      if (entry.trim()) chunks.push(entry.trim());
+    } else if (entry && typeof entry === 'object') {
+      const tag = entry as {
+        text?: string;
+        syncText?: Array<{ text?: string; timestamp?: number }>;
+      };
+      if (Array.isArray(tag.syncText) && tag.syncText.length > 0) {
+        const lines = tag.syncText
+          .map((item) => {
+            const lineText = (item.text || '').trim();
+            if (!lineText) return '';
+            return typeof item.timestamp === 'number'
+              ? `[${formatLrcTimestamp(item.timestamp)}] ${lineText}`
+              : lineText;
+          })
+          .filter(Boolean);
+        if (lines.length > 0) chunks.push(lines.join('\n'));
+      } else if (typeof tag.text === 'string' && tag.text.trim()) {
+        chunks.push(tag.text.trim());
+      }
+    }
+  }
+  const combined = chunks.join('\n\n').trim();
+  return combined || undefined;
+};
+
 /** استخراج متادیتا و ساخت آبجکت Song از یک فایل صوتی همراه با بارگذاری تنبل کتابخانه متادیتا */
 export const extractSongFromFile = async (
   file: File,
@@ -120,6 +164,7 @@ export const extractSongFromFile = async (
     await saveAudioBlob(id, file);
 
     const detectedFolder = extractFolderFromFile(file) || fallbackFolder?.trim() || undefined;
+    const lyrics = extractLyricsFromCommon(metadata.common.lyrics);
 
     return {
       id,
@@ -128,6 +173,7 @@ export const extractSongFromFile = async (
       album: metadata.common.album,
       year: metadata.common.year ? String(metadata.common.year) : undefined,
       folder: detectedFolder,
+      lyrics,
       cover: coverUrl,
       fileUrl: URL.createObjectURL(file),
       playCount: 0,
@@ -240,3 +286,60 @@ export const extractDroppedAudioFiles = async (dataTransfer: DataTransfer): Prom
     .filter(isAudioUploadFile)
     .map((file) => ({ file }));
 };
+
+/** ساخت کلید استاندارد برای تشخیص آهنگ‌های تکراری (نام + آرتیست + مدت‌زمان) */
+export const normalizeSongSignature = (song: Pick<Song, 'name' | 'artist' | 'duration'>): string => {
+  const normText = (v?: string) =>
+    (v || '')
+      .toLowerCase()
+      .replace(/ي/g, 'ی')
+      .replace(/ك/g, 'ک')
+      .replace(/[\s\-_.]+/g, ' ')
+      .trim();
+  const dur = Math.round(song.duration || 0);
+  return `${normText(song.name)}::${normText(song.artist)}::${dur}`;
+};
+
+/** تفکیک آهنگ‌های جدید از آهنگ‌های تکراری هنگام افزودن به کتابخانه */
+export const partitionDuplicateSongs = (
+  incoming: readonly Song[],
+  existing: readonly Song[]
+): { unique: Song[]; duplicates: Song[] } => {
+  const seen = new Set(existing.map((s) => normalizeSongSignature(s)));
+  const unique: Song[] = [];
+  const duplicates: Song[] = [];
+  for (const song of incoming) {
+    const sig = normalizeSongSignature(song);
+    if (seen.has(sig)) {
+      duplicates.push(song);
+    } else {
+      seen.add(sig);
+      unique.push(song);
+    }
+  }
+  return { unique, duplicates };
+};
+
+/** یافتن شناسه‌ی نسخه‌های تکراری موجود در کتابخانه (نسخه با آمار پخش بیشتر یا قدیمی‌تر حفظ می‌شود) */
+export const findDuplicateSongIds = (songs: readonly Song[]): string[] => {
+  const buckets = new Map<string, Song[]>();
+  for (const s of songs) {
+    const sig = normalizeSongSignature(s);
+    const list = buckets.get(sig);
+    if (list) list.push(s);
+    else buckets.set(sig, [s]);
+  }
+  const removeIds: string[] = [];
+  for (const group of buckets.values()) {
+    if (group.length <= 1) continue;
+    const sorted = [...group].sort((a, b) => {
+      if ((b.playCount || 0) !== (a.playCount || 0)) return (b.playCount || 0) - (a.playCount || 0);
+      return (a.addedAt || 0) - (b.addedAt || 0);
+    });
+    for (let i = 1; i < sorted.length; i++) {
+      removeIds.push(sorted[i].id);
+    }
+  }
+  return removeIds;
+};
+

@@ -13,10 +13,17 @@ import {
   ListMusic,
   Trash2,
   ArrowUpRight,
+  Check,
+  CheckSquare,
+  ListStart,
+  ListPlus,
+  FolderPlus,
+  Plus,
 } from 'lucide-react';
 import type { Playlist, Song } from '../types';
 import { STORAGE_KEYS } from '../storage/keys';
 import { CoverImage } from './CoverImage';
+import { withAlpha } from '../utils/color';
 
 export interface SearchNavigateTarget {
   tab: 'artists' | 'albums' | 'folders' | 'playlists';
@@ -31,6 +38,10 @@ interface SearchBarProps {
   playlists?: Playlist[];
   customFolders?: string[];
   onPlaySong?: (song: Song, list: Song[]) => void;
+  onPlayNext?: (songs: Song[]) => void;
+  onAddToQueue?: (song: Song) => void;
+  onAddSongsToPlaylist?: (playlistId: string, songs: Song[]) => void;
+  onCreatePlaylist?: (name: string, songs: Song[]) => void;
   onNavigate?: (target: SearchNavigateTarget) => void;
   t?: any;
 }
@@ -68,6 +79,10 @@ export const SearchBar = ({
   playlists = [],
   customFolders = [],
   onPlaySong,
+  onPlayNext,
+  onAddToQueue,
+  onAddSongsToPlaylist,
+  onCreatePlaylist,
   onNavigate,
   t = {},
 }: SearchBarProps) => {
@@ -75,7 +90,13 @@ export const SearchBar = ({
   const [query, setQuery] = useState('');
   const [activeTab, setActiveTab] = useState<SearchCategoryTab>('all');
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
+  const [isSelectMode, setIsSelectMode] = useState(false);
+  const [selectedSongIds, setSelectedSongIds] = useState<string[]>([]);
+  const [showPlaylistPicker, setShowPlaylistPicker] = useState(false);
+  const [newPlaylistName, setNewPlaylistName] = useState('');
+  const [actionToast, setActionToast] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const toastTimerRef = useRef<number | null>(null);
 
   // بارگذاری تاریخچه جستجوهای اخیر از localStorage
   useEffect(() => {
@@ -141,28 +162,60 @@ export const SearchBar = ({
     }
   };
 
+  const showToastMessage = useCallback((msg: string) => {
+    setActionToast(msg);
+    if (toastTimerRef.current !== null) {
+      window.clearTimeout(toastTimerRef.current);
+    }
+    toastTimerRef.current = window.setTimeout(() => {
+      setActionToast(null);
+      toastTimerRef.current = null;
+    }, 2200);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current !== null) {
+        window.clearTimeout(toastTimerRef.current);
+      }
+    };
+  }, []);
+
+  const exitSelectMode = useCallback(() => {
+    setIsSelectMode(false);
+    setSelectedSongIds([]);
+    setShowPlaylistPicker(false);
+    setNewPlaylistName('');
+  }, []);
+
   const handleClose = useCallback(() => {
     setIsOpen(false);
+    exitSelectMode();
     if (onSearch) {
       onSearch('');
     }
-  }, [onSearch]);
+  }, [onSearch, exitSelectMode]);
 
   const handleOpen = useCallback(() => {
     setIsOpen(true);
   }, []);
 
-  // کلید میانبر Cmd/Ctrl + K یا Ctrl + F و همچنین کلید / برای باز کردن سریع جستجو
+  // کلید میانبر Cmd/Ctrl + K و کلید / برای باز کردن سریع جستجو (سازگار با کیبورد فارسی/انگلیسی)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && (e.key.toLowerCase() === 'k' || e.key.toLowerCase() === 'f')) {
+      const otherDialogOpen = Boolean(
+        document.querySelector('[role="dialog"]:not([data-search-modal="true"]), [data-modal-open="true"]:not([data-search-modal="true"])')
+      );
+      if ((e.metaKey || e.ctrlKey) && e.code === 'KeyK') {
+        if (otherDialogOpen && !isOpen) return;
         e.preventDefault();
-        setIsOpen((prev) => (e.key.toLowerCase() === 'f' ? true : !prev));
+        setIsOpen((prev) => !prev);
       } else if (e.key === 'Escape' && isOpen) {
         handleClose();
-      } else if (e.key === '/' && !isOpen) {
+      } else if (e.code === 'Slash' && !e.ctrlKey && !e.metaKey && !e.altKey && !isOpen) {
+        if (otherDialogOpen) return;
         const target = e.target as HTMLElement;
-        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
+        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) return;
         e.preventDefault();
         setIsOpen(true);
       }
@@ -373,8 +426,127 @@ export const SearchBar = ({
     filteredPlaylists.length,
   ]);
 
+  // لیست آهنگ‌های قابل انتخاب در نمای فعلی (پیشنهادی‌ها یا نتایج جستجو)
+  const displayedSongs = useMemo(() => {
+    if (!query.trim()) return songs.slice(0, 6);
+    if (effectiveTab === 'all') return filteredSongs.slice(0, 6);
+    if (effectiveTab === 'songs') return filteredSongs.slice(0, 30);
+    return [];
+  }, [query, songs, effectiveTab, filteredSongs]);
+
+  const songByIdMap = useMemo(() => {
+    const map = new Map<string, Song>();
+    songs.forEach((s) => map.set(s.id, s));
+    return map;
+  }, [songs]);
+
+  const selectedSongsList = useMemo(
+    () => selectedSongIds.map((id) => songByIdMap.get(id)).filter((s): s is Song => Boolean(s)),
+    [selectedSongIds, songByIdMap]
+  );
+
+  // خروج خودکار از حالت انتخاب هنگام تغییر به تب غیرآهنگ
+  useEffect(() => {
+    if (query.trim() && effectiveTab !== 'all' && effectiveTab !== 'songs' && isSelectMode) {
+      exitSelectMode();
+    }
+  }, [query, effectiveTab, isSelectMode, exitSelectMode]);
+
+  const toggleSelectSong = useCallback((songId: string) => {
+    setSelectedSongIds((prev) => {
+      const exists = prev.includes(songId);
+      const next = exists ? prev.filter((id) => id !== songId) : [...prev, songId];
+      if (next.length === 0 && prev.length > 0) {
+        setIsSelectMode(false);
+        setShowPlaylistPicker(false);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleToggleSelectAllDisplayed = useCallback(() => {
+    const displayedIds = displayedSongs.map((s) => s.id);
+    if (displayedIds.length === 0) return;
+    const allSelected = displayedIds.every((id) => selectedSongIds.includes(id));
+    if (allSelected) {
+      const remaining = selectedSongIds.filter((id) => !displayedIds.includes(id));
+      setSelectedSongIds(remaining);
+      if (remaining.length === 0) {
+        setIsSelectMode(false);
+        setShowPlaylistPicker(false);
+      }
+    } else {
+      setSelectedSongIds((prev) => Array.from(new Set([...prev, ...displayedIds])));
+    }
+  }, [displayedSongs, selectedSongIds]);
+
+  const handleQuickPlayNext = useCallback(
+    (e: React.MouseEvent, song: Song) => {
+      e.stopPropagation();
+      saveRecentSearch(query || song.name);
+      onPlayNext?.([song]);
+      showToastMessage(`${t.addedToPlayNext || 'به پخش بعدی اضافه شد'} · ${song.name}`);
+    },
+    [onPlayNext, query, saveRecentSearch, showToastMessage, t.addedToPlayNext]
+  );
+
+  const handleQuickAddToQueue = useCallback(
+    (e: React.MouseEvent, song: Song) => {
+      e.stopPropagation();
+      saveRecentSearch(query || song.name);
+      onAddToQueue?.(song);
+      showToastMessage(`${t.addedToQueueMsg || 'به صف پخش اضافه شد'} · ${song.name}`);
+    },
+    [onAddToQueue, query, saveRecentSearch, showToastMessage, t.addedToQueueMsg]
+  );
+
+  const handleBulkPlay = useCallback(() => {
+    if (selectedSongsList.length === 0) return;
+    saveRecentSearch(query || selectedSongsList[0].name);
+    onPlaySong?.(selectedSongsList[0], selectedSongsList);
+    handleClose();
+  }, [selectedSongsList, query, saveRecentSearch, onPlaySong, handleClose]);
+
+  const handleBulkPlayNext = useCallback(() => {
+    if (selectedSongsList.length === 0) return;
+    saveRecentSearch(query || selectedSongsList[0].name);
+    onPlayNext?.(selectedSongsList);
+    showToastMessage(`${selectedSongsList.length} ${t.addedCountPlayNext || 'آهنگ به پخش بعدی اضافه شد'}`);
+    exitSelectMode();
+  }, [selectedSongsList, query, saveRecentSearch, onPlayNext, showToastMessage, t.addedCountPlayNext, exitSelectMode]);
+
+  const handleBulkAddToQueue = useCallback(() => {
+    if (selectedSongsList.length === 0) return;
+    saveRecentSearch(query || selectedSongsList[0].name);
+    selectedSongsList.forEach((s) => onAddToQueue?.(s));
+    showToastMessage(`${selectedSongsList.length} · ${t.addedToQueueMsg || 'به صف پخش اضافه شد'}`);
+    exitSelectMode();
+  }, [selectedSongsList, query, saveRecentSearch, onAddToQueue, showToastMessage, t.addedToQueueMsg, exitSelectMode]);
+
+  const handleConfirmPlaylistPick = useCallback(
+    (playlistId: string, playlistNameLabel: string) => {
+      if (selectedSongsList.length === 0) return;
+      onAddSongsToPlaylist?.(playlistId, selectedSongsList);
+      showToastMessage(`${t.addedToPlaylistMsg || 'به پلی‌لیست اضافه شد'} · ${playlistNameLabel}`);
+      exitSelectMode();
+    },
+    [selectedSongsList, onAddSongsToPlaylist, showToastMessage, t.addedToPlaylistMsg, exitSelectMode]
+  );
+
+  const handleCreateAndAddPlaylist = useCallback(() => {
+    const trimmed = newPlaylistName.trim();
+    if (!trimmed || selectedSongsList.length === 0) return;
+    onCreatePlaylist?.(trimmed, selectedSongsList);
+    showToastMessage(`${t.addedToPlaylistMsg || 'به پلی‌لیست اضافه شد'} · ${trimmed}`);
+    exitSelectMode();
+  }, [newPlaylistName, selectedSongsList, onCreatePlaylist, showToastMessage, t.addedToPlaylistMsg, exitSelectMode]);
+
   // پخش یک آهنگ از نتایج
   const handlePlaySongItem = (song: Song, list: Song[] = songs) => {
+    if (isSelectMode) {
+      toggleSelectSong(song.id);
+      return;
+    }
     saveRecentSearch(query || song.name);
     if (onPlaySong) {
       onPlaySong(song, list);
@@ -417,13 +589,21 @@ export const SearchBar = ({
     filteredFolders.length +
     filteredPlaylists.length;
 
+  const canSelectInCurrentView = displayedSongs.length > 0;
+  const allDisplayedSelected =
+    displayedSongs.length > 0 && displayedSongs.every((s) => selectedSongIds.includes(s.id));
+
   const isDark = theme.isDark;
   const textColor = theme.colors.textPrimary;
   const textMuted = theme.colors.textSecondary;
   const primaryColor = theme.colors.primary;
-  const surfaceBg = isDark ? 'rgba(28, 25, 46, 0.78)' : 'rgba(255, 255, 255, 0.85)';
-  const cardBorder = isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)';
-  const hoverBg = isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)';
+  const onPrimaryColor = theme.colors.onPrimary || '#ffffff';
+  const surfaceBg = withAlpha(
+    theme.colors.surfaceSolid || theme.colors.background,
+    isDark ? 0.90 : 0.93
+  );
+  const cardBorder = theme.colors.border;
+  const hoverBg = withAlpha(primaryColor, isDark ? 0.14 : 0.09);
 
   const filterChips: { id: SearchCategoryTab; label: string; count: number }[] = [
     { id: 'all', label: t.all || 'همه', count: totalResultsCount },
@@ -519,6 +699,9 @@ export const SearchBar = ({
 
                 {/* پنجره اصلی جستجو */}
                 <motion.div
+                  role="dialog"
+                  aria-modal="true"
+                  data-search-modal="true"
                   initial={{ opacity: 0, scale: 0.95, y: -16 }}
                   animate={{ opacity: 1, scale: 1, y: 0 }}
                   exit={{ opacity: 0, scale: 0.96, y: -12 }}
@@ -581,7 +764,7 @@ export const SearchBar = ({
                         background: 'transparent',
                         border: 'none',
                         outline: 'none',
-                        fontSize: '15px',
+                        fontSize: '0.9375rem',
                         color: textColor,
                         fontWeight: '500',
                         fontFamily: 'inherit',
@@ -616,6 +799,42 @@ export const SearchBar = ({
                       </motion.button>
                     )}
 
+                    {/* دکمه فعال‌سازی حالت انتخاب در جستجو */}
+                    {canSelectInCurrentView && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (isSelectMode) {
+                            exitSelectMode();
+                          } else {
+                            setIsSelectMode(true);
+                          }
+                        }}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '5px',
+                          background: isSelectMode
+                            ? primaryColor
+                            : isDark
+                            ? 'rgba(255, 255, 255, 0.08)'
+                            : 'rgba(0, 0, 0, 0.05)',
+                          border: `1px solid ${isSelectMode ? primaryColor : cardBorder}`,
+                          borderRadius: '10px',
+                          padding: '6px 10px',
+                          fontSize: '0.75rem',
+                          fontWeight: '600',
+                          color: isSelectMode ? onPrimaryColor : textColor,
+                          cursor: 'pointer',
+                          transition: 'all 0.15s ease',
+                          flexShrink: 0,
+                        }}
+                      >
+                        <CheckSquare size={14} />
+                        <span>{isSelectMode ? (t.cancel || 'لغو') : (t.select || 'انتخاب')}</span>
+                      </button>
+                    )}
+
                     {/* دکمه بستن سریع */}
                     <button
                       onClick={handleClose}
@@ -624,7 +843,7 @@ export const SearchBar = ({
                         border: `1px solid ${cardBorder}`,
                         borderRadius: '10px',
                         padding: '6px 10px',
-                        fontSize: '12px',
+                        fontSize: '0.75rem',
                         fontWeight: '600',
                         color: textMuted,
                         cursor: 'pointer',
@@ -645,6 +864,297 @@ export const SearchBar = ({
                       {t.close || 'بستن'}
                     </button>
                   </div>
+
+                  {/* پیام بازخورد سریع برای پخش بعدی / افزودن به صف / پلی‌لیست */}
+                  <AnimatePresence>
+                    {actionToast && (
+                      <motion.div
+                        initial={{ opacity: 0, y: -8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -8 }}
+                        transition={{ duration: 0.16 }}
+                        style={{
+                          padding: '8px 16px',
+                          backgroundColor: withAlpha(primaryColor, isDark ? 0.2 : 0.12),
+                          borderBottom: `1px solid ${withAlpha(primaryColor, 0.3)}`,
+                          color: textColor,
+                          fontSize: '0.7813rem',
+                          fontWeight: 600,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '8px',
+                          flexShrink: 0,
+                        }}
+                      >
+                        <Check size={15} color={primaryColor} style={{ flexShrink: 0 }} />
+                        <span
+                          style={{
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {actionToast}
+                        </span>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  {/* نوار ابزار انتخاب گروهی داخل مودال جستجو */}
+                  <AnimatePresence>
+                    {isSelectMode && (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        exit={{ opacity: 0, height: 0 }}
+                        transition={{ duration: 0.18 }}
+                        style={{
+                          overflow: 'hidden',
+                          borderBottom: `1px solid ${cardBorder}`,
+                          backgroundColor: withAlpha(primaryColor, isDark ? 0.1 : 0.06),
+                          flexShrink: 0,
+                        }}
+                      >
+                        <div
+                          style={{
+                            padding: '10px 14px',
+                            display: 'flex',
+                            flexWrap: 'wrap',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: '8px',
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                            <button
+                              type="button"
+                              onClick={handleToggleSelectAllDisplayed}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '5px',
+                                padding: '5px 10px',
+                                borderRadius: '9px',
+                                border: `1px solid ${cardBorder}`,
+                                backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.75)',
+                                color: textColor,
+                                fontSize: '0.75rem',
+                                fontWeight: 600,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              {allDisplayedSelected
+                                ? t.deselectAll || 'لغو انتخاب همه'
+                                : t.selectAll || 'انتخاب همه'}
+                            </button>
+                            <span
+                              style={{
+                                fontSize: '0.75rem',
+                                fontWeight: 700,
+                                color: primaryColor,
+                              }}
+                            >
+                              {selectedSongsList.length} {t.selected || 'انتخاب شده'}
+                            </span>
+                          </div>
+
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                            <button
+                              type="button"
+                              disabled={selectedSongsList.length === 0}
+                              onClick={handleBulkPlay}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '5px',
+                                padding: '6px 10px',
+                                borderRadius: '9px',
+                                border: 'none',
+                                backgroundColor: primaryColor,
+                                color: onPrimaryColor,
+                                fontSize: '0.75rem',
+                                fontWeight: 600,
+                                cursor: selectedSongsList.length === 0 ? 'default' : 'pointer',
+                                opacity: selectedSongsList.length === 0 ? 0.45 : 1,
+                              }}
+                            >
+                              <Play size={13} fill={onPrimaryColor} />
+                              <span>{t.play || 'پخش'}</span>
+                            </button>
+
+                            {onPlayNext && (
+                              <button
+                                type="button"
+                                disabled={selectedSongsList.length === 0}
+                                onClick={handleBulkPlayNext}
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '5px',
+                                  padding: '6px 10px',
+                                  borderRadius: '9px',
+                                  border: `1px solid ${withAlpha(primaryColor, 0.35)}`,
+                                  backgroundColor: withAlpha(primaryColor, isDark ? 0.18 : 0.12),
+                                  color: textColor,
+                                  fontSize: '0.75rem',
+                                  fontWeight: 600,
+                                  cursor: selectedSongsList.length === 0 ? 'default' : 'pointer',
+                                  opacity: selectedSongsList.length === 0 ? 0.45 : 1,
+                                }}
+                              >
+                                <ListStart size={14} color={primaryColor} />
+                                <span>{t.playNext || 'پخش بعدی'}</span>
+                              </button>
+                            )}
+
+                            {onAddToQueue && (
+                              <button
+                                type="button"
+                                disabled={selectedSongsList.length === 0}
+                                onClick={handleBulkAddToQueue}
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '5px',
+                                  padding: '6px 10px',
+                                  borderRadius: '9px',
+                                  border: `1px solid ${cardBorder}`,
+                                  backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.75)',
+                                  color: textColor,
+                                  fontSize: '0.75rem',
+                                  fontWeight: 600,
+                                  cursor: selectedSongsList.length === 0 ? 'default' : 'pointer',
+                                  opacity: selectedSongsList.length === 0 ? 0.45 : 1,
+                                }}
+                              >
+                                <ListPlus size={14} />
+                                <span>{t.addToQueue || 'افزودن به صف'}</span>
+                              </button>
+                            )}
+
+                            {(onAddSongsToPlaylist || onCreatePlaylist) && (
+                              <button
+                                type="button"
+                                disabled={selectedSongsList.length === 0}
+                                onClick={() => setShowPlaylistPicker((prev) => !prev)}
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '5px',
+                                  padding: '6px 10px',
+                                  borderRadius: '9px',
+                                  border: `1px solid ${cardBorder}`,
+                                  backgroundColor: showPlaylistPicker
+                                    ? withAlpha(primaryColor, 0.2)
+                                    : isDark
+                                    ? 'rgba(255,255,255,0.08)'
+                                    : 'rgba(255,255,255,0.75)',
+                                  color: textColor,
+                                  fontSize: '0.75rem',
+                                  fontWeight: 600,
+                                  cursor: selectedSongsList.length === 0 ? 'default' : 'pointer',
+                                  opacity: selectedSongsList.length === 0 ? 0.45 : 1,
+                                }}
+                              >
+                                <FolderPlus size={14} />
+                                <span>{t.addToPlaylist || 'پلی‌لیست'}</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {showPlaylistPicker && selectedSongsList.length > 0 && (
+                          <div
+                            style={{
+                              padding: '10px 14px 12px',
+                              borderTop: `1px solid ${cardBorder}`,
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '8px',
+                              backgroundColor: isDark ? 'rgba(0,0,0,0.22)' : 'rgba(255,255,255,0.55)',
+                            }}
+                          >
+                            <div style={{ fontSize: '0.75rem', fontWeight: 700, color: textMuted }}>
+                              {t.selectPlaylist || 'انتخاب پلی‌لیست'}
+                            </div>
+                            {playlists.length > 0 && (
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                                {playlists.map((pl) => (
+                                  <button
+                                    key={pl.id}
+                                    type="button"
+                                    onClick={() => handleConfirmPlaylistPick(pl.id, pl.name)}
+                                    style={{
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '6px',
+                                      padding: '5px 10px',
+                                      borderRadius: '10px',
+                                      border: `1px solid ${cardBorder}`,
+                                      backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : '#ffffff',
+                                      color: textColor,
+                                      fontSize: '0.75rem',
+                                      fontWeight: 600,
+                                      cursor: 'pointer',
+                                    }}
+                                  >
+                                    <ListMusic size={13} color={primaryColor} />
+                                    <span>{pl.name}</span>
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                            {onCreatePlaylist && (
+                              <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                                <input
+                                  type="text"
+                                  value={newPlaylistName}
+                                  onChange={(e) => setNewPlaylistName(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') handleCreateAndAddPlaylist();
+                                  }}
+                                  placeholder={t.playlistName || 'اسم پلی‌لیست...'}
+                                  style={{
+                                    flex: 1,
+                                    minWidth: 0,
+                                    padding: '6px 10px',
+                                    borderRadius: '9px',
+                                    border: `1px solid ${cardBorder}`,
+                                    backgroundColor: isDark ? 'rgba(255,255,255,0.07)' : '#ffffff',
+                                    color: textColor,
+                                    fontSize: '0.75rem',
+                                    outline: 'none',
+                                  }}
+                                />
+                                <button
+                                  type="button"
+                                  disabled={!newPlaylistName.trim()}
+                                  onClick={handleCreateAndAddPlaylist}
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                    padding: '6px 10px',
+                                    borderRadius: '9px',
+                                    border: 'none',
+                                    backgroundColor: primaryColor,
+                                    color: onPrimaryColor,
+                                    fontSize: '0.75rem',
+                                    fontWeight: 600,
+                                    cursor: newPlaylistName.trim() ? 'pointer' : 'default',
+                                    opacity: newPlaylistName.trim() ? 1 : 0.45,
+                                  }}
+                                >
+                                  <Plus size={13} />
+                                  <span>{t.create || 'ساخت'}</span>
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
 
                   {/* تب‌های فیلتر دسته‌بندی هوشمند هنگام تایپ عبارت */}
                   {query.trim().length > 0 && totalResultsCount > 0 && (
@@ -672,14 +1182,14 @@ export const SearchBar = ({
                                 border: 'none',
                                 borderRadius: '20px',
                                 padding: '5px 12px',
-                                fontSize: '12px',
+                                fontSize: '0.75rem',
                                 fontWeight: isSelected ? '700' : '500',
                                 backgroundColor: isSelected
                                   ? primaryColor
                                   : isDark
                                   ? 'rgba(255, 255, 255, 0.07)'
                                   : 'rgba(0, 0, 0, 0.05)',
-                                color: isSelected ? '#ffffff' : textMuted,
+                                color: isSelected ? onPrimaryColor : textMuted,
                                 cursor: 'pointer',
                                 transition: 'all 0.15s ease',
                                 whiteSpace: 'nowrap',
@@ -721,7 +1231,7 @@ export const SearchBar = ({
                                   display: 'flex',
                                   alignItems: 'center',
                                   gap: '6px',
-                                  fontSize: '13px',
+                                  fontSize: '0.8125rem',
                                   fontWeight: '600',
                                   color: textMuted,
                                 }}
@@ -736,7 +1246,7 @@ export const SearchBar = ({
                                   background: 'transparent',
                                   border: 'none',
                                   color: textMuted,
-                                  fontSize: '12px',
+                                  fontSize: '0.75rem',
                                   cursor: 'pointer',
                                   display: 'flex',
                                   alignItems: 'center',
@@ -775,7 +1285,7 @@ export const SearchBar = ({
                                       : 'rgba(0, 0, 0, 0.05)',
                                     border: `1px solid ${cardBorder}`,
                                     cursor: 'pointer',
-                                    fontSize: '13px',
+                                    fontSize: '0.8125rem',
                                     color: textColor,
                                     transition: 'all 0.15s ease',
                                   }}
@@ -814,7 +1324,7 @@ export const SearchBar = ({
                               textAlign: 'center',
                               padding: '28px 16px',
                               color: textMuted,
-                              fontSize: '13px',
+                              fontSize: '0.8125rem',
                             }}
                           >
                             <Clock size={28} style={{ opacity: 0.4, margin: '0 auto 8px auto' }} />
@@ -829,7 +1339,7 @@ export const SearchBar = ({
                           <div style={{ marginTop: '8px' }}>
                             <div
                               style={{
-                                fontSize: '12px',
+                                fontSize: '0.75rem',
                                 fontWeight: '600',
                                 color: textMuted,
                                 marginBottom: '8px',
@@ -839,66 +1349,165 @@ export const SearchBar = ({
                               {t.recommended || 'پیشنهادی‌ها'}
                             </div>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                              {songs.slice(0, 4).map((s) => (
-                                <div
-                                  key={s.id}
-                                  onClick={() => handlePlaySongItem(s)}
-                                  style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '12px',
-                                    padding: '8px 10px',
-                                    borderRadius: '12px',
-                                    cursor: 'pointer',
-                                    transition: 'background-color 0.15s ease',
-                                  }}
-                                  onMouseEnter={(e) =>
-                                    (e.currentTarget.style.backgroundColor = hoverBg)
-                                  }
-                                  onMouseLeave={(e) =>
-                                    (e.currentTarget.style.backgroundColor = 'transparent')
-                                  }
-                                >
-                                  <CoverImage
-                                    src={s.cover}
-                                    alt=""
-                                    iconSize={16}
+                              {displayedSongs.map((s) => {
+                                const isRowSelected = selectedSongIds.includes(s.id);
+                                return (
+                                  <div
+                                    key={s.id}
+                                    onClick={() => handlePlaySongItem(s)}
                                     style={{
-                                      width: '38px',
-                                      height: '38px',
-                                      borderRadius: '8px',
-                                      objectFit: 'cover',
-                                      flexShrink: 0,
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: '10px',
+                                      padding: '8px 10px',
+                                      borderRadius: '12px',
+                                      cursor: 'pointer',
+                                      border: isRowSelected
+                                        ? `1px solid ${primaryColor}`
+                                        : '1px solid transparent',
+                                      backgroundColor: isRowSelected
+                                        ? withAlpha(primaryColor, isDark ? 0.18 : 0.11)
+                                        : 'transparent',
+                                      transition: 'background-color 0.15s ease, border-color 0.15s ease',
                                     }}
-                                  />
-                                  <div style={{ flex: 1, minWidth: 0 }}>
-                                    <div
+                                    onMouseEnter={(e) => {
+                                      if (!isRowSelected) e.currentTarget.style.backgroundColor = hoverBg;
+                                    }}
+                                    onMouseLeave={(e) => {
+                                      if (!isRowSelected) e.currentTarget.style.backgroundColor = 'transparent';
+                                    }}
+                                  >
+                                    {isSelectMode && (
+                                      <div
+                                        style={{
+                                          width: '20px',
+                                          height: '20px',
+                                          borderRadius: '6px',
+                                          border: isRowSelected
+                                            ? `1.5px solid ${primaryColor}`
+                                            : `1.5px solid ${textMuted}`,
+                                          backgroundColor: isRowSelected ? primaryColor : 'transparent',
+                                          color: onPrimaryColor,
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          justifyContent: 'center',
+                                          flexShrink: 0,
+                                        }}
+                                      >
+                                        {isRowSelected && <Check size={13} strokeWidth={3} />}
+                                      </div>
+                                    )}
+                                    <CoverImage
+                                      src={s.cover}
+                                      alt=""
+                                      iconSize={16}
                                       style={{
-                                        fontSize: '14px',
-                                        fontWeight: '600',
-                                        color: textColor,
-                                        whiteSpace: 'nowrap',
-                                        overflow: 'hidden',
-                                        textOverflow: 'ellipsis',
+                                        width: '38px',
+                                        height: '38px',
+                                        borderRadius: '8px',
+                                        objectFit: 'cover',
+                                        flexShrink: 0,
                                       }}
-                                    >
-                                      {s.name}
+                                    />
+                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                      <div
+                                        style={{
+                                          fontSize: '0.875rem',
+                                          fontWeight: '600',
+                                          color: textColor,
+                                          whiteSpace: 'nowrap',
+                                          overflow: 'hidden',
+                                          textOverflow: 'ellipsis',
+                                        }}
+                                      >
+                                        {s.name}
+                                      </div>
+                                      <div
+                                        style={{
+                                          fontSize: '0.75rem',
+                                          color: textMuted,
+                                          whiteSpace: 'nowrap',
+                                          overflow: 'hidden',
+                                          textOverflow: 'ellipsis',
+                                        }}
+                                      >
+                                        {s.artist}
+                                      </div>
                                     </div>
-                                    <div
-                                      style={{
-                                        fontSize: '12px',
-                                        color: textMuted,
-                                        whiteSpace: 'nowrap',
-                                        overflow: 'hidden',
-                                        textOverflow: 'ellipsis',
-                                      }}
-                                    >
-                                      {s.artist}
-                                    </div>
+                                    {!isSelectMode && (
+                                      <div
+                                        style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}
+                                        onClick={(e) => e.stopPropagation()}
+                                      >
+                                        {onPlayNext && (
+                                          <button
+                                            type="button"
+                                            onClick={(e) => handleQuickPlayNext(e, s)}
+                                            title={t.playNext || 'پخش بعدی'}
+                                            aria-label={t.playNext || 'Play Next'}
+                                            style={{
+                                              width: '28px',
+                                              height: '28px',
+                                              borderRadius: '8px',
+                                              border: 'none',
+                                              backgroundColor: isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.05)',
+                                              color: textColor,
+                                              display: 'flex',
+                                              alignItems: 'center',
+                                              justifyContent: 'center',
+                                              cursor: 'pointer',
+                                            }}
+                                          >
+                                            <ListStart size={14} color={primaryColor} />
+                                          </button>
+                                        )}
+                                        {onAddToQueue && (
+                                          <button
+                                            type="button"
+                                            onClick={(e) => handleQuickAddToQueue(e, s)}
+                                            title={t.addToQueue || 'افزودن به صف'}
+                                            aria-label={t.addToQueue || 'Add to Queue'}
+                                            style={{
+                                              width: '28px',
+                                              height: '28px',
+                                              borderRadius: '8px',
+                                              border: 'none',
+                                              backgroundColor: isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.05)',
+                                              color: textMuted,
+                                              display: 'flex',
+                                              alignItems: 'center',
+                                              justifyContent: 'center',
+                                              cursor: 'pointer',
+                                            }}
+                                          >
+                                            <ListPlus size={14} />
+                                          </button>
+                                        )}
+                                        <button
+                                          type="button"
+                                          onClick={() => handlePlaySongItem(s)}
+                                          title={t.playNow || 'پخش همین حالا'}
+                                          aria-label={t.play || 'Play'}
+                                          style={{
+                                            width: '28px',
+                                            height: '28px',
+                                            borderRadius: '8px',
+                                            border: 'none',
+                                            backgroundColor: 'transparent',
+                                            color: primaryColor,
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            cursor: 'pointer',
+                                          }}
+                                        >
+                                          <Play size={15} />
+                                        </button>
+                                      </div>
+                                    )}
                                   </div>
-                                  <Play size={16} color={primaryColor} />
-                                </div>
-                              ))}
+                                );
+                              })}
                             </div>
                           </div>
                         )}
@@ -919,7 +1528,7 @@ export const SearchBar = ({
                             <Music size={36} style={{ opacity: 0.35, margin: '0 auto 12px auto' }} />
                             <div
                               style={{
-                                fontSize: '15px',
+                                fontSize: '0.9375rem',
                                 fontWeight: '600',
                                 color: textColor,
                                 marginBottom: '6px',
@@ -927,8 +1536,8 @@ export const SearchBar = ({
                             >
                               {t.noResults || 'هیچ نتیجه‌ای یافت نشد'}
                             </div>
-                            <div style={{ fontSize: '13px' }}>
-                              {t.close === 'Close'
+                            <div style={{ fontSize: '0.8125rem' }}>
+                              {(t.direction === 'ltr' || t.close === 'Close')
                                 ? `No matches found for "${query}". Try a different keyword.`
                                 : `نتیجه‌ای برای «${query}» پیدا نشد. عبارت دیگری را امتحان کنید.`}
                             </div>
@@ -944,7 +1553,7 @@ export const SearchBar = ({
                                       display: 'flex',
                                       alignItems: 'center',
                                       gap: '6px',
-                                      fontSize: '13px',
+                                      fontSize: '0.8125rem',
                                       fontWeight: '700',
                                       color: textMuted,
                                       marginBottom: '8px',
@@ -953,7 +1562,7 @@ export const SearchBar = ({
                                   >
                                     <Music size={15} color={primaryColor} />
                                     <span>{t.songsCategory || 'آهنگ‌ها'}</span>
-                                    <span style={{ fontSize: '11px', opacity: 0.7 }}>
+                                    <span style={{ fontSize: '0.6875rem', opacity: 0.7 }}>
                                       ({filteredSongs.length})
                                     </span>
                                   </div>
@@ -961,83 +1570,184 @@ export const SearchBar = ({
                                   <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                                     {filteredSongs
                                       .slice(0, effectiveTab === 'songs' ? 30 : 6)
-                                      .map((song) => (
-                                        <div
-                                          key={song.id}
-                                          onClick={() => handlePlaySongItem(song, filteredSongs)}
-                                          style={{
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            gap: '12px',
-                                            padding: '8px 10px',
-                                            borderRadius: '14px',
-                                            cursor: 'pointer',
-                                            transition: 'background-color 0.15s ease',
-                                          }}
-                                          onMouseEnter={(e) =>
-                                            (e.currentTarget.style.backgroundColor = hoverBg)
-                                          }
-                                          onMouseLeave={(e) =>
-                                            (e.currentTarget.style.backgroundColor = 'transparent')
-                                          }
-                                        >
-                                          <CoverImage
-                                            src={song.cover}
-                                            alt=""
-                                            iconSize={16}
+                                      .map((song) => {
+                                        const isRowSelected = selectedSongIds.includes(song.id);
+                                        return (
+                                          <div
+                                            key={song.id}
+                                            onClick={() => handlePlaySongItem(song, filteredSongs)}
                                             style={{
-                                              width: '42px',
-                                              height: '42px',
-                                              borderRadius: '10px',
-                                              objectFit: 'cover',
-                                              border: `1px solid ${cardBorder}`,
-                                              flexShrink: 0,
+                                              display: 'flex',
+                                              alignItems: 'center',
+                                              gap: '10px',
+                                              padding: '8px 10px',
+                                              borderRadius: '14px',
+                                              cursor: 'pointer',
+                                              border: isRowSelected
+                                                ? `1px solid ${primaryColor}`
+                                                : '1px solid transparent',
+                                              backgroundColor: isRowSelected
+                                                ? withAlpha(primaryColor, isDark ? 0.18 : 0.11)
+                                                : 'transparent',
+                                              transition: 'background-color 0.15s ease, border-color 0.15s ease',
                                             }}
-                                          />
+                                            onMouseEnter={(e) => {
+                                              if (!isRowSelected) e.currentTarget.style.backgroundColor = hoverBg;
+                                            }}
+                                            onMouseLeave={(e) => {
+                                              if (!isRowSelected) e.currentTarget.style.backgroundColor = 'transparent';
+                                            }}
+                                          >
+                                            {isSelectMode && (
+                                              <div
+                                                style={{
+                                                  width: '20px',
+                                                  height: '20px',
+                                                  borderRadius: '6px',
+                                                  border: isRowSelected
+                                                    ? `1.5px solid ${primaryColor}`
+                                                    : `1.5px solid ${textMuted}`,
+                                                  backgroundColor: isRowSelected ? primaryColor : 'transparent',
+                                                  color: onPrimaryColor,
+                                                  display: 'flex',
+                                                  alignItems: 'center',
+                                                  justifyContent: 'center',
+                                                  flexShrink: 0,
+                                                }}
+                                              >
+                                                {isRowSelected && <Check size={13} strokeWidth={3} />}
+                                              </div>
+                                            )}
 
-                                          <div style={{ flex: 1, minWidth: 0 }}>
-                                            <div
+                                            <CoverImage
+                                              src={song.cover}
+                                              alt=""
+                                              iconSize={16}
                                               style={{
-                                                fontSize: '14px',
-                                                fontWeight: '600',
-                                                color: textColor,
-                                                whiteSpace: 'nowrap',
-                                                overflow: 'hidden',
-                                                textOverflow: 'ellipsis',
+                                                width: '42px',
+                                                height: '42px',
+                                                borderRadius: '10px',
+                                                objectFit: 'cover',
+                                                border: `1px solid ${cardBorder}`,
+                                                flexShrink: 0,
                                               }}
-                                            >
-                                              {song.name}
+                                            />
+
+                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                              <div
+                                                style={{
+                                                  fontSize: '0.875rem',
+                                                  fontWeight: '600',
+                                                  color: textColor,
+                                                  whiteSpace: 'nowrap',
+                                                  overflow: 'hidden',
+                                                  textOverflow: 'ellipsis',
+                                                }}
+                                              >
+                                                {song.name}
+                                              </div>
+                                              <div
+                                                style={{
+                                                  fontSize: '0.75rem',
+                                                  color: textMuted,
+                                                  whiteSpace: 'nowrap',
+                                                  overflow: 'hidden',
+                                                  textOverflow: 'ellipsis',
+                                                  marginTop: '2px',
+                                                }}
+                                              >
+                                                {song.artist}
+                                                {song.album ? ` • ${song.album}` : ''}
+                                              </div>
                                             </div>
-                                            <div
-                                              style={{
-                                                fontSize: '12px',
-                                                color: textMuted,
-                                                whiteSpace: 'nowrap',
-                                                overflow: 'hidden',
-                                                textOverflow: 'ellipsis',
-                                                marginTop: '2px',
-                                              }}
-                                            >
-                                              {song.artist}
-                                              {song.album ? ` • ${song.album}` : ''}
-                                            </div>
+
+                                            {song.duration ? (
+                                              <span
+                                                style={{
+                                                  fontSize: '0.75rem',
+                                                  color: textMuted,
+                                                  fontVariantNumeric: 'tabular-nums',
+                                                  flexShrink: 0,
+                                                }}
+                                              >
+                                                {formatTime(song.duration)}
+                                              </span>
+                                            ) : null}
+
+                                            {!isSelectMode && (
+                                              <div
+                                                style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}
+                                                onClick={(e) => e.stopPropagation()}
+                                              >
+                                                {onPlayNext && (
+                                                  <button
+                                                    type="button"
+                                                    onClick={(e) => handleQuickPlayNext(e, song)}
+                                                    title={t.playNext || 'پخش بعدی'}
+                                                    aria-label={t.playNext || 'Play Next'}
+                                                    style={{
+                                                      width: '28px',
+                                                      height: '28px',
+                                                      borderRadius: '8px',
+                                                      border: 'none',
+                                                      backgroundColor: isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.05)',
+                                                      color: textColor,
+                                                      display: 'flex',
+                                                      alignItems: 'center',
+                                                      justifyContent: 'center',
+                                                      cursor: 'pointer',
+                                                    }}
+                                                  >
+                                                    <ListStart size={14} color={primaryColor} />
+                                                  </button>
+                                                )}
+                                                {onAddToQueue && (
+                                                  <button
+                                                    type="button"
+                                                    onClick={(e) => handleQuickAddToQueue(e, song)}
+                                                    title={t.addToQueue || 'افزودن به صف'}
+                                                    aria-label={t.addToQueue || 'Add to Queue'}
+                                                    style={{
+                                                      width: '28px',
+                                                      height: '28px',
+                                                      borderRadius: '8px',
+                                                      border: 'none',
+                                                      backgroundColor: isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.05)',
+                                                      color: textMuted,
+                                                      display: 'flex',
+                                                      alignItems: 'center',
+                                                      justifyContent: 'center',
+                                                      cursor: 'pointer',
+                                                    }}
+                                                  >
+                                                    <ListPlus size={14} />
+                                                  </button>
+                                                )}
+                                                <button
+                                                  type="button"
+                                                  onClick={() => handlePlaySongItem(song, filteredSongs)}
+                                                  title={t.playNow || 'پخش همین حالا'}
+                                                  aria-label={t.play || 'Play'}
+                                                  style={{
+                                                    width: '28px',
+                                                    height: '28px',
+                                                    borderRadius: '8px',
+                                                    border: 'none',
+                                                    backgroundColor: 'transparent',
+                                                    color: primaryColor,
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center',
+                                                    cursor: 'pointer',
+                                                  }}
+                                                >
+                                                  <Play size={15} />
+                                                </button>
+                                              </div>
+                                            )}
                                           </div>
-
-                                          {song.duration ? (
-                                            <span
-                                              style={{
-                                                fontSize: '12px',
-                                                color: textMuted,
-                                                fontVariantNumeric: 'tabular-nums',
-                                              }}
-                                            >
-                                              {formatTime(song.duration)}
-                                            </span>
-                                          ) : null}
-
-                                          <Play size={15} color={primaryColor} />
-                                        </div>
-                                      ))}
+                                        );
+                                      })}
                                   </div>
                                 </div>
                               )}
@@ -1051,7 +1761,7 @@ export const SearchBar = ({
                                       display: 'flex',
                                       alignItems: 'center',
                                       gap: '6px',
-                                      fontSize: '13px',
+                                      fontSize: '0.8125rem',
                                       fontWeight: '700',
                                       color: textMuted,
                                       marginBottom: '8px',
@@ -1060,7 +1770,7 @@ export const SearchBar = ({
                                   >
                                     <Mic size={15} color={primaryColor} />
                                     <span>{t.artistsCategory || t.artists || 'آرتیست‌ها'}</span>
-                                    <span style={{ fontSize: '11px', opacity: 0.7 }}>
+                                    <span style={{ fontSize: '0.6875rem', opacity: 0.7 }}>
                                       ({filteredArtists.length})
                                     </span>
                                   </div>
@@ -1110,7 +1820,7 @@ export const SearchBar = ({
                                           <div style={{ flex: 1, minWidth: 0 }}>
                                             <div
                                               style={{
-                                                fontSize: '14px',
+                                                fontSize: '0.875rem',
                                                 fontWeight: '600',
                                                 color: textColor,
                                                 whiteSpace: 'nowrap',
@@ -1120,7 +1830,7 @@ export const SearchBar = ({
                                             >
                                               {art.artist}
                                             </div>
-                                            <div style={{ fontSize: '12px', color: textMuted }}>
+                                            <div style={{ fontSize: '0.75rem', color: textMuted }}>
                                               {art.songs.length} {t.tracksCount || 'آهنگ'}
                                               {art.albumsCount > 0 &&
                                                 ` · ${art.albumsCount} ${t.albumsCountLabel || 'آلبوم'}`}
@@ -1173,7 +1883,7 @@ export const SearchBar = ({
                                       display: 'flex',
                                       alignItems: 'center',
                                       gap: '6px',
-                                      fontSize: '13px',
+                                      fontSize: '0.8125rem',
                                       fontWeight: '700',
                                       color: textMuted,
                                       marginBottom: '8px',
@@ -1182,7 +1892,7 @@ export const SearchBar = ({
                                   >
                                     <Disc size={15} color={primaryColor} />
                                     <span>{t.albumsCategory || t.albums || 'آلبوم‌ها'}</span>
-                                    <span style={{ fontSize: '11px', opacity: 0.7 }}>
+                                    <span style={{ fontSize: '0.6875rem', opacity: 0.7 }}>
                                       ({filteredAlbums.length})
                                     </span>
                                   </div>
@@ -1232,7 +1942,7 @@ export const SearchBar = ({
                                           <div style={{ flex: 1, minWidth: 0 }}>
                                             <div
                                               style={{
-                                                fontSize: '14px',
+                                                fontSize: '0.875rem',
                                                 fontWeight: '600',
                                                 color: textColor,
                                                 whiteSpace: 'nowrap',
@@ -1242,7 +1952,7 @@ export const SearchBar = ({
                                             >
                                               {alb.album}
                                             </div>
-                                            <div style={{ fontSize: '12px', color: textMuted }}>
+                                            <div style={{ fontSize: '0.75rem', color: textMuted }}>
                                               {alb.artist} • {alb.songs.length}{' '}
                                               {t.tracksCount || 'آهنگ'}
                                             </div>
@@ -1294,7 +2004,7 @@ export const SearchBar = ({
                                       display: 'flex',
                                       alignItems: 'center',
                                       gap: '6px',
-                                      fontSize: '13px',
+                                      fontSize: '0.8125rem',
                                       fontWeight: '700',
                                       color: textMuted,
                                       marginBottom: '8px',
@@ -1303,7 +2013,7 @@ export const SearchBar = ({
                                   >
                                     <Folder size={15} color={primaryColor} />
                                     <span>{t.foldersCategory || t.folders || 'فولدربندی‌ها'}</span>
-                                    <span style={{ fontSize: '11px', opacity: 0.7 }}>
+                                    <span style={{ fontSize: '0.6875rem', opacity: 0.7 }}>
                                       ({filteredFolders.length})
                                     </span>
                                   </div>
@@ -1356,7 +2066,7 @@ export const SearchBar = ({
                                           <div style={{ flex: 1, minWidth: 0 }}>
                                             <div
                                               style={{
-                                                fontSize: '14px',
+                                                fontSize: '0.875rem',
                                                 fontWeight: '600',
                                                 color: textColor,
                                                 whiteSpace: 'nowrap',
@@ -1366,7 +2076,7 @@ export const SearchBar = ({
                                             >
                                               {folder.name}
                                             </div>
-                                            <div style={{ fontSize: '12px', color: textMuted }}>
+                                            <div style={{ fontSize: '0.75rem', color: textMuted }}>
                                               {folder.songs.length} {t.tracksCount || 'آهنگ'}
                                             </div>
                                           </div>
@@ -1417,7 +2127,7 @@ export const SearchBar = ({
                                       display: 'flex',
                                       alignItems: 'center',
                                       gap: '6px',
-                                      fontSize: '13px',
+                                      fontSize: '0.8125rem',
                                       fontWeight: '700',
                                       color: textMuted,
                                       marginBottom: '8px',
@@ -1428,7 +2138,7 @@ export const SearchBar = ({
                                     <span>
                                       {t.playlistsCategory || t.playlists || 'پلی‌لیست‌ها'}
                                     </span>
-                                    <span style={{ fontSize: '11px', opacity: 0.7 }}>
+                                    <span style={{ fontSize: '0.6875rem', opacity: 0.7 }}>
                                       ({filteredPlaylists.length})
                                     </span>
                                   </div>
@@ -1478,7 +2188,7 @@ export const SearchBar = ({
                                           <div style={{ flex: 1, minWidth: 0 }}>
                                             <div
                                               style={{
-                                                fontSize: '14px',
+                                                fontSize: '0.875rem',
                                                 fontWeight: '600',
                                                 color: textColor,
                                                 whiteSpace: 'nowrap',
@@ -1488,7 +2198,7 @@ export const SearchBar = ({
                                             >
                                               {pl.name}
                                             </div>
-                                            <div style={{ fontSize: '12px', color: textMuted }}>
+                                            <div style={{ fontSize: '0.75rem', color: textMuted }}>
                                               {pl.songs.length} {t.tracksCount || 'آهنگ'}
                                             </div>
                                           </div>
@@ -1544,7 +2254,7 @@ export const SearchBar = ({
                       padding: '8px 18px',
                       backgroundColor: isDark ? 'rgba(0, 0, 0, 0.25)' : 'rgba(0, 0, 0, 0.03)',
                       borderTop: `1px solid ${cardBorder}`,
-                      fontSize: '11px',
+                      fontSize: '0.6875rem',
                       color: textMuted,
                     }}
                   >
@@ -1557,7 +2267,7 @@ export const SearchBar = ({
                           backgroundColor: isDark
                             ? 'rgba(255, 255, 255, 0.1)'
                             : 'rgba(0, 0, 0, 0.07)',
-                          fontSize: '10px',
+                          fontSize: '0.625rem',
                         }}
                       >
                         Esc

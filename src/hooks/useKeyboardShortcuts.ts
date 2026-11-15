@@ -25,17 +25,26 @@ const isEditableTarget = (target: EventTarget | null): boolean => {
   return false;
 };
 
+const hasOpenModal = (): boolean =>
+  typeof document !== 'undefined' &&
+  Boolean(document.querySelector('[role="dialog"], [data-modal-open="true"]'));
+
 /**
- * میانبرهای کیبورد استاندارد دسکتاپ ویندوز (بدون هیچ تغییری در ظاهر برنامه):
- * Space / MediaPlayPause: پخش/توقف | Ctrl+Left/Right: قبلی/بعدی | Left/Right: جلو/عقب ۵ ثانیه
+ * میانبرهای کیبورد استاندارد دسکتاپ با پشتیبانی کامل از چیدمان فارسی/انگلیسی (بر اساس e.code):
+ * Space / K / MediaPlayPause: پخش/توقف | Ctrl+Left/Right: قبلی/بعدی | Left/Right: جلو/عقب (تنظیمی، پیش‌فرض ۵ ثانیه)
  * Ctrl+Up/Down یا +/-: کنترل صدا | M: بی‌صدا | S: شافل | R: تکرار | L: محبوب | Q: صف | F: تمام‌صفحه
  * Ctrl+F: جستجو | Ctrl+,: تنظیمات | Alt+1..6: جابه‌جایی بین تب‌ها
  */
-export const useKeyboardShortcuts = (actions: DesktopShortcutActions) => {
+export const useKeyboardShortcuts = (
+  actions: DesktopShortcutActions,
+  seekStepSeconds = 5
+) => {
   const actionsRef = useRef(actions);
+  const seekStepRef = useRef(seekStepSeconds);
 
   useEffect(() => {
     actionsRef.current = actions;
+    seekStepRef.current = seekStepSeconds;
   });
 
   useEffect(() => {
@@ -57,14 +66,15 @@ export const useKeyboardShortcuts = (actions: DesktopShortcutActions) => {
         return;
       }
 
+      if (hasOpenModal()) return;
+
       if (e.ctrlKey || e.metaKey) {
-        const lower = e.key.toLowerCase();
-        if (lower === 'f') {
+        if (e.code === 'KeyF') {
           e.preventDefault();
           actionsRef.current.onOpenSearch();
           return;
         }
-        if (e.key === ',') {
+        if (e.code === 'Comma') {
           e.preventDefault();
           actionsRef.current.onOpenSettings();
           return;
@@ -74,31 +84,31 @@ export const useKeyboardShortcuts = (actions: DesktopShortcutActions) => {
       if (isEditableTarget(e.target)) return;
 
       if (e.altKey && !e.ctrlKey && !e.metaKey) {
-        const num = Number(e.key);
-        if (num >= 1 && num <= 6) {
+        const digitMatch = /^Digit([1-6])$/.exec(e.code);
+        if (digitMatch) {
           e.preventDefault();
-          actionsRef.current.onSelectTabIndex(num - 1);
+          actionsRef.current.onSelectTabIndex(Number(digitMatch[1]) - 1);
           return;
         }
       }
 
       if (e.ctrlKey || e.metaKey) {
-        if (e.key === 'ArrowRight') {
+        if (e.code === 'ArrowRight') {
           e.preventDefault();
           actionsRef.current.onNext();
           return;
         }
-        if (e.key === 'ArrowLeft') {
+        if (e.code === 'ArrowLeft') {
           e.preventDefault();
           actionsRef.current.onPrev();
           return;
         }
-        if (e.key === 'ArrowUp') {
+        if (e.code === 'ArrowUp') {
           e.preventDefault();
           actionsRef.current.onVolumeBy(0.05);
           return;
         }
-        if (e.key === 'ArrowDown') {
+        if (e.code === 'ArrowDown') {
           e.preventDefault();
           actionsRef.current.onVolumeBy(-0.05);
           return;
@@ -108,39 +118,39 @@ export const useKeyboardShortcuts = (actions: DesktopShortcutActions) => {
 
       if (e.altKey) return;
 
-      const lower = e.key.toLowerCase();
+      const step = Math.max(1, seekStepRef.current || 5);
 
-      if (e.code === 'Space' || lower === 'k') {
+      if (e.code === 'Space' || e.code === 'KeyK') {
         e.preventDefault();
         actionsRef.current.onTogglePlay();
-      } else if (e.key === 'ArrowRight') {
+      } else if (e.code === 'ArrowRight') {
         e.preventDefault();
-        actionsRef.current.onSeekBy(e.shiftKey ? 15 : 5);
-      } else if (e.key === 'ArrowLeft') {
+        actionsRef.current.onSeekBy(e.shiftKey ? step * 3 : step);
+      } else if (e.code === 'ArrowLeft') {
         e.preventDefault();
-        actionsRef.current.onSeekBy(e.shiftKey ? -15 : -5);
-      } else if (e.key === '=' || e.key === '+') {
+        actionsRef.current.onSeekBy(e.shiftKey ? -step * 3 : -step);
+      } else if (e.code === 'Equal' || e.code === 'NumpadAdd') {
         e.preventDefault();
         actionsRef.current.onVolumeBy(0.05);
-      } else if (e.key === '-') {
+      } else if (e.code === 'Minus' || e.code === 'NumpadSubtract') {
         e.preventDefault();
         actionsRef.current.onVolumeBy(-0.05);
-      } else if (lower === 'm') {
+      } else if (e.code === 'KeyM') {
         e.preventDefault();
         actionsRef.current.onToggleMute();
-      } else if (lower === 's') {
+      } else if (e.code === 'KeyS') {
         e.preventDefault();
         actionsRef.current.onToggleShuffle();
-      } else if (lower === 'r') {
+      } else if (e.code === 'KeyR') {
         e.preventDefault();
         actionsRef.current.onCycleRepeat();
-      } else if (lower === 'l') {
+      } else if (e.code === 'KeyL') {
         e.preventDefault();
         actionsRef.current.onToggleFavoriteCurrent();
-      } else if (lower === 'q') {
+      } else if (e.code === 'KeyQ') {
         e.preventDefault();
         actionsRef.current.onToggleQueue();
-      } else if (lower === 'f') {
+      } else if (e.code === 'KeyF') {
         e.preventDefault();
         actionsRef.current.onToggleFullScreen();
       }
@@ -150,3 +160,4 @@ export const useKeyboardShortcuts = (actions: DesktopShortcutActions) => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 };
+

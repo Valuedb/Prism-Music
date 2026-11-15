@@ -15,8 +15,8 @@ export const CoverImage: React.FC<CoverImageProps> = memo(({
   alt = '',
   style,
   iconSize = 20,
-  iconColor = 'rgba(255, 255, 255, 0.45)',
-  fallbackBg = 'rgba(255, 255, 255, 0.08)',
+  iconColor = 'rgba(128, 136, 150, 0.62)',
+  fallbackBg = 'rgba(128, 136, 150, 0.14)',
 }) => {
   const [hasError, setHasError] = useState(false);
 

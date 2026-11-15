@@ -32,6 +32,11 @@ export default defineConfig({
         background_color: '#0c0a18',
         display: 'standalone',
         display_override: ['window-controls-overlay', 'standalone'],
+        launch_handler: {
+          client_mode: ['focus-existing', 'auto'],
+        },
+        orientation: 'any',
+        categories: ['music', 'entertainment'],
         start_url: '/',
         scope: '/',
         icons: [
@@ -66,6 +71,7 @@ export default defineConfig({
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
+        navigateFallback: '/index.html',
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
@@ -98,7 +104,8 @@ export default defineConfig({
         ],
       },
       devOptions: {
-        enabled: false,
+        enabled: true,
+        type: 'module',
       },
     }),
   ],

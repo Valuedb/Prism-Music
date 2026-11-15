@@ -1,11 +1,48 @@
-import React, { useState, useEffect, useRef, memo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, memo } from 'react';
 import { createPortal } from 'react-dom';
-import { motion, AnimatePresence, useDragControls } from 'framer-motion';
-import { Heart, Shuffle, Trash2, GripVertical, X, ListMusic, Music } from 'lucide-react';
+import { motion, AnimatePresence, LayoutGroup, useDragControls } from 'framer-motion';
+import { Heart, Music, Edit3, Check, X } from 'lucide-react';
 import type { ArtworkStyle, RepeatMode, Song, VisualizerStyle } from '../types';
 import { withAlpha } from '../utils/color';
-import { CoverImage } from './CoverImage';
+import { QueueDrawer } from './QueueDrawer';
+import { MarqueeText } from './MarqueeText';
 import { audioEffects } from '../player/audioEffects';
+
+interface LyricLine {
+  time: number | null;
+  text: string;
+}
+
+const parseLyrics = (raw?: string): { lines: LyricLine[]; isSynced: boolean } => {
+  if (!raw || !raw.trim()) return { lines: [], isSynced: false };
+  const rawLines = raw.split(/\r?\n/);
+  const parsed: LyricLine[] = [];
+  let hasTimed = false;
+
+  for (const rawLine of rawLines) {
+    const trimmed = rawLine.trim();
+    if (!trimmed) {
+      if (parsed.length > 0 && parsed[parsed.length - 1].text !== '') {
+        parsed.push({ time: null, text: '' });
+      }
+      continue;
+    }
+    const match = trimmed.match(/^\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]\s*(.*)$/);
+    if (match) {
+      hasTimed = true;
+      const mins = Number(match[1]);
+      const secs = Number(match[2]);
+      const fracStr = match[3] || '0';
+      const frac = Number(fracStr) / Math.pow(10, fracStr.length);
+      const time = mins * 60 + secs + frac;
+      const text = match[4].trim();
+      if (text) parsed.push({ time, text });
+    } else {
+      parsed.push({ time: null, text: trimmed });
+    }
+  }
+  return { lines: parsed, isSynced: hasTimed };
+};
 
 interface FullScreenPlayerProps {
   isOpen: boolean;
@@ -19,18 +56,22 @@ interface FullScreenPlayerProps {
   duration: number;
   onSeek: (time: number) => void;
   volume: number;
+  maxVolFactor?: number;
   onVolumeChange: (newVol: number) => void;
   isShuffle: boolean;
   onToggleShuffle: () => void;
   repeatMode: RepeatMode;
   onToggleRepeat: () => void;
   queue: Song[];
+  currentQueueIndex?: number;
   removeFromQueue: (index: number) => void;
   onToggleFavorite?: (id: string) => void;
   reorderQueue?: (fromIndex: number, toIndex: number) => void;
   onPlayQueueSong?: (index: number) => void;
   onClearQueue?: () => void;
   onShuffleQueue?: () => void;
+  onCreatePlaylist?: (name: string, songs: Song[]) => void;
+  onUpdateSong?: (updatedSong: Song) => void;
   liveVisualizer?: boolean;
   artworkStyle?: ArtworkStyle;
   visualizerStyle?: VisualizerStyle;
@@ -169,18 +210,22 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
   duration,
   onSeek,
   volume,
+  maxVolFactor = 1,
   onVolumeChange,
   isShuffle,
   onToggleShuffle,
   repeatMode,
   onToggleRepeat,
   queue,
+  currentQueueIndex,
   removeFromQueue,
   onToggleFavorite,
   reorderQueue,
   onPlayQueueSong,
   onClearQueue,
   onShuffleQueue,
+  onCreatePlaylist,
+  onUpdateSong,
   liveVisualizer = true,
   artworkStyle = 'classic',
   visualizerStyle = 'bars',
@@ -188,22 +233,31 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
   theme,
 }) => {
   const [showQueue, setShowQueue] = useState(false);
+  const [showLyrics, setShowLyrics] = useState(false);
+  const [isEditingLyrics, setIsEditingLyrics] = useState(false);
+  const [lyricsDraft, setLyricsDraft] = useState('');
   const [isHoveringProgress, setIsHoveringProgress] = useState(false);
   const [isHoveringVolume, setIsHoveringVolume] = useState(false);
   const [isHeartPopping, setIsHeartPopping] = useState(false);
-  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
-  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const [coverError, setCoverError] = useState(false);
   const [isMobile, setIsMobile] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth < 768 : false
   );
-  const currentSongRowRef = useRef<HTMLDivElement>(null);
   const ringHaloRef = useRef<HTMLDivElement>(null);
   const ringInnerHaloRef = useRef<HTMLDivElement>(null);
+  const activeLyricRef = useRef<HTMLButtonElement | null>(null);
   const dragControls = useDragControls();
 
   useEffect(() => {
-    if (!liveVisualizer || visualizerStyle !== 'ring' || !isOpen || !isPlaying || showQueue) {
+    if (!isOpen) {
+      setShowQueue(false);
+      setShowLyrics(false);
+      setIsEditingLyrics(false);
+    }
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!liveVisualizer || visualizerStyle !== 'ring' || !isOpen || !isPlaying) {
       if (ringHaloRef.current) {
         ringHaloRef.current.style.transform = 'scale(1)';
         ringHaloRef.current.style.opacity = '0';
@@ -249,7 +303,7 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
 
     rafId = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(rafId);
-  }, [liveVisualizer, visualizerStyle, isOpen, isPlaying, showQueue]);
+  }, [liveVisualizer, visualizerStyle, isOpen, isPlaying]);
 
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 768);
@@ -259,32 +313,45 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
 
   useEffect(() => {
     setCoverError(false);
-  }, [currentSong?.id, currentSong?.cover]);
+    setIsEditingLyrics(false);
+    setLyricsDraft(currentSong?.lyrics || '');
+  }, [currentSong?.id, currentSong?.cover, currentSong?.lyrics]);
+
+  const parsedLyrics = useMemo(() => parseLyrics(currentSong?.lyrics), [currentSong?.lyrics]);
+
+  const activeLyricIndex = useMemo(() => {
+    if (!parsedLyrics.isSynced) return -1;
+    let activeIdx = -1;
+    for (let i = 0; i < parsedLyrics.lines.length; i++) {
+      const tVal = parsedLyrics.lines[i].time;
+      if (tVal !== null && currentTime >= tVal - 0.15) {
+        activeIdx = i;
+      }
+    }
+    return activeIdx;
+  }, [parsedLyrics, currentTime]);
+
+  useEffect(() => {
+    if (!showLyrics || isEditingLyrics || activeLyricIndex < 0) return;
+    activeLyricRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [showLyrics, isEditingLyrics, activeLyricIndex]);
 
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose();
+      if (e.key === 'Escape' && !showQueue) {
+        if (isEditingLyrics) {
+          setIsEditingLyrics(false);
+        } else if (showLyrics) {
+          setShowLyrics(false);
+        } else {
+          onClose();
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
-
-  const currentQueueIdx = currentSong ? queue.findIndex((s) => s.id === currentSong.id) : -1;
-
-  useEffect(() => {
-    if (isOpen && showQueue && currentSongRowRef.current) {
-      const timer = setTimeout(() => {
-        currentSongRowRef.current?.scrollIntoView({
-          behavior: 'smooth',
-          block: 'center',
-        });
-      }, 150);
-      return () => clearTimeout(timer);
-    }
-  }, [isOpen, showQueue, currentQueueIdx]);
+  }, [isOpen, showQueue, isEditingLyrics, showLyrics, onClose]);
 
   if (typeof document === 'undefined') return null;
 
@@ -314,32 +381,6 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
     justifyContent: 'center',
     cursor: 'pointer',
     padding: 0,
-  };
-
-  const handleDragStart = (e: React.DragEvent, index: number) => {
-    setDraggedIndex(index);
-    e.dataTransfer.effectAllowed = 'move';
-  };
-
-  const handleDragOver = (e: React.DragEvent, index: number) => {
-    e.preventDefault();
-    if (draggedIndex !== null && draggedIndex !== index) {
-      setDragOverIndex(index);
-    }
-  };
-
-  const handleDrop = (e: React.DragEvent, dropIndex: number) => {
-    e.preventDefault();
-    if (draggedIndex !== null && draggedIndex !== dropIndex && reorderQueue) {
-      reorderQueue(draggedIndex, dropIndex);
-    }
-    setDraggedIndex(null);
-    setDragOverIndex(null);
-  };
-
-  const handleDragEnd = () => {
-    setDraggedIndex(null);
-    setDragOverIndex(null);
   };
 
   return createPortal(
@@ -445,13 +486,20 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
               flexDirection: 'column',
               height: '100%',
               width: '100%',
-              maxWidth: isMobile ? '420px' : '540px',
+              maxWidth: showLyrics
+                ? isMobile
+                  ? '460px'
+                  : '880px'
+                : isMobile
+                ? '420px'
+                : '540px',
               margin: '0 auto',
               padding: isMobile
-                ? 'clamp(14px, 2.5vh, 22px) 22px clamp(32px, 6.5vh, 52px)'
-                : 'clamp(16px, 2.5vh, 24px) 28px clamp(34px, 6.5vh, 54px)',
+                ? 'clamp(14px, 2.5vh, 22px) 22px clamp(26px, 5.5vh, 44px)'
+                : 'clamp(16px, 2.5vh, 24px) 28px clamp(28px, 5.5vh, 46px)',
               boxSizing: 'border-box',
               justifyContent: 'space-between',
+              transition: 'max-width 0.42s cubic-bezier(0.22, 1, 0.36, 1)',
             }}
           >
             {/* هدر: دستگیره کشویی، دکمه بستن، عنوان و گزینه‌های علاقه‌مندی و صف */}
@@ -476,7 +524,7 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
             >
               <button
                 onClick={onClose}
-                aria-label="Close"
+                aria-label={t.close || 'Close'}
                 style={{
                   ...btnStyle,
                   width: '40px',
@@ -521,7 +569,7 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
                     left: '50%',
                     top: '50%',
                     transform: 'translate(-50%, -50%)',
-                    fontSize: '13px',
+                    fontSize: '0.8125rem',
                     fontWeight: '600',
                     color: 'rgba(255, 255, 255, 0.72)',
                     pointerEvents: 'none',
@@ -532,7 +580,7 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
                 </span>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', zIndex: 2 }}>
-                  {onToggleFavorite && (
+                  {onToggleFavorite ? (
                     <motion.button
                       whileTap={{ scale: 0.88 }}
                       whileHover={{ opacity: 0.82 }}
@@ -574,482 +622,547 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
                         strokeWidth={currentSong.isFavorite ? 0 : 2}
                       />
                     </motion.button>
+                  ) : (
+                    <div style={{ width: '38px', height: '38px' }} />
                   )}
-
-                  <button
-                    onClick={() => setShowQueue(!showQueue)}
-                    title={t.queue || 'Queue'}
-                    style={{
-                      ...btnStyle,
-                      width: '36px',
-                      height: '36px',
-                      borderRadius: '50%',
-                      backgroundColor: showQueue
-                        ? withAlpha(primaryColor, 0.25)
-                        : 'rgba(255, 255, 255, 0.1)',
-                      color: showQueue ? iconActiveColor : '#ffffff',
-                      transition: 'all 0.2s',
-                    }}
-                  >
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-                      <path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z" />
-                    </svg>
-                  </button>
                 </div>
               </div>
             </motion.div>
 
-            {/* محتوای وسط: کاور + عنوان یا صف پخش */}
+            {/* محتوای وسط: کاور، نام آهنگ و ویژوالایزر (و متن ترانه با انیمیشن جابه‌جایی به چپ) */}
             <div
               style={{
                 flex: 1,
                 display: 'flex',
-                flexDirection: 'column',
-                justifyContent: 'center',
                 alignItems: 'center',
+                justifyContent: 'center',
                 minHeight: 0,
                 padding: '8px 0',
                 width: '100%',
               }}
             >
-              {showQueue ? (
-                <div
+              <LayoutGroup id="fullscreen-lyrics-group">
+                <motion.div
+                  layout
+                  transition={{ type: 'spring', stiffness: 250, damping: 27, mass: 0.88 }}
                   style={{
-                    width: '100%',
-                    height: '100%',
-                    maxHeight: '360px',
-                    backgroundColor: 'rgba(18, 18, 24, 0.55)',
-                    backdropFilter: 'blur(24px)',
-                    WebkitBackdropFilter: 'blur(24px)',
-                    borderRadius: '20px',
-                    padding: '16px',
-                    boxSizing: 'border-box',
-                    border: '1px solid rgba(255, 255, 255, 0.12)',
                     display: 'flex',
-                    flexDirection: 'column',
-                    gap: '12px',
+                    flexDirection: showLyrics ? 'row' : 'column',
+                    alignItems: 'center',
+                    justifyContent: showLyrics ? 'space-between' : 'center',
+                    gap: showLyrics ? (isMobile ? '14px' : '32px') : '0px',
+                    width: '100%',
+                    height: showLyrics ? '100%' : 'auto',
+                    minHeight: 0,
                   }}
                 >
-                  <div
+                  {/* ستون چپ/وسط: کاور و عنوان آهنگ */}
+                  <motion.div
+                    layout
+                    transition={{ type: 'spring', stiffness: 250, damping: 27, mass: 0.88 }}
                     style={{
                       display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
-                      paddingBottom: '10px',
+                      flexDirection: 'column',
+                      alignItems: showLyrics ? 'flex-start' : 'center',
+                      width: showLyrics ? (isMobile ? '106px' : '220px') : '100%',
                       flexShrink: 0,
                     }}
                   >
-                    <div>
-                      <div style={{ fontSize: '15px', fontWeight: 700, color: '#ffffff' }}>
-                        {t.queueTitle || t.queue || 'صف پخش'}
-                      </div>
-                      <div style={{ fontSize: '11.5px', color: 'rgba(255, 255, 255, 0.55)', marginTop: '2px' }}>
-                        {currentQueueIdx !== -1 ? (
-                          <span>
-                            {t.close === 'Close'
-                              ? `Track ${currentQueueIdx + 1} of ${queue.length}`
-                              : `آهنگ ${currentQueueIdx + 1} از ${queue.length}`}
-                          </span>
-                        ) : (
-                          <span>
-                            {queue.length} {t.totalTracks || 'آهنگ'}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      {queue.length > 2 && onShuffleQueue && (
-                        <button
-                          onClick={onShuffleQueue}
-                          title={t.shuffleQueue || 'بر زدن صف'}
-                          style={{
-                            ...btnStyle,
-                            color: 'rgba(255, 255, 255, 0.72)',
-                            padding: '6px',
-                            borderRadius: '8px',
-                            backgroundColor: 'rgba(255, 255, 255, 0.06)',
-                          }}
-                        >
-                          <Shuffle size={15} />
-                        </button>
-                      )}
-                      {queue.length > 0 && onClearQueue && (
-                        <button
-                          onClick={onClearQueue}
-                          title={t.clearQueue || 'پاک کردن صف'}
-                          style={{
-                            ...btnStyle,
-                            color: 'rgba(255, 255, 255, 0.72)',
-                            padding: '6px',
-                            borderRadius: '8px',
-                            backgroundColor: 'rgba(255, 255, 255, 0.06)',
-                          }}
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {queue.length === 0 ? (
-                    <div
-                      style={{
-                        flex: 1,
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '8px',
-                        color: 'rgba(255, 255, 255, 0.5)',
-                        fontSize: '13px',
-                        textAlign: 'center',
-                        padding: '32px 12px',
-                      }}
-                    >
-                      <ListMusic size={24} style={{ opacity: 0.55 }} />
-                      <span>{t.queueEmpty || 'صف پخش خالی است'}</span>
-                    </div>
-                  ) : (
-                    <div
-                      style={{
-                        flex: 1,
-                        overflowY: 'auto',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '6px',
-                        paddingInlineEnd: '4px',
-                      }}
-                    >
-                      {queue.map((song, index) => {
-                        const isCurrent = currentSong?.id === song.id;
-                        const isPast = currentQueueIdx !== -1 && index < currentQueueIdx;
-                        const isItemDragged = draggedIndex === index;
-                        const isOver = dragOverIndex === index;
-
-                        return (
-                          <div
-                            key={`${song.id}-${index}`}
-                            ref={isCurrent ? currentSongRowRef : undefined}
-                            draggable={Boolean(reorderQueue)}
-                            onDragStart={(e) => handleDragStart(e, index)}
-                            onDragOver={(e) => handleDragOver(e, index)}
-                            onDrop={(e) => handleDrop(e, index)}
-                            onDragEnd={handleDragEnd}
-                            onClick={() => onPlayQueueSong?.(index)}
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '10px',
-                              padding: '8px 10px',
-                              borderRadius: '12px',
-                              backgroundColor: isCurrent
-                                ? withAlpha(primaryColor, 0.22)
-                                : isOver
-                                ? withAlpha(primaryColor, 0.16)
-                                : 'rgba(255, 255, 255, 0.05)',
-                              border: isCurrent
-                                ? `1px solid ${withAlpha(primaryColor, 0.48)}`
-                                : isOver
-                                ? `1px solid ${primaryColor}`
-                                : '1px solid rgba(255, 255, 255, 0.06)',
-                              borderTop: isOver ? `2px solid ${primaryColor}` : undefined,
-                              cursor: onPlayQueueSong ? 'pointer' : 'default',
-                              opacity: isItemDragged ? 0.35 : isPast ? 0.6 : 1,
-                              transition: 'all 0.15s ease',
-                              userSelect: 'none',
-                            }}
-                          >
-                            <div style={{ width: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                              {isCurrent ? (
-                                <div style={{ display: 'flex', alignItems: 'flex-end', gap: '2px', height: '12px' }}>
-                                  <motion.span
-                                    animate={isPlaying ? { scaleY: [0.35, 1, 0.45, 0.85, 0.35] } : { scaleY: 0.4 }}
-                                    transition={isPlaying ? { duration: 0.75, repeat: Infinity, ease: 'easeInOut' } : { duration: 0.2 }}
-                                    style={{ width: '2px', height: '12px', backgroundColor: primaryColor, borderRadius: '1px', transformOrigin: 'bottom' }}
-                                  />
-                                  <motion.span
-                                    animate={isPlaying ? { scaleY: [0.7, 0.3, 1, 0.5, 0.9, 0.7] } : { scaleY: 0.6 }}
-                                    transition={isPlaying ? { duration: 0.65, repeat: Infinity, ease: 'easeInOut', delay: 0.1 } : { duration: 0.2 }}
-                                    style={{ width: '2px', height: '12px', backgroundColor: primaryColor, borderRadius: '1px', transformOrigin: 'bottom' }}
-                                  />
-                                  <motion.span
-                                    animate={isPlaying ? { scaleY: [0.4, 0.9, 0.3, 0.95, 0.4] } : { scaleY: 0.35 }}
-                                    transition={isPlaying ? { duration: 0.8, repeat: Infinity, ease: 'easeInOut', delay: 0.2 } : { duration: 0.2 }}
-                                    style={{ width: '2px', height: '12px', backgroundColor: primaryColor, borderRadius: '1px', transformOrigin: 'bottom' }}
-                                  />
-                                </div>
-                              ) : (
-                                <span style={{ fontSize: '11.5px', color: 'rgba(255, 255, 255, 0.5)', fontVariantNumeric: 'tabular-nums' }}>
-                                  {index + 1}
-                                </span>
-                              )}
-                            </div>
-
-                            <CoverImage
-                              src={song.cover}
-                              alt=""
-                              iconSize={16}
-                              style={{
-                                width: '38px',
-                                height: '38px',
-                                borderRadius: '8px',
-                                objectFit: 'cover',
-                                flexShrink: 0,
-                              }}
-                            />
-
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <div
-                                style={{
-                                  fontSize: '13px',
-                                  fontWeight: isCurrent ? 700 : 500,
-                                  color: isCurrent ? primaryColor : '#ffffff',
-                                  whiteSpace: 'nowrap',
-                                  overflow: 'hidden',
-                                  textOverflow: 'ellipsis',
-                                }}
-                              >
-                                {song.name}
-                              </div>
-                              <div
-                                style={{
-                                  fontSize: '11.5px',
-                                  color: 'rgba(255, 255, 255, 0.6)',
-                                  whiteSpace: 'nowrap',
-                                  overflow: 'hidden',
-                                  textOverflow: 'ellipsis',
-                                }}
-                              >
-                                {song.artist}
-                              </div>
-                            </div>
-
-                            <div
-                              style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <button
-                                onClick={() => removeFromQueue(index)}
-                                title={t.removeFromQueue || 'حذف'}
-                                style={{
-                                  ...btnStyle,
-                                  color: 'rgba(255, 255, 255, 0.5)',
-                                  padding: '5px',
-                                  borderRadius: '6px',
-                                }}
-                              >
-                                <X size={15} />
-                              </button>
-
-                              {reorderQueue && (
-                                <div
-                                  style={{
-                                    color: 'rgba(255, 255, 255, 0.45)',
-                                    cursor: 'grab',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    padding: '2px',
-                                  }}
-                                >
-                                  <GripVertical size={15} />
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%' }}>
-                  <motion.div
-                    initial={{ opacity: 0, scale: 0.76, y: 32 }}
-                    animate={{
-                      opacity: 1,
-                      scale: isPlaying ? 1 : 0.88,
-                      y: isPlaying ? 0 : 6,
-                    }}
-                    exit={{
-                      opacity: 0,
-                      scale: 0.84,
-                      y: 22,
-                      transition: { duration: 0.22, ease: [0.32, 0.72, 0, 1] },
-                    }}
-                    transition={{
-                      type: 'spring',
-                      stiffness: 240,
-                      damping: 24,
-                      mass: 0.8,
-                    }}
-                    style={{
-                      position: 'relative',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      transformOrigin: 'center center',
-                    }}
-                  >
-                    {liveVisualizer && visualizerStyle === 'ring' && (
-                      <>
-                        <div
-                          ref={ringHaloRef}
-                          aria-hidden="true"
-                          style={{
-                            position: 'absolute',
-                            inset: '-18px',
-                            borderRadius: artworkStyle === 'vinyl' ? '50%' : theme?.radius?.xl || '30px',
-                            border: `2px solid ${withAlpha(primaryColor, 0.72)}`,
-                            boxShadow: `0 0 38px ${withAlpha(primaryColor, 0.56)}`,
-                            pointerEvents: 'none',
-                            opacity: 0,
-                          }}
-                        />
-                        <div
-                          ref={ringInnerHaloRef}
-                          aria-hidden="true"
-                          style={{
-                            position: 'absolute',
-                            inset: '-8px',
-                            borderRadius: artworkStyle === 'vinyl' ? '50%' : theme?.radius?.xl || '24px',
-                            border: `1.5px solid ${withAlpha(primaryColor, 0.5)}`,
-                            boxShadow: `inset 0 0 18px ${withAlpha(primaryColor, 0.35)}`,
-                            pointerEvents: 'none',
-                            opacity: 0,
-                          }}
-                        />
-                      </>
-                    )}
                     <motion.div
+                      layout
+                      initial={{ opacity: 0, scale: 0.76, y: 32 }}
                       animate={{
-                        boxShadow: isPlaying
-                          ? '0 24px 50px rgba(0,0,0,0.65)'
-                          : '0 10px 24px rgba(0,0,0,0.35)',
+                        opacity: 1,
+                        scale: isPlaying ? 1 : showLyrics ? 0.96 : 0.88,
+                        y: isPlaying ? 0 : showLyrics ? 0 : 6,
                       }}
-                      transition={{ duration: 0.35 }}
-                      className={
-                        artworkStyle === 'vinyl'
-                          ? isPlaying
-                            ? 'vinyl-spin'
-                            : 'vinyl-spin-paused'
-                          : undefined
-                      }
+                      exit={{
+                        opacity: 0,
+                        scale: 0.84,
+                        y: 22,
+                        transition: { duration: 0.22, ease: [0.32, 0.72, 0, 1] },
+                      }}
+                      transition={{
+                        type: 'spring',
+                        stiffness: 245,
+                        damping: 25,
+                        mass: 0.82,
+                      }}
                       style={{
                         position: 'relative',
-                        width: 'min(230px, 58vw, 29vh)',
-                        height: 'min(230px, 58vw, 29vh)',
-                        borderRadius: artworkStyle === 'vinyl' ? '50%' : theme?.radius?.xl || '20px',
-                        overflow: 'hidden',
-                        border:
-                          artworkStyle === 'vinyl'
-                            ? '6px solid rgba(20, 20, 26, 0.92)'
-                            : '1px solid rgba(255, 255, 255, 0.14)',
-                        backgroundColor: 'rgba(255, 255, 255, 0.05)',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
+                        transformOrigin: showLyrics ? 'left center' : 'center center',
                       }}
                     >
-                      {currentSong.cover && !coverError ? (
-                        <img
-                          src={currentSong.cover}
-                          alt={currentSong.name}
-                          onError={() => setCoverError(true)}
-                          style={{
-                            width: '100%',
-                            height: '100%',
-                            objectFit: 'cover',
-                            display: 'block',
-                          }}
-                        />
-                      ) : (
-                        <Music size={56} color="rgba(255, 255, 255, 0.35)" strokeWidth={1.4} />
-                      )}
-                      {artworkStyle === 'vinyl' && (
+                      {!showLyrics && liveVisualizer && visualizerStyle === 'ring' && (
                         <>
                           <div
+                            ref={ringHaloRef}
                             aria-hidden="true"
                             style={{
                               position: 'absolute',
-                              inset: '14%',
-                              borderRadius: '50%',
-                              border: '1px solid rgba(255,255,255,0.14)',
+                              inset: '-18px',
+                              borderRadius: artworkStyle === 'vinyl' ? '50%' : theme?.radius?.xl || '30px',
+                              border: `2px solid ${withAlpha(primaryColor, 0.72)}`,
+                              boxShadow: `0 0 38px ${withAlpha(primaryColor, 0.56)}`,
                               pointerEvents: 'none',
+                              opacity: 0,
                             }}
                           />
                           <div
+                            ref={ringInnerHaloRef}
                             aria-hidden="true"
                             style={{
                               position: 'absolute',
-                              width: '28px',
-                              height: '28px',
-                              borderRadius: '50%',
-                              backgroundColor: '#121216',
-                              border: '3px solid rgba(255, 255, 255, 0.35)',
-                              boxShadow: 'inset 0 2px 6px rgba(0,0,0,0.8)',
+                              inset: '-8px',
+                              borderRadius: artworkStyle === 'vinyl' ? '50%' : theme?.radius?.xl || '24px',
+                              border: `1.5px solid ${withAlpha(primaryColor, 0.5)}`,
+                              boxShadow: `inset 0 0 18px ${withAlpha(primaryColor, 0.35)}`,
                               pointerEvents: 'none',
+                              opacity: 0,
                             }}
                           />
                         </>
                       )}
+                      <motion.div
+                        layout
+                        animate={{
+                          boxShadow: isPlaying
+                            ? '0 24px 50px rgba(0,0,0,0.65)'
+                            : '0 10px 24px rgba(0,0,0,0.35)',
+                        }}
+                        transition={{
+                          layout: { type: 'spring', stiffness: 250, damping: 27 },
+                          boxShadow: { duration: 0.35 },
+                        }}
+                        className={
+                          artworkStyle === 'vinyl'
+                            ? isPlaying
+                              ? 'vinyl-spin'
+                              : 'vinyl-spin-paused'
+                            : undefined
+                        }
+                        style={{
+                          position: 'relative',
+                          width: showLyrics
+                            ? isMobile
+                              ? '96px'
+                              : '176px'
+                            : 'min(230px, 58vw, 29vh)',
+                          height: showLyrics
+                            ? isMobile
+                              ? '96px'
+                              : '176px'
+                            : 'min(230px, 58vw, 29vh)',
+                          borderRadius:
+                            artworkStyle === 'vinyl'
+                              ? '50%'
+                              : showLyrics
+                              ? isMobile
+                                ? '14px'
+                                : '18px'
+                              : theme?.radius?.xl || '20px',
+                          overflow: 'hidden',
+                          border:
+                            artworkStyle === 'vinyl'
+                              ? showLyrics
+                                ? '4px solid rgba(20, 20, 26, 0.92)'
+                                : '6px solid rgba(20, 20, 26, 0.92)'
+                              : '1px solid rgba(255, 255, 255, 0.14)',
+                          backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          transition:
+                            'width 0.38s cubic-bezier(0.22, 1, 0.36, 1), height 0.38s cubic-bezier(0.22, 1, 0.36, 1), border-radius 0.35s ease',
+                        }}
+                      >
+                        {currentSong.cover && !coverError ? (
+                          <img
+                            src={currentSong.cover}
+                            alt={currentSong.name}
+                            onError={() => setCoverError(true)}
+                            style={{
+                              width: '100%',
+                              height: '100%',
+                              objectFit: 'cover',
+                              display: 'block',
+                            }}
+                          />
+                        ) : (
+                          <Music
+                            size={showLyrics ? (isMobile ? 30 : 42) : 56}
+                            color="rgba(255, 255, 255, 0.35)"
+                            strokeWidth={1.4}
+                          />
+                        )}
+                        {artworkStyle === 'vinyl' && (
+                          <>
+                            <div
+                              aria-hidden="true"
+                              style={{
+                                position: 'absolute',
+                                inset: '14%',
+                                borderRadius: '50%',
+                                border: '1px solid rgba(255,255,255,0.14)',
+                                pointerEvents: 'none',
+                              }}
+                            />
+                            <div
+                              aria-hidden="true"
+                              style={{
+                                position: 'absolute',
+                                width: showLyrics ? '16px' : '28px',
+                                height: showLyrics ? '16px' : '28px',
+                                borderRadius: '50%',
+                                backgroundColor: '#121216',
+                                border: showLyrics
+                                  ? '2px solid rgba(255, 255, 255, 0.35)'
+                                  : '3px solid rgba(255, 255, 255, 0.35)',
+                                boxShadow: 'inset 0 2px 6px rgba(0,0,0,0.8)',
+                                pointerEvents: 'none',
+                              }}
+                            />
+                          </>
+                        )}
+                      </motion.div>
+                    </motion.div>
+
+                    <motion.div
+                      layout="position"
+                      animate={{
+                        scale: isPlaying ? 1 : showLyrics ? 0.98 : 0.94,
+                        opacity: isPlaying ? 1 : 0.88,
+                      }}
+                      transition={{
+                        layout: { type: 'spring', stiffness: 250, damping: 27 },
+                        type: 'spring',
+                        stiffness: 240,
+                        damping: 24,
+                      }}
+                      style={{
+                        marginTop: showLyrics ? '10px' : '14px',
+                        textAlign: showLyrics ? 'left' : 'center',
+                        width: '100%',
+                        padding: showLyrics ? '0 2px' : '0 8px',
+                        boxSizing: 'border-box',
+                        transformOrigin: showLyrics ? 'left top' : 'center top',
+                      }}
+                    >
+                      {showLyrics ? (
+                        <div
+                          style={{
+                            fontSize: isMobile ? '0.8125rem' : '1.0625rem',
+                            fontWeight: '700',
+                            color: songTitleColor,
+                            whiteSpace: 'normal',
+                            display: '-webkit-box',
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: 'vertical',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            letterSpacing: '-0.2px',
+                            lineHeight: 1.28,
+                          }}
+                        >
+                          {currentSong.name}
+                        </div>
+                      ) : (
+                        <MarqueeText
+                          text={currentSong.name}
+                          speedPxPerSec={32}
+                          gapPx={40}
+                          style={{
+                            fontSize: 'clamp(1.0625rem, 4.5vw, 1.3125rem)',
+                            fontWeight: '700',
+                            color: songTitleColor,
+                            letterSpacing: '-0.2px',
+                            lineHeight: 1.28,
+                          }}
+                        />
+                      )}
+                      <MarqueeText
+                        text={currentSong.artist}
+                        speedPxPerSec={30}
+                        gapPx={38}
+                        style={{
+                          fontSize: showLyrics
+                            ? isMobile
+                              ? '0.7188rem'
+                              : '0.8438rem'
+                            : 'clamp(13px, 3.4vw, 15px)',
+                          color: artistColor,
+                          marginTop: '4px',
+                        }}
+                      />
+                      {!showLyrics && liveVisualizer && (
+                        <FullScreenVisualizer
+                          active={isOpen && isPlaying}
+                          color={primaryColor}
+                          variant={visualizerStyle}
+                        />
+                      )}
                     </motion.div>
                   </motion.div>
 
-                  <motion.div
-                    animate={{
-                      scale: isPlaying ? 1 : 0.94,
-                      opacity: isPlaying ? 1 : 0.88,
-                    }}
-                    transition={{
-                      type: 'spring',
-                      stiffness: 240,
-                      damping: 24,
-                    }}
-                    style={{
-                      marginTop: '14px',
-                      textAlign: 'center',
-                      width: '100%',
-                      padding: '0 8px',
-                      boxSizing: 'border-box',
-                      transformOrigin: 'center top',
-                    }}
-                  >
-                    <div
-                      style={{
-                        fontSize: 'clamp(17px, 4.5vw, 21px)',
-                        fontWeight: '700',
-                        color: songTitleColor,
-                        whiteSpace: 'nowrap',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        letterSpacing: '-0.2px',
-                      }}
-                    >
-                      {currentSong.name}
-                    </div>
-                    <div
-                      style={{
-                        fontSize: 'clamp(13px, 3.4vw, 15px)',
-                        color: artistColor,
-                        marginTop: '4px',
-                        whiteSpace: 'nowrap',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                      }}
-                    >
-                      {currentSong.artist}
-                    </div>
-                    {liveVisualizer && (
-                      <FullScreenVisualizer
-                        active={isOpen && isPlaying && !showQueue}
-                        color={primaryColor}
-                        variant={visualizerStyle}
-                      />
+                  {/* ستون راست: نمایش و ویرایش متن ترانه (Lyrics) */}
+                  <AnimatePresence>
+                    {showLyrics && (
+                      <motion.div
+                        key="lyrics-panel"
+                        initial={{ opacity: 0, x: 26, scale: 0.98 }}
+                        animate={{ opacity: 1, x: 0, scale: 1 }}
+                        exit={{
+                          opacity: 0,
+                          x: 18,
+                          scale: 0.98,
+                          transition: { duration: 0.18, ease: [0.32, 0.72, 0, 1] },
+                        }}
+                        transition={{ duration: 0.36, ease: [0.22, 1, 0.36, 1] }}
+                        style={{
+                          flex: 1,
+                          minWidth: 0,
+                          height: '100%',
+                          maxHeight: isMobile ? '44vh' : '50vh',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          position: 'relative',
+                        }}
+                      >
+                        {onUpdateSong && !isEditingLyrics && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setLyricsDraft(currentSong.lyrics || '');
+                              setIsEditingLyrics(true);
+                            }}
+                            title={currentSong.lyrics ? t.editLyrics || 'ویرایش متن' : t.addLyrics || 'افزودن متن'}
+                            style={{
+                              ...btnStyle,
+                              position: 'absolute',
+                              top: 0,
+                              right: 0,
+                              zIndex: 5,
+                              width: '30px',
+                              height: '30px',
+                              borderRadius: '50%',
+                              backgroundColor: 'rgba(255, 255, 255, 0.12)',
+                              color: 'rgba(255, 255, 255, 0.8)',
+                            }}
+                          >
+                            <Edit3 size={14} />
+                          </button>
+                        )}
+
+                        {isEditingLyrics ? (
+                          <div
+                            style={{
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '10px',
+                              height: '100%',
+                              width: '100%',
+                              backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                              border: '1px solid rgba(255, 255, 255, 0.16)',
+                              borderRadius: '18px',
+                              padding: '12px',
+                              boxSizing: 'border-box',
+                            }}
+                          >
+                            <textarea
+                              value={lyricsDraft}
+                              onChange={(e) => setLyricsDraft(e.target.value)}
+                              placeholder={t.lyricsPlaceholder || 'متن ترانه را وارد کنید...'}
+                              dir="auto"
+                              style={{
+                                flex: 1,
+                                width: '100%',
+                                minHeight: '140px',
+                                backgroundColor: 'transparent',
+                                border: 'none',
+                                outline: 'none',
+                                resize: 'none',
+                                color: '#ffffff',
+                                fontSize: isMobile ? '0.8125rem' : '0.9063rem',
+                                lineHeight: 1.6,
+                                fontFamily: theme?.fonts?.main,
+                              }}
+                            />
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                              <button
+                                type="button"
+                                onClick={() => setIsEditingLyrics(false)}
+                                style={{
+                                  ...btnStyle,
+                                  padding: '6px 12px',
+                                  borderRadius: '10px',
+                                  backgroundColor: 'rgba(255, 255, 255, 0.1)',
+                                  color: '#ffffff',
+                                  fontSize: '0.75rem',
+                                  fontWeight: 600,
+                                  gap: '4px',
+                                }}
+                              >
+                                <X size={14} />
+                                <span>{t.cancel || 'لغو'}</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (onUpdateSong) {
+                                    onUpdateSong({
+                                      ...currentSong,
+                                      lyrics: lyricsDraft.trim() || undefined,
+                                    });
+                                  }
+                                  setIsEditingLyrics(false);
+                                }}
+                                style={{
+                                  ...btnStyle,
+                                  padding: '6px 14px',
+                                  borderRadius: '10px',
+                                  backgroundColor: primaryColor,
+                                  color: theme?.colors?.onPrimary || '#ffffff',
+                                  fontSize: '0.75rem',
+                                  fontWeight: 600,
+                                  gap: '4px',
+                                }}
+                              >
+                                <Check size={14} />
+                                <span>{t.save || 'ذخیره'}</span>
+                              </button>
+                            </div>
+                          </div>
+                        ) : parsedLyrics.lines.length === 0 ? (
+                          <div
+                            style={{
+                              flex: 1,
+                              display: 'flex',
+                              flexDirection: 'column',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              textAlign: 'center',
+                              gap: '12px',
+                              padding: '16px',
+                            }}
+                          >
+                            <div
+                              style={{
+                                fontSize: isMobile ? '0.8438rem' : '0.9375rem',
+                                fontWeight: 600,
+                                color: 'rgba(255, 255, 255, 0.56)',
+                                lineHeight: 1.5,
+                              }}
+                            >
+                              {t.noLyrics || 'متن ترانه‌ای برای این آهنگ موجود نیست'}
+                            </div>
+                            {onUpdateSong && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setLyricsDraft('');
+                                  setIsEditingLyrics(true);
+                                }}
+                                style={{
+                                  ...btnStyle,
+                                  padding: '8px 16px',
+                                  borderRadius: '12px',
+                                  backgroundColor: 'rgba(255, 255, 255, 0.14)',
+                                  color: '#ffffff',
+                                  fontSize: '0.7813rem',
+                                  fontWeight: 600,
+                                  gap: '6px',
+                                }}
+                              >
+                                <Edit3 size={14} />
+                                <span>{t.addLyrics || 'افزودن متن ترانه'}</span>
+                              </button>
+                            )}
+                          </div>
+                        ) : (
+                          <div
+                            className="lyrics-scroll"
+                            style={{
+                              flex: 1,
+                              overflowY: 'auto',
+                              padding: '26px 8px 34px 4px',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: parsedLyrics.isSynced ? (isMobile ? '10px' : '14px') : isMobile ? '8px' : '12px',
+                              WebkitMaskImage:
+                                'linear-gradient(to bottom, transparent 0%, black 12%, black 88%, transparent 100%)',
+                              maskImage:
+                                'linear-gradient(to bottom, transparent 0%, black 12%, black 88%, transparent 100%)',
+                              scrollbarWidth: 'none',
+                            }}
+                          >
+                            {parsedLyrics.lines.map((line, idx) => {
+                              if (!line.text) {
+                                return <div key={idx} style={{ height: '10px', flexShrink: 0 }} />;
+                              }
+                              const isActive = parsedLyrics.isSynced && idx === activeLyricIndex;
+                              const isPast = parsedLyrics.isSynced && idx < activeLyricIndex;
+                              return (
+                                <button
+                                  key={idx}
+                                  ref={isActive ? activeLyricRef : undefined}
+                                  type="button"
+                                  dir="auto"
+                                  disabled={line.time === null}
+                                  onClick={() => {
+                                    if (line.time !== null) {
+                                      onSeek(line.time);
+                                    }
+                                  }}
+                                  style={{
+                                    ...btnStyle,
+                                    display: 'block',
+                                    width: '100%',
+                                    textAlign: 'start',
+                                    cursor: line.time !== null ? 'pointer' : 'default',
+                                    fontSize: parsedLyrics.isSynced
+                                      ? isMobile
+                                        ? isActive
+                                          ? '1.0625rem'
+                                          : '0.9375rem'
+                                        : isActive
+                                        ? '1.4375rem'
+                                        : '1.1875rem'
+                                      : isMobile
+                                      ? '0.9375rem'
+                                      : '1.1875rem',
+                                    fontWeight: isActive ? 800 : 700,
+                                    lineHeight: 1.45,
+                                    color: parsedLyrics.isSynced
+                                      ? isActive
+                                        ? '#ffffff'
+                                        : isPast
+                                        ? 'rgba(255, 255, 255, 0.36)'
+                                        : 'rgba(255, 255, 255, 0.56)'
+                                      : 'rgba(255, 255, 255, 0.9)',
+                                    textShadow: isActive
+                                      ? `0 0 22px ${withAlpha(primaryColor, 0.55)}`
+                                      : 'none',
+                                    transform: isActive ? 'scale(1.02)' : 'scale(1)',
+                                    transformOrigin: 'left center',
+                                    transition:
+                                      'color 0.25s ease, transform 0.28s cubic-bezier(0.22, 1, 0.36, 1), text-shadow 0.25s ease',
+                                    flexShrink: 0,
+                                  }}
+                                >
+                                  {line.text}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </motion.div>
                     )}
-                  </motion.div>
-                </div>
-              )}
+                  </AnimatePresence>
+                </motion.div>
+              </LayoutGroup>
             </div>
 
             {/* کنترل‌های پخش، نوار زمان و ولوم */}
@@ -1062,15 +1175,82 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
                 transition: { duration: 0.18, ease: [0.32, 0.72, 0, 1] },
               }}
               transition={{ duration: 0.38, delay: 0.1, ease: [0.22, 1, 0.36, 1] }}
-              style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: isMobile ? '12px' : '16px', flexShrink: 0 }}
+              style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: isMobile ? '10px' : '14px', flexShrink: 0 }}
             >
+              {/* دکمه‌های متن ترانه (چپ) و صف پخش (راست) دقیقاً بالای نوار پیشرفت */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  width: '100%',
+                  marginBottom: '-2px',
+                }}
+              >
+                <motion.button
+                  type="button"
+                  whileTap={{ scale: 0.94 }}
+                  whileHover={{ opacity: 0.85 }}
+                  transition={{ duration: 0.14, ease: 'easeOut' }}
+                  onClick={() => setShowLyrics((prev) => !prev)}
+                  title={t.lyrics || 'Lyrics'}
+                  style={{
+                    ...btnStyle,
+                    padding: '4px 10px',
+                    height: '26px',
+                    borderRadius: '8px',
+                    border: showLyrics
+                      ? `1px solid ${withAlpha(primaryColor, 0.7)}`
+                      : '1px solid rgba(255, 255, 255, 0.18)',
+                    backgroundColor: showLyrics
+                      ? withAlpha(primaryColor, 0.24)
+                      : 'rgba(255, 255, 255, 0.08)',
+                    color: showLyrics ? iconActiveColor : 'rgba(255, 255, 255, 0.88)',
+                    fontSize: '0.7188rem',
+                    fontWeight: 600,
+                    letterSpacing: '0.1px',
+                    lineHeight: 1,
+                    boxShadow: showLyrics ? `0 0 12px ${withAlpha(primaryColor, 0.35)}` : 'none',
+                    transition:
+                      'background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease',
+                  }}
+                >
+                  {t.lyrics || 'Lyrics'}
+                </motion.button>
+
+                <motion.button
+                  type="button"
+                  data-queue-toggle="true"
+                  whileTap={{ scale: 0.9 }}
+                  whileHover={{ opacity: 0.82 }}
+                  transition={{ duration: 0.14, ease: 'easeOut' }}
+                  onClick={() => setShowQueue((prev) => !prev)}
+                  title={t.queue || 'Queue'}
+                  style={{
+                    ...btnStyle,
+                    width: '36px',
+                    height: '36px',
+                    borderRadius: '50%',
+                    backgroundColor: showQueue
+                      ? withAlpha(primaryColor, 0.28)
+                      : 'rgba(255, 255, 255, 0.1)',
+                    color: showQueue ? iconActiveColor : '#ffffff',
+                    boxShadow: showQueue ? `0 0 14px ${withAlpha(primaryColor, 0.45)}` : 'none',
+                  }}
+                >
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z" />
+                  </svg>
+                </motion.button>
+              </div>
+
               {/* نوار پیشرفت زمان */}
               <div
                 style={{ display: 'flex', alignItems: 'center', gap: '10px', width: '100%' }}
                 onMouseEnter={() => setIsHoveringProgress(true)}
                 onMouseLeave={() => setIsHoveringProgress(false)}
               >
-                <span style={{ fontSize: '11.5px', color: artistColor, minWidth: '32px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 500 }}>
+                <span style={{ fontSize: '0.7188rem', color: artistColor, minWidth: '32px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 500 }}>
                   {formatTime(currentTime)}
                 </span>
                 <div style={{ flex: 1, position: 'relative', height: '24px', display: 'flex', alignItems: 'center' }}>
@@ -1114,7 +1294,7 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
                     }}
                   />
                 </div>
-                <span style={{ fontSize: '11.5px', color: artistColor, minWidth: '30px', fontVariantNumeric: 'tabular-nums', fontWeight: 500 }}>
+                <span style={{ fontSize: '0.7188rem', color: artistColor, minWidth: '30px', fontVariantNumeric: 'tabular-nums', fontWeight: 500 }}>
                   {formatTime(duration)}
                 </span>
               </div>
@@ -1136,7 +1316,7 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
                   whileHover={{ opacity: 0.78 }}
                   transition={{ duration: 0.14, ease: 'easeOut' }}
                   onClick={onToggleShuffle}
-                  title="Shuffle"
+                  title={isShuffle ? (t.shuffleOn || 'Shuffle On') : (t.shuffleOff || 'Shuffle Off')}
                   style={{
                     ...btnStyle,
                     color: isShuffle ? iconActiveColor : iconInactiveColor,
@@ -1174,7 +1354,7 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
                   whileHover={{ opacity: 0.78 }}
                   transition={{ duration: 0.14, ease: 'easeOut' }}
                   onClick={() => playPrev()}
-                  title="Previous"
+                  title={t.previous || 'Previous'}
                   style={{
                     ...btnStyle,
                     color: iconColor,
@@ -1194,7 +1374,7 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
                   whileHover={{ opacity: 0.82 }}
                   transition={{ duration: 0.14, ease: 'easeOut' }}
                   onClick={onTogglePlay}
-                  title={isPlaying ? 'Pause' : 'Play'}
+                  title={isPlaying ? (t.pause || 'Pause') : (t.play || 'Play')}
                   style={{
                     ...btnStyle,
                     color: iconColor,
@@ -1219,7 +1399,7 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
                   whileHover={{ opacity: 0.78 }}
                   transition={{ duration: 0.14, ease: 'easeOut' }}
                   onClick={() => playNext()}
-                  title="Next"
+                  title={t.next || 'Next'}
                   style={{
                     ...btnStyle,
                     color: iconColor,
@@ -1239,7 +1419,13 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
                   whileHover={{ opacity: 0.78 }}
                   transition={{ duration: 0.14, ease: 'easeOut' }}
                   onClick={onToggleRepeat}
-                  title="Repeat"
+                  title={
+                    repeatMode === 'one'
+                      ? (t.repeatOne || 'Repeat One')
+                      : repeatMode === 'all'
+                      ? (t.repeatAll || 'Repeat All')
+                      : (t.repeatOff || 'Repeat Off')
+                  }
                   style={{
                     ...btnStyle,
                     color: repeatMode !== 'off' ? iconActiveColor : iconInactiveColor,
@@ -1276,90 +1462,118 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
                 </motion.button>
               </div>
 
-              {/* اسلایدر ولوم صدا */}
+              {/* ردیف پایین: اسلایدر ولوم کاملاً وسط‌چین */}
               <div
                 style={{
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '10px',
+                  justifyContent: 'center',
                   width: '100%',
-                  maxWidth: '280px',
-                  margin: '2px auto 0',
-                  boxSizing: 'border-box',
-                }}
-                onMouseEnter={() => setIsHoveringVolume(true)}
-                onMouseLeave={() => setIsHoveringVolume(false)}
-                onWheel={(e) => {
-                  e.preventDefault();
-                  const delta = e.deltaY < 0 ? 0.05 : -0.05;
-                  onVolumeChange(Math.max(0, Math.min(1, volume + delta)));
+                  marginTop: '2px',
                 }}
               >
-                <button
-                  type="button"
-                  onClick={() => onVolumeChange(0)}
-                  title="Mute"
-                  style={{ ...btnStyle, color: iconInactiveColor }}
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    width: '100%',
+                    maxWidth: '300px',
+                    boxSizing: 'border-box',
+                  }}
+                  onMouseEnter={() => setIsHoveringVolume(true)}
+                  onMouseLeave={() => setIsHoveringVolume(false)}
+                  onWheel={(e) => {
+                    e.preventDefault();
+                    const delta = e.deltaY < 0 ? 0.05 : -0.05;
+                    onVolumeChange(Math.max(0, Math.min(maxVolFactor, volume + delta)));
+                  }}
                 >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M7 9v6h4l5 5V4L11 9H7z" />
-                  </svg>
-                </button>
-
-                <div style={{ flex: 1, position: 'relative', height: '22px', display: 'flex', alignItems: 'center' }}>
-                  <div
-                    style={{
-                      position: 'absolute',
-                      left: 0,
-                      right: 0,
-                      height: isHoveringVolume ? '5px' : '3px',
-                      backgroundColor: 'rgba(255, 255, 255, 0.2)',
-                      borderRadius: '999px',
-                      transition: 'height 0.15s ease',
-                    }}
+                  <button
+                    type="button"
+                    onClick={() => onVolumeChange(0)}
+                    title={t.mute || 'Mute'}
+                    style={{ ...btnStyle, color: iconInactiveColor }}
                   >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M7 9v6h4l5 5V4L11 9H7z" />
+                    </svg>
+                  </button>
+
+                  <div style={{ flex: 1, position: 'relative', height: '22px', display: 'flex', alignItems: 'center' }}>
                     <div
                       style={{
-                        width: `${volumePercent}%`,
-                        height: '100%',
-                        backgroundColor: primaryColor,
+                        position: 'absolute',
+                        left: 0,
+                        right: 0,
+                        height: isHoveringVolume ? '5px' : '3px',
+                        backgroundColor: 'rgba(255, 255, 255, 0.2)',
                         borderRadius: '999px',
+                        transition: 'height 0.15s ease',
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: `${volumePercent}%`,
+                          height: '100%',
+                          backgroundColor: primaryColor,
+                          borderRadius: '999px',
+                        }}
+                      />
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={volume}
+                      onChange={(e) => onVolumeChange(Number(e.target.value))}
+                      style={{
+                        position: 'absolute',
+                        left: 0,
+                        top: 0,
+                        width: '100%',
+                        height: '100%',
+                        opacity: 0,
+                        cursor: 'pointer',
+                        zIndex: 2,
                       }}
                     />
                   </div>
-                  <input
-                    type="range"
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    value={volume}
-                    onChange={(e) => onVolumeChange(Number(e.target.value))}
-                    style={{
-                      position: 'absolute',
-                      left: 0,
-                      top: 0,
-                      width: '100%',
-                      height: '100%',
-                      opacity: 0,
-                      cursor: 'pointer',
-                      zIndex: 2,
-                    }}
-                  />
-                </div>
 
-                <button
-                  type="button"
-                  onClick={() => onVolumeChange(1)}
-                  title="Max Volume"
-                  style={{ ...btnStyle, color: iconInactiveColor }}
-                >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z" />
-                  </svg>
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => onVolumeChange(maxVolFactor)}
+                    title={t.maxVolume || 'Max Volume'}
+                    style={{ ...btnStyle, color: iconInactiveColor }}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z" />
+                    </svg>
+                  </button>
+                </div>
               </div>
             </motion.div>
           </div>
+
+          <QueueDrawer
+            isOpen={showQueue}
+            onClose={() => setShowQueue(false)}
+            queue={queue}
+            currentSong={currentSong}
+            currentQueueIndex={currentQueueIndex}
+            isPlaying={isPlaying}
+            onPlaySong={(idx: number) => onPlayQueueSong?.(idx)}
+            onRemoveFromQueue={removeFromQueue}
+            onReorderQueue={(from, to) => reorderQueue?.(from, to)}
+            onClearQueue={() => onClearQueue?.()}
+            onShuffleQueue={() => onShuffleQueue?.()}
+            onCreatePlaylist={onCreatePlaylist}
+            theme={theme}
+            t={t}
+            isMobile={isMobile}
+            inFullScreen
+          />
         </motion.div>
       )}
     </AnimatePresence>,

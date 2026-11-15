@@ -120,3 +120,88 @@ export async function deleteAudioBlob(songId: string): Promise<void> {
     }
   });
 }
+
+export interface AudioStorageStats {
+  count: number;
+  totalBytes: number;
+}
+
+/** محاسبه تعداد و حجم کل فایل‌های صوتی ذخیره‌شده در IndexedDB */
+export async function getAudioStorageStats(): Promise<AudioStorageStats> {
+  const db = await openMediaDb();
+  if (!db) return { count: 0, totalBytes: 0 };
+
+  return new Promise<AudioStorageStats>((resolve) => {
+    let count = 0;
+    let totalBytes = 0;
+    try {
+      const tx = db.transaction(AUDIO_STORE, 'readonly');
+      const store = tx.objectStore(AUDIO_STORE);
+      const req = store.openCursor();
+      req.onsuccess = () => {
+        const cursor = req.result;
+        if (!cursor) return;
+        count += 1;
+        if (cursor.value instanceof Blob) {
+          totalBytes += cursor.value.size;
+        }
+        cursor.continue();
+      };
+      tx.oncomplete = () => resolve({ count, totalBytes });
+      tx.onerror = () => resolve({ count: 0, totalBytes: 0 });
+    } catch {
+      resolve({ count: 0, totalBytes: 0 });
+    }
+  });
+}
+
+/** پاک‌سازی فایل‌های صوتی بی‌صاحب که دیگر در کتابخانه وجود ندارند */
+export async function cleanupOrphanAudioBlobs(
+  validSongIds: Set<string>
+): Promise<{ removedCount: number; freedBytes: number }> {
+  const db = await openMediaDb();
+  if (!db) return { removedCount: 0, freedBytes: 0 };
+
+  return new Promise<{ removedCount: number; freedBytes: number }>((resolve) => {
+    let removedCount = 0;
+    let freedBytes = 0;
+    try {
+      const tx = db.transaction(AUDIO_STORE, 'readwrite');
+      const store = tx.objectStore(AUDIO_STORE);
+      const req = store.openCursor();
+      req.onsuccess = () => {
+        const cursor = req.result;
+        if (!cursor) return;
+        const key = String(cursor.key);
+        if (!validSongIds.has(key)) {
+          if (cursor.value instanceof Blob) {
+            freedBytes += cursor.value.size;
+          }
+          removedCount += 1;
+          cursor.delete();
+        }
+        cursor.continue();
+      };
+      tx.oncomplete = () => resolve({ removedCount, freedBytes });
+      tx.onerror = () => resolve({ removedCount: 0, freedBytes: 0 });
+    } catch {
+      resolve({ removedCount: 0, freedBytes: 0 });
+    }
+  });
+}
+
+export async function clearAllAudioBlobs(): Promise<void> {
+  const db = await openMediaDb();
+  if (!db) return;
+
+  await new Promise<void>((resolve) => {
+    try {
+      const tx = db.transaction(AUDIO_STORE, 'readwrite');
+      tx.objectStore(AUDIO_STORE).clear();
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
+}

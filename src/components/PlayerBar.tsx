@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { PLAY_COUNT_THRESHOLD_SECONDS } from '../player/constants';
-import type { DisplaySettings, RepeatMode, SleepTimerState, Song, SoundSettings } from '../types';
+import { motion } from 'framer-motion';
+import { Heart } from 'lucide-react';
+import { DEFAULT_PLAYBACK_PREFERENCES, PLAY_COUNT_THRESHOLD_SECONDS } from '../player/constants';
+import type { DisplaySettings, PlaybackPreferences, RepeatMode, SleepTimerState, Song, SoundSettings } from '../types';
 import { FullScreenPlayer } from './FullScreenPlayer';
 import { QueueDrawer } from './QueueDrawer';
 import { CoverImage } from './CoverImage';
+import { MarqueeText } from './MarqueeText';
 import { syncMediaSession, syncMediaSessionPosition } from '../utils/mediaSession';
 import { DEFAULT_SOUND_SETTINGS, audioEffects } from '../player/audioEffects';
 import { DEFAULT_DISPLAY_SETTINGS } from '../theme';
@@ -12,39 +15,30 @@ import { STORAGE_KEYS } from '../storage/keys';
 import { readJSON, writeJSON } from '../storage/safeStorage';
 import { getAudioBlob } from '../storage/mediaStore';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
+import { withAlpha } from '../utils/color';
 
 /**
- * رنگ‌ها و متریال نوار پلیر به سبک Apple Music (رنگ‌های سیستمی Apple HIG):
+ * رنگ‌ها و متریال نوار پلیر به سبک Apple Music هماهنگ با پالت و تم روشن/تاریک:
  * - سطح شیشه‌ای نوار (پس‌زمینه، لبه و سایه) از theme.glass.bar می‌آید (src/theme.ts)
- * - آیکون‌ها تک‌رنگ‌اند؛ فقط حالت روشن شافل/تکرار رنگ اصلی تم را می‌گیرد
+ * - رنگ متن‌ها و آیکون‌ها از پالت فعال می‌آید تا با تم روشن و تیره کاملاً هماهنگ باشد
  */
-const getBarPalette = (isDark: boolean) =>
-  isDark
-    ? {
-        title: '#ffffff',
-        secondary: 'rgba(235, 235, 245, 0.6)',
-        icon: '#ffffff',
-        iconDim: 'rgba(235, 235, 245, 0.6)',
-        iconHover: '#ffffff',
-      }
-    : {
-        title: '#1d1d1f',
-        secondary: 'rgba(60, 60, 67, 0.6)',
-        icon: '#1d1d1f',
-        iconDim: 'rgba(60, 60, 67, 0.6)',
-        iconHover: '#000000',
-      };
+const getBarPalette = (theme: any) => ({
+  title: theme.colors.textPrimary || (theme.isDark ? '#ffffff' : '#1d1f1f'),
+  secondary: theme.colors.textSecondary || (theme.isDark ? 'rgba(235, 235, 245, 0.65)' : 'rgba(60, 60, 67, 0.65)'),
+  icon: theme.colors.textPrimary || (theme.isDark ? '#ffffff' : '#1d1d1f'),
+  iconDim: theme.colors.textSecondary || (theme.isDark ? 'rgba(235, 235, 245, 0.65)' : 'rgba(60, 60, 67, 0.65)'),
+});
 
-/** افکت لمس/کلیک نرم و ساده دکمه‌های نوار پخش (بدون تارشدن در هاور) */
+/** افکت لمس/کلیک نرم و ساده دکمه‌های نوار پخش (بدون تاری یا پرش در هاور) */
 const BUTTON_CSS = `
-.pb-btn { transition: color 0.18s ease, opacity 0.18s ease, scale 0.2s cubic-bezier(0.22, 1, 0.36, 1); }
-.pb-btn:hover:not(:disabled) { opacity: 0.82; }
-.pb-btn:active:not(:disabled) { opacity: 0.62; scale: 0.95; transition-duration: 0.08s; }
+.pb-btn { transition: opacity 0.16s ease; }
+.pb-btn:active:not(:disabled) { opacity: 0.6; transition-duration: 0.08s; }
 `;
 
 interface PlayerBarProps {
   currentSong: Song | null;
   queue: Song[];
+  currentQueueIndex?: number;
   removeFromQueue: (index: number) => void;
   playNext: () => boolean;
   playPrev: () => boolean;
@@ -70,6 +64,8 @@ interface PlayerBarProps {
   peekNext?: () => Song | null;
   soundSettings?: SoundSettings;
   displaySettings?: DisplaySettings;
+  playbackPrefs?: PlaybackPreferences;
+  onUpdateSong?: (updatedSong: Song) => void;
 }
 
 type AudioWithPitchFlags = HTMLAudioElement & {
@@ -99,6 +95,7 @@ const applyDeckPlaybackParams = (
 export const PlayerBar = ({
   currentSong,
   queue,
+  currentQueueIndex,
   removeFromQueue,
   playNext,
   playPrev,
@@ -124,6 +121,8 @@ export const PlayerBar = ({
   peekNext,
   soundSettings = DEFAULT_SOUND_SETTINGS,
   displaySettings = DEFAULT_DISPLAY_SETTINGS,
+  playbackPrefs = DEFAULT_PLAYBACK_PREFERENCES,
+  onUpdateSong,
 }: PlayerBarProps) => {
   const audioRefA = useRef<HTMLAudioElement>(null);
   const audioRefB = useRef<HTMLAudioElement>(null);
@@ -159,6 +158,7 @@ export const PlayerBar = ({
   const [isHoveringProgress, setIsHoveringProgress] = useState(false);
   const [isHoveringVolume, setIsHoveringVolume] = useState(false);
   const [isNowPlayingOpen, setIsNowPlayingOpen] = useState(false);
+  const [isHeartPopping, setIsHeartPopping] = useState(false);
 
   const maxVolFactor = Math.max(0.2, Math.min(1, (soundSettings.maxVolumeLimit ?? 100) / 100));
   const effectiveVolume = Math.min(volume, maxVolFactor);
@@ -232,8 +232,17 @@ export const PlayerBar = ({
     }
   }, [currentSong, isPlaying]);
 
-  // بازیابی زمان آخرین پخش (فقط اگر playToken == 0 باشد یعنی از نشست قبلی بازیابی شده)
+  // بازیابی زمان آخرین پخش (فقط اگر playToken == 0 و گزینه ذخیره موقعیت فعال باشد)
   useEffect(() => {
+    if (!playbackPrefs.rememberPlaybackPosition) {
+      pendingResumeTimeRef.current = null;
+      try {
+        localStorage.removeItem(STORAGE_KEYS.lastPlayback);
+      } catch {
+        // نادیده گرفتن خطا
+      }
+      return;
+    }
     if (playToken !== 0 || !currentSong) return;
     const saved = readJSON<{ songId?: string; currentTime?: number } | null>(
       STORAGE_KEYS.lastPlayback,
@@ -242,7 +251,7 @@ export const PlayerBar = ({
     if (saved && saved.songId === currentSong.id && typeof saved.currentTime === 'number' && saved.currentTime > 0) {
       pendingResumeTimeRef.current = saved.currentTime;
     }
-  }, [currentSong, playToken]);
+  }, [currentSong, playToken, playbackPrefs.rememberPlaybackPosition]);
 
   // بارگذاری و پخش آهنگ با پشتیبانی از Crossfade و Gapless و Fade
   useEffect(() => {
@@ -323,6 +332,7 @@ export const PlayerBar = ({
 
     setCurrentTime(0);
     pendingResumeTimeRef.current = null;
+    audioEffects.resumeContext();
     if (soundSettings.fadeOnPlayPause) {
       audioEffects.setDeckGain(audio, 0.02, 0);
     }
@@ -375,7 +385,7 @@ export const PlayerBar = ({
       lastPosSyncRef.current = nowMs;
       syncMediaSessionPosition(totalDur, nowTime, audio.playbackRate || 1);
     }
-    if (currentSong && nowMs - lastPlaybackSaveRef.current > 4000) {
+    if (playbackPrefs.rememberPlaybackPosition && currentSong && nowMs - lastPlaybackSaveRef.current > 4000) {
       lastPlaybackSaveRef.current = nowMs;
       writeJSON(STORAGE_KEYS.lastPlayback, { songId: currentSong.id, currentTime: nowTime });
     }
@@ -626,7 +636,7 @@ export const PlayerBar = ({
     onOpenSearch: () => window.dispatchEvent(new CustomEvent('app:open-search')),
     onOpenSettings: () => onOpenSettings?.(),
     onSelectTabIndex: (idx) => onSelectTabIndex?.(idx),
-  });
+  }, playbackPrefs.seekStepSeconds);
 
   useEffect(() => {
     syncMediaSession(currentSong, isPlaying, {
@@ -712,7 +722,7 @@ export const PlayerBar = ({
     if (!playNext()) handlePlayState(false);
   };
 
-  // بازیابی خودکار از IndexedDB در صورت منقضی‌شدن Blob URL
+  // بازیابی خودکار از IndexedDB در صورت منقضی‌شدن Blob URL و همگام‌سازی آدرس تازه در کل برنامه
   const handleAudioError = async (deck: 'A' | 'B') => {
     if (deck !== activeDeckRef.current) return;
     const audio = getActiveAudio();
@@ -721,6 +731,7 @@ export const PlayerBar = ({
       const blob = await getAudioBlob(currentSong.id);
       if (blob) {
         const freshUrl = URL.createObjectURL(blob);
+        onUpdateSong?.({ ...currentSong, fileUrl: freshUrl });
         audio.src = freshUrl;
         audio.play().then(() => handlePlayState(true)).catch(() => handlePlayState(false));
         return;
@@ -747,8 +758,8 @@ export const PlayerBar = ({
   // # درخشش نوار پیشرفت (بر اساس پالت)
   const glowColor = `0 0 14px ${theme.colors.glow || theme.colors.primary}`;
 
-  // # رنگ‌ها و متریال به سبک Apple Music (تم روشن/تاریک)
-  const palette = getBarPalette(theme.isDark);
+  // # رنگ‌ها و متریال هماهنگ با پالت فعال (تم روشن/تاریک)
+  const palette = getBarPalette(theme);
   const songTitleColor = palette.title;
   const artistColor = palette.secondary;
   const iconColor = palette.icon;
@@ -774,23 +785,23 @@ export const PlayerBar = ({
         height: isMobile ? '66px' : '90px',
         width: isDocked ? '100%' : isMobile ? '320px' : '90%',
         maxWidth: isDocked ? '100%' : isMobile ? 'calc(100% - 24px)' : '1000px',
-        // # سطح شیشه‌ای نوار (پس‌زمینه، لبه، سایه) از تم می‌آید
+        // # سطح شیشه‌ای نوار (پس‌زمینه، لبه، بلور و سایه) از تم می‌آید
         background: theme.glass.bar.background,
-        backdropFilter: `blur(${theme.display?.glassBlur ?? 26}px) saturate(180%)`,
-        WebkitBackdropFilter: `blur(${theme.display?.glassBlur ?? 26}px) saturate(180%)`,
+        backdropFilter: theme.glass.bar.backdropFilter || `blur(${theme.display?.playerBarBlur ?? theme.display?.glassBlur ?? 28}px) saturate(190%)`,
+        WebkitBackdropFilter: theme.glass.bar.backdropFilter || `blur(${theme.display?.playerBarBlur ?? theme.display?.glassBlur ?? 28}px) saturate(190%)`,
         borderRadius: isDocked ? '0px' : isMobile ? theme.radius.lg || '18px' : theme.radius.xl || '24px',
         margin: isDocked ? '0' : isMobile ? '0 auto 12px auto' : '0 auto 16px auto',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        padding: isMobile ? '0 12px' : '10px 24px 8px 24px',
+        padding: isMobile ? '0 10px' : '10px 24px 8px 24px',
         position: 'relative',
         color: songTitleColor,
         zIndex: 20,
         boxShadow: isDocked ? '0 -8px 28px rgba(0,0,0,0.22)' : theme.glass.bar.boxShadow,
         border: isDocked ? 'none' : theme.glass.bar.border,
         borderTop: isDocked ? theme.glass.bar.border : theme.glass.bar.border,
-        gap: isMobile ? '10px' : '0',
+        gap: isMobile ? '8px' : '0',
       }}
     >
       <style>{BUTTON_CSS}</style>
@@ -801,6 +812,7 @@ export const PlayerBar = ({
         onClose={() => setShowQueue(false)}
         queue={queue}
         currentSong={currentSong}
+        currentQueueIndex={currentQueueIndex}
         isPlaying={isPlaying}
         onPlaySong={(idx: number) => onPlayQueueSong?.(idx)}
         onRemoveFromQueue={removeFromQueue}
@@ -847,37 +859,33 @@ export const PlayerBar = ({
               }}
             />
             <div style={{ overflow: 'hidden', minWidth: 0, flex: 1 }}>
-              <div
+              <MarqueeText
+                text={currentSong.name}
+                speedPxPerSec={32}
+                gapPx={36}
                 style={{
                   fontWeight: '600',
-                  fontSize: isMobile ? '13px' : '14px',
+                  fontSize: isMobile ? '0.8125rem' : '0.875rem',
                   color: songTitleColor,
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
                 }}
-              >
-                {currentSong.name}
-              </div>
-              <div
+              />
+              <MarqueeText
+                text={currentSong.artist}
+                speedPxPerSec={30}
+                gapPx={36}
                 style={{
                   color: artistColor,
-                  fontSize: isMobile ? '11px' : '12px',
+                  fontSize: isMobile ? '0.6875rem' : '0.75rem',
                   marginTop: '2px',
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
                 }}
-              >
-                {currentSong.artist}
-              </div>
+              />
             </div>
           </>
         ) : (
           <div
             style={{
               color: artistColor,
-              fontSize: isMobile ? '13px' : '14px',
+              fontSize: isMobile ? '0.8125rem' : '0.875rem',
               whiteSpace: 'nowrap',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
@@ -916,7 +924,7 @@ export const PlayerBar = ({
           >
             <span
               style={{
-                fontSize: '10px',
+                fontSize: '0.625rem',
                 color: artistColor,
                 width: '30px',
                 textAlign: 'right',
@@ -966,31 +974,25 @@ export const PlayerBar = ({
                 }}
               />
             </div>
-            <span style={{ fontSize: '10px', color: artistColor, width: '30px', fontVariantNumeric: 'tabular-nums' }}>
+            <span style={{ fontSize: '0.625rem', color: artistColor, width: '30px', fontVariantNumeric: 'tabular-nums' }}>
               {formatTime(duration)}
             </span>
           </div>
         )}
 
         {/* دکمه‌های کنترل */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '16px' : '26px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '2px' : '26px' }}>
           {!isMobile && (
             <button
               className="pb-btn"
               onClick={() => setIsShuffle(!isShuffle)}
-              title={isShuffle ? 'Shuffle On (S)' : 'Shuffle Off (S)'}
+              title={`${isShuffle ? (t.shuffleOn || 'Shuffle On') : (t.shuffleOff || 'Shuffle Off')} (S)`}
               style={{
                 ...btnStyle,
                 width: '34px',
                 height: '34px',
                 position: 'relative',
                 color: isShuffle ? iconActiveColor : iconInactiveColor,
-              }}
-              onMouseEnter={(e) => {
-                if (!isShuffle) e.currentTarget.style.color = palette.iconHover;
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.color = isShuffle ? iconActiveColor : iconInactiveColor;
               }}
             >
               <svg width="19" height="19" viewBox="0 0 16 16" fill="currentColor">
@@ -1025,18 +1027,12 @@ export const PlayerBar = ({
             title={t.previous || 'Previous'}
             style={{
               ...btnStyle,
-              width: isMobile ? '32px' : '38px',
-              height: isMobile ? '32px' : '38px',
+              width: isMobile ? '26px' : '38px',
+              height: isMobile ? '26px' : '38px',
               color: iconColor,
             }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.color = palette.iconHover;
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.color = iconColor;
-            }}
           >
-            <svg width={isMobile ? '20' : '24'} height={isMobile ? '20' : '24'} viewBox="0 0 16 16" fill="currentColor">
+            <svg width={isMobile ? '17' : '24'} height={isMobile ? '17' : '24'} viewBox="0 0 16 16" fill="currentColor">
               <path d="M8.404 7.304a.802.802 0 0 0 0 1.392l6.363 3.692c.52.302 1.233-.043 1.233-.696V4.308c0-.653-.713-.998-1.233-.696z" />
               <path d="M.404 7.304a.802.802 0 0 0 0 1.392l6.363 3.692c.52.302 1.233-.043 1.233-.696V4.308c0-.653-.713-.998-1.233-.696z" />
             </svg>
@@ -1051,26 +1047,20 @@ export const PlayerBar = ({
             title={isPlaying ? t.pause || 'Pause' : t.play || 'Play'}
             style={{
               ...btnStyle,
-              width: isMobile ? '34px' : '44px',
-              height: isMobile ? '34px' : '44px',
+              width: isMobile ? '32px' : '44px',
+              height: isMobile ? '32px' : '44px',
               color: iconColor,
               flexShrink: 0,
             }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.color = palette.iconHover;
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.color = iconColor;
-            }}
           >
             {isPlaying ? (
-              <svg width={isMobile ? '26' : '34'} height={isMobile ? '26' : '34'} viewBox="0 0 16 16" fill="currentColor">
+              <svg width={isMobile ? '22' : '34'} height={isMobile ? '22' : '34'} viewBox="0 0 16 16" fill="currentColor">
                 <path d="M5.5 3.5A1.5 1.5 0 0 1 7 5v6a1.5 1.5 0 0 1-3 0V5a1.5 1.5 0 0 1 1.5-1.5m5 0A1.5 1.5 0 0 1 12 5v6a1.5 1.5 0 0 1-3 0V5a1.5 1.5 0 0 1 1.5-1.5" />
               </svg>
             ) : (
               <svg
-                width={isMobile ? '26' : '34'}
-                height={isMobile ? '26' : '34'}
+                width={isMobile ? '22' : '34'}
+                height={isMobile ? '22' : '34'}
                 viewBox="0 0 16 16"
                 fill="currentColor"
                 style={{ transform: 'translateX(1.5px)' }}
@@ -1089,18 +1079,12 @@ export const PlayerBar = ({
             title={t.next || 'Next'}
             style={{
               ...btnStyle,
-              width: isMobile ? '32px' : '38px',
-              height: isMobile ? '32px' : '38px',
+              width: isMobile ? '26px' : '38px',
+              height: isMobile ? '26px' : '38px',
               color: iconColor,
             }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.color = palette.iconHover;
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.color = iconColor;
-            }}
           >
-            <svg width={isMobile ? '20' : '24'} height={isMobile ? '20' : '24'} viewBox="0 0 16 16" fill="currentColor">
+            <svg width={isMobile ? '17' : '24'} height={isMobile ? '17' : '24'} viewBox="0 0 16 16" fill="currentColor">
               <path d="M7.596 7.304a.802.802 0 0 1 0 1.392l-6.363 3.692C.713 12.69 0 12.345 0 11.692V4.308c0-.653.713-.998 1.233-.696z" />
               <path d="M15.596 7.304a.802.802 0 0 1 0 1.392l-6.363 3.692C8.713 12.69 8 12.345 8 11.692V4.308c0-.653.713-.998 1.233-.696z" />
             </svg>
@@ -1110,19 +1094,19 @@ export const PlayerBar = ({
             <button
               className="pb-btn"
               onClick={() => toggleRepeat()}
-              title={repeatMode === 'one' ? 'Repeat One (R)' : repeatMode === 'all' ? 'Repeat All (R)' : 'Repeat Off (R)'}
+              title={`${
+                repeatMode === 'one'
+                  ? t.repeatOne || 'Repeat One'
+                  : repeatMode === 'all'
+                  ? t.repeatAll || 'Repeat All'
+                  : t.repeatOff || 'Repeat Off'
+              } (R)`}
               style={{
                 ...btnStyle,
                 width: '34px',
                 height: '34px',
                 position: 'relative',
                 color: repeatMode !== 'off' ? iconActiveColor : iconInactiveColor,
-              }}
-              onMouseEnter={(e) => {
-                if (repeatMode === 'off') e.currentTarget.style.color = palette.iconHover;
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.color = repeatMode !== 'off' ? iconActiveColor : iconInactiveColor;
               }}
             >
               {repeatMode === 'one' ? (
@@ -1150,37 +1134,14 @@ export const PlayerBar = ({
               )}
             </button>
           )}
-
-          {isMobile && (
-            <button
-              className="pb-btn"
-              data-queue-toggle="true"
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowQueue(!showQueue);
-              }}
-              title={t.queue}
-              style={{
-                ...btnStyle,
-                width: '32px',
-                height: '32px',
-                color: showQueue ? iconActiveColor : iconColor,
-                flexShrink: 0,
-              }}
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z" />
-              </svg>
-            </button>
-          )}
         </div>
       </div>
 
-      {/* # کنترل صدا و صف فقط در دسکتاپ (با پشتیبانی از اسکرول ماوس و کلیک بی‌صدا) */}
+      {/* # کنترل صدا، علاقه‌مندی و صف فقط در دسکتاپ */}
       {!isMobile && (
-        <div style={{ minWidth: '220px', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '22px' }}>
+        <div style={{ minWidth: '220px', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '6px' }}>
           <div
-            style={{ position: 'relative', display: 'flex', alignItems: 'center', height: '36px' }}
+            style={{ position: 'relative', display: 'flex', alignItems: 'center', height: '34px' }}
             onMouseEnter={() => setIsHoveringVolume(true)}
             onMouseLeave={() => setIsHoveringVolume(false)}
             onWheel={(e) => {
@@ -1192,20 +1153,20 @@ export const PlayerBar = ({
             <button
               className="pb-btn"
               onClick={handleToggleMute}
-              title={volume === 0 ? 'Unmute (M)' : 'Mute (M)'}
+              title={`${volume === 0 ? (t.unmute || 'Unmute') : (t.mute || 'Mute')} (M)`}
               style={{
                 ...btnStyle,
-                width: '36px',
-                height: '36px',
-                color: isHoveringVolume ? palette.iconHover : iconInactiveColor,
+                width: '32px',
+                height: '32px',
+                color: iconInactiveColor,
               }}
             >
               {volume === 0 ? (
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
                   <path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51A8.796 8.796 0 0 0 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3 3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06a8.99 8.99 0 0 0 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4 9.91 6.09 12 8.18V4z" />
                 </svg>
               ) : (
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
                   <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z" />
                 </svg>
               )}
@@ -1220,8 +1181,8 @@ export const PlayerBar = ({
                 width: '40px',
                 opacity: isHoveringVolume ? 1 : 0,
                 overflow: 'hidden',
-                transition: 'all 0.3s ease',
-                backgroundColor: theme.isDark ? 'rgba(30, 24, 48, 0.95)' : 'rgba(255, 255, 255, 0.95)',
+                transition: 'opacity 0.2s ease, height 0.22s cubic-bezier(0.22, 1, 0.36, 1)',
+                backgroundColor: withAlpha(theme.colors.surfaceSolid || theme.colors.background, 0.96),
                 backdropFilter: 'blur(16px)',
                 borderRadius: theme.radius.lg,
                 border: `1px solid ${theme.colors.border}`,
@@ -1238,7 +1199,7 @@ export const PlayerBar = ({
               {/* # درصد صدا */}
               <span
                 style={{
-                  fontSize: '11px',
+                  fontSize: '0.6875rem',
                   fontWeight: 600,
                   color: theme.colors.textPrimary,
                   fontVariantNumeric: 'tabular-nums',
@@ -1291,33 +1252,59 @@ export const PlayerBar = ({
               </div>
             </div>
           </div>
+
+          {currentSong && onToggleFavorite && (
+            <motion.button
+              type="button"
+              className="pb-btn"
+              animate={isHeartPopping ? { scale: [1, 1.32, 0.92, 1.08, 1] } : { scale: 1 }}
+              transition={{ duration: 0.3, ease: 'easeOut' }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleFavorite(currentSong.id);
+                setIsHeartPopping(true);
+                setTimeout(() => setIsHeartPopping(false), 400);
+              }}
+              title={
+                currentSong.isFavorite
+                  ? t.removeFromFavorites || 'Remove from Favourites'
+                  : t.addToFavorites || 'Add to Favourites'
+              }
+              style={{
+                ...btnStyle,
+                width: '32px',
+                height: '32px',
+                borderRadius: '50%',
+                color: currentSong.isFavorite ? '#ff3b30' : iconInactiveColor,
+                flexShrink: 0,
+              }}
+            >
+              <Heart
+                size={18}
+                fill={currentSong.isFavorite ? '#ff3b30' : 'none'}
+                color={currentSong.isFavorite ? '#ff3b30' : iconInactiveColor}
+                strokeWidth={currentSong.isFavorite ? 0 : 2}
+              />
+            </motion.button>
+          )}
+
           <button
             className="pb-btn"
             data-queue-toggle="true"
             onClick={() => setShowQueue(!showQueue)}
             style={{
               ...btnStyle,
-              padding: '6px 12px',
-              borderRadius: '12px',
+              padding: '6px 8px',
+              borderRadius: '10px',
               color: showQueue ? iconActiveColor : iconInactiveColor,
-              backgroundColor: showQueue
-                ? theme.isDark
-                  ? 'rgba(255,255,255,0.12)'
-                  : 'rgba(0,0,0,0.07)'
-                : 'transparent',
-              gap: '8px',
-            }}
-            onMouseEnter={(e) => {
-              if (!showQueue) e.currentTarget.style.color = palette.iconHover;
-            }}
-            onMouseLeave={(e) => {
-              if (!showQueue) e.currentTarget.style.color = iconInactiveColor;
+              backgroundColor: 'transparent',
+              gap: '6px',
             }}
           >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor">
               <path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z" />
             </svg>
-            <span style={{ fontSize: '13px', fontWeight: '600' }}>{t.queue}</span>
+            <span style={{ fontSize: '0.8125rem', fontWeight: '600' }}>{t.queue}</span>
           </button>
         </div>
       )}
@@ -1372,18 +1359,22 @@ export const PlayerBar = ({
         duration={duration}
         onSeek={handleSeek}
         volume={effectiveVolume}
+        maxVolFactor={maxVolFactor}
         onVolumeChange={handleDirectVolumeChange}
         isShuffle={isShuffle}
         onToggleShuffle={() => setIsShuffle(!isShuffle)}
         repeatMode={repeatMode}
         onToggleRepeat={toggleRepeat}
         queue={queue}
+        currentQueueIndex={currentQueueIndex}
         removeFromQueue={removeFromQueue}
         reorderQueue={reorderQueue}
         onPlayQueueSong={onPlayQueueSong}
         onClearQueue={onClearQueue}
         onShuffleQueue={onShuffleQueue}
+        onCreatePlaylist={onCreatePlaylist}
         onToggleFavorite={onToggleFavorite}
+        onUpdateSong={onUpdateSong}
         liveVisualizer={soundSettings.liveVisualizer}
         artworkStyle={displaySettings.artworkStyle}
         visualizerStyle={displaySettings.visualizerStyle}

@@ -22,6 +22,7 @@ export interface Song {
   duration?: number;
   isFavorite?: boolean;
   lastPlayedAt?: number;
+  lyrics?: string;
 }
 
 export interface Playlist {
@@ -97,6 +98,16 @@ export type CornerStyle = 'sharp' | 'balanced' | 'pill';
 export type PlayerBarStyle = 'floating' | 'docked';
 export type ArtworkStyle = 'classic' | 'vinyl';
 export type VisualizerStyle = 'bars' | 'wave' | 'ring';
+export type HomeLayoutStyle = 'wide' | 'widget';
+export type SeekStepSeconds = 5 | 10 | 15;
+
+export interface PlaybackPreferences {
+  autoPlayOnImport: boolean;
+  rememberPlaybackPosition: boolean;
+  confirmBeforeDelete: boolean;
+  skipDuplicatesOnImport: boolean;
+  seekStepSeconds: SeekStepSeconds;
+}
 
 export interface DisplaySettings {
   adaptiveArtworkAccent: boolean;
@@ -107,10 +118,13 @@ export interface DisplaySettings {
   cornerStyle: CornerStyle;
   glassOpacity: number;
   glassBlur: number;
+  playerBarOpacity?: number;
+  playerBarBlur?: number;
   oledPureBlack: boolean;
   ambientGlow: boolean;
   playerBarStyle: PlayerBarStyle;
   artworkStyle: ArtworkStyle;
   visualizerStyle: VisualizerStyle;
+  homeLayout?: HomeLayoutStyle;
   reduceMotion: boolean;
 }

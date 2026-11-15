@@ -33,7 +33,7 @@ export const QueueList = memo(({
         }}
       >
         <Music size={40} strokeWidth={1.5} />
-        <span style={{ fontSize: '15px' }}>{t.queueEmpty || 'صف خالی است'}</span>
+        <span style={{ fontSize: '0.9375rem' }}>{t.queueEmpty || 'صف خالی است'}</span>
       </div>
     );
   }
@@ -51,7 +51,7 @@ export const QueueList = memo(({
     >
       <div
         style={{
-          fontSize: '13px',
+          fontSize: '0.8125rem',
           fontWeight: '600',
           color: primaryColor,
           textTransform: 'uppercase',
@@ -78,7 +78,7 @@ export const QueueList = memo(({
         >
           <span
             style={{
-              fontSize: '12px',
+              fontSize: '0.75rem',
               fontWeight: '600',
               color: 'rgba(255, 255, 255, 0.4)',
               width: '18px',
@@ -102,7 +102,7 @@ export const QueueList = memo(({
           <div style={{ flex: 1, minWidth: 0 }}>
             <div
               style={{
-                fontSize: '14px',
+                fontSize: '0.875rem',
                 fontWeight: '600',
                 color: '#ffffff',
                 whiteSpace: 'nowrap',
@@ -114,7 +114,7 @@ export const QueueList = memo(({
             </div>
             <div
               style={{
-                fontSize: '12px',
+                fontSize: '0.75rem',
                 color: 'rgba(255, 255, 255, 0.6)',
                 whiteSpace: 'nowrap',
                 overflow: 'hidden',

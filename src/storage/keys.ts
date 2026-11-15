@@ -16,4 +16,5 @@ export const STORAGE_KEYS = {
   lastPlayback: 'playerLastPlayback',
   soundSettings: 'soundSettings',
   displaySettings: 'displaySettings',
+  playbackPrefs: 'playbackPreferences',
 } as const;

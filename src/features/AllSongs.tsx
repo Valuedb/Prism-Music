@@ -3,21 +3,25 @@ import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
 import {
   MoreHorizontal,
-  ListPlus,
+  SkipForward,
   Trash2,
   CheckSquare,
   ArrowUpDown,
   Play,
-  Edit2,
+  Info,
   FolderPlus,
   Check,
   Heart,
   ArrowLeft,
+  ArrowRight,
+  X,
 } from 'lucide-react';
 import type { Song, Playlist } from '../types';
 import { EditSongModal } from '../components/EditSongModal';
+import { SongInfoModal } from '../components/SongInfoModal';
 import { CoverImage } from '../components/CoverImage';
-import { withAlpha } from '../utils/color';
+import { IOSConfirmDialog } from '../components/IOSSettingsPrimitives';
+import { mixHex, withAlpha } from '../utils/color';
 
 // ================= اینترفیس پراپ‌ها =================
 
@@ -28,7 +32,8 @@ interface AllSongsProps {
   isPlaying?: boolean;
   onPlaySongFromList: (song: Song, list: Song[]) => void;
   onCreatePlaylist?: (name: string, selectedSongs: Song[]) => void;
-  addToQueue: (song: Song) => void;
+  addToQueue?: (song: Song) => void;
+  onPlayNext?: (songs: Song | Song[]) => void;
   onDeleteSong: (id: string) => void;
   onUpdateSong: (updatedSong: Song) => void;
   onAddSongToPlaylist: (playlistId: string, song: Song) => void;
@@ -38,11 +43,13 @@ interface AllSongsProps {
   theme: any;
   title?: string;
   onBack?: () => void;
+  backLabel?: string;
   emptyMessage?: string;
   glassCardCovers?: boolean;
   headerActions?: React.ReactNode;
   onBulkDeleteSongs?: (ids: string[]) => void;
   deleteActionLabel?: string;
+  confirmBeforeDelete?: boolean;
 }
 
 // ================= کامپوننت اصلی =================
@@ -55,6 +62,7 @@ export const AllSongs = ({
   onPlaySongFromList,
   onCreatePlaylist: _onCreatePlaylist,
   addToQueue,
+  onPlayNext,
   onDeleteSong,
   onUpdateSong,
   onAddSongToPlaylist,
@@ -64,11 +72,13 @@ export const AllSongs = ({
   theme,
   title,
   onBack,
+  backLabel,
   emptyMessage,
   glassCardCovers = true,
   headerActions,
   onBulkDeleteSongs,
   deleteActionLabel,
+  confirmBeforeDelete = true,
 }: AllSongsProps) => {
   // استیت‌های انتخاب
   const [selectedSongs, setSelectedSongs] = useState<string[]>([]);
@@ -81,7 +91,6 @@ export const AllSongs = ({
     bottom?: number;
     right: number;
   }>({ top: 0, right: 16 });
-  const [isTopMenuOpen, setIsTopMenuOpen] = useState(false);
   const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
   const [sortBy, setSortBy] = useState<'date' | 'name' | 'artist'>(
     'date'
@@ -98,15 +107,24 @@ export const AllSongs = ({
   // استیت‌های مودال
   const [editingSong, setEditingSong] = useState<Song | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [infoSong, setInfoSong] = useState<Song | null>(null);
+  const [isInfoModalOpen, setIsInfoModalOpen] = useState(false);
   const [isPlaylistModalOpen, setIsPlaylistModalOpen] = useState(false);
   const [playlistTargetSongIds, setPlaylistTargetSongIds] = useState<string[]>([]);
   const [targetPlaylistId, setTargetPlaylistId] = useState<
     string | null
   >(null);
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<string[] | null>(null);
+
+  // استیت ریسپانسیو موبایل و منوی سه‌نقطه عملیات گروهی
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth < 768 : false
+  );
+  const [isBulkMenuOpen, setIsBulkMenuOpen] = useState(false);
 
   // رفرنس‌ها
-  const topMenuRef = useRef<HTMLDivElement>(null);
   const sortMenuRef = useRef<HTMLDivElement>(null);
+  const bulkMenuRef = useRef<HTMLDivElement>(null);
   const songMenuRefs = useRef<{
     [key: string]: HTMLDivElement | null;
   }>({});
@@ -115,22 +133,34 @@ export const AllSongs = ({
 
   // ================= افکت‌ها =================
 
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  useEffect(() => {
+    if (!isSelectMode || selectedSongs.length === 0) {
+      setIsBulkMenuOpen(false);
+    }
+  }, [isSelectMode, selectedSongs.length]);
+
   /** بستن منوها هنگام کلیک در بیرون */
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (
-        isTopMenuOpen &&
-        topMenuRef.current &&
-        !topMenuRef.current.contains(event.target as Node)
-      ) {
-        setIsTopMenuOpen(false);
-      }
       if (
         isSortMenuOpen &&
         sortMenuRef.current &&
         !sortMenuRef.current.contains(event.target as Node)
       ) {
         setIsSortMenuOpen(false);
+      }
+      if (
+        isBulkMenuOpen &&
+        bulkMenuRef.current &&
+        !bulkMenuRef.current.contains(event.target as Node)
+      ) {
+        setIsBulkMenuOpen(false);
       }
       if (activeMenuId) {
         const menuRef = songMenuRefs.current[activeMenuId];
@@ -141,10 +171,19 @@ export const AllSongs = ({
         }
       }
     };
+    const handleEsc = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsBulkMenuOpen(false);
+        setIsSortMenuOpen(false);
+      }
+    };
     document.addEventListener('mousedown', handleClickOutside);
-    return () =>
+    document.addEventListener('keydown', handleEsc);
+    return () => {
       document.removeEventListener('mousedown', handleClickOutside);
-  }, [activeMenuId, isSortMenuOpen, isTopMenuOpen]);
+      document.removeEventListener('keydown', handleEsc);
+    };
+  }, [activeMenuId, isSortMenuOpen, isBulkMenuOpen]);
 
   /** بستن منوی سه‌نقطه هنگام اسکرول، تغییر اندازه یا فشردن Escape */
   useEffect(() => {
@@ -208,70 +247,101 @@ export const AllSongs = ({
   const toggleSelect = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     if (!isSelectMode) return;
-    setSelectedSongs((prev) => {
-      const isAlready = prev.includes(id);
-      const newSelection = isAlready
-        ? prev.filter((s) => s !== id)
-        : [...prev, id];
-      if (newSelection.length === 0) setIsSelectMode(false);
-      return newSelection;
-    });
+    const isAlreadySelected = selectedSongs.includes(id);
+    const nextSelected = isAlreadySelected
+      ? selectedSongs.filter((s) => s !== id)
+      : [...selectedSongs, id];
+
+    setSelectedSongs(nextSelected);
+    if (isAlreadySelected && nextSelected.length === 0) {
+      setIsSelectMode(false);
+    }
   };
 
   /** انتخاب همه یا لغو انتخاب همه */
   const handleSelectAll = () => {
-    if (selectedSongs.length === filteredAndSortedSongs.length) {
-      setSelectedSongs([]);
-      setIsSelectMode(false);
+    if (
+      selectedSongs.length === filteredAndSortedSongs.length &&
+      filteredAndSortedSongs.length > 0
+    ) {
+      exitSelectMode();
     } else {
       setSelectedSongs(filteredAndSortedSongs.map((s) => s.id));
       setIsSelectMode(true);
     }
   };
 
-  /** فعال کردن حالت انتخاب از منوی سه‌نقطه */
-  const handleSelectSingleSong = (id: string) => {
-    setIsSelectMode(true);
-    setSelectedSongs((prev) =>
-      prev.includes(id)
-        ? prev.filter((s) => s !== id)
-        : [...prev, id]
-    );
-    setActiveMenuId(null);
+  /** ورود به حالت انتخاب از نوار بالا یا خروج از آن */
+  const handleToggleSelectMode = () => {
+    if (isSelectMode) {
+      exitSelectMode();
+    } else {
+      setIsSelectMode(true);
+      setSelectedSongs([]);
+      setIsSortMenuOpen(false);
+      setActiveMenuId(null);
+    }
   };
 
   /** خروج از حالت انتخاب */
   const exitSelectMode = () => {
     setIsSelectMode(false);
     setSelectedSongs([]);
-    setIsTopMenuOpen(false);
   };
 
-  /** حذف یک آهنگ با تأییدیه */
+  /** پخش آهنگ‌های انتخاب‌شده */
+  const handlePlaySelected = () => {
+    const selectedSet = new Set(selectedSongs);
+    const toPlay = filteredAndSortedSongs.filter((s) => selectedSet.has(s.id));
+    if (toPlay.length === 0) return;
+    onPlaySongFromList(toPlay[0], toPlay);
+    exitSelectMode();
+  };
+
+  const executeDeleteIds = (ids: string[]) => {
+    if (ids.length === 0) return;
+    if (ids.length === 1 && !onBulkDeleteSongs) {
+      onDeleteSong(ids[0]);
+    } else if (onBulkDeleteSongs) {
+      onBulkDeleteSongs(ids);
+    } else {
+      ids.forEach((id) => onDeleteSong(id));
+    }
+    setActiveMenuId(null);
+    if (isSelectMode) exitSelectMode();
+  };
+
+  /** حذف یک آهنگ با تأییدیه iOS */
   const handleDelete = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
-    if (window.confirm(t.deleteConfirm)) {
-      onDeleteSong(id);
-      setActiveMenuId(null);
+    if (!confirmBeforeDelete) {
+      executeDeleteIds([id]);
+      return;
     }
+    setActiveMenuId(null);
+    setPendingDeleteIds([id]);
   };
 
-  /** حذف گروهی آهنگ‌های انتخاب شده */
+  /** حذف گروهی آهنگ‌های انتخاب شده با تأییدیه iOS */
   const handleBulkDelete = () => {
-    if (window.confirm(t.deleteConfirm)) {
-      if (onBulkDeleteSongs) {
-        onBulkDeleteSongs(selectedSongs);
-      } else {
-        selectedSongs.forEach((id) => onDeleteSong(id));
-      }
-      exitSelectMode();
+    if (selectedSongs.length === 0) return;
+    if (!confirmBeforeDelete) {
+      executeDeleteIds(selectedSongs);
+      return;
     }
+    setPendingDeleteIds([...selectedSongs]);
   };
 
-  /** افزودن گروهی به صف */
-  const handleBulkAddToQueue = () => {
-    const toAdd = songs.filter((s) => selectedSongs.includes(s.id));
-    toAdd.forEach((s) => addToQueue(s));
+  /** پخش بعدی گروهی آهنگ‌های انتخاب شده */
+  const handleBulkPlayNext = () => {
+    const selectedSet = new Set(selectedSongs);
+    const toQueue = filteredAndSortedSongs.filter((s) => selectedSet.has(s.id));
+    if (toQueue.length === 0) return;
+    if (onPlayNext) {
+      onPlayNext(toQueue);
+    } else if (addToQueue) {
+      toQueue.forEach((s) => addToQueue(s));
+    }
     exitSelectMode();
   };
 
@@ -283,7 +353,6 @@ export const AllSongs = ({
     setTargetPlaylistId(null);
     setIsPlaylistModalOpen(true);
     setActiveMenuId(null);
-    setIsTopMenuOpen(false);
   };
 
   /** بستن مودال انتخاب پلی‌لیست */
@@ -316,7 +385,7 @@ export const AllSongs = ({
       return;
     }
     const buttonRect = e.currentTarget.getBoundingClientRect();
-    const estimatedMenuHeight = onToggleFavorite ? 245 : 208;
+    const estimatedMenuHeight = onToggleFavorite ? 255 : 218;
     const spaceBelow = window.innerHeight - buttonRect.bottom - 115;
     const spaceAbove = buttonRect.top - 80;
     const openUp = spaceBelow < estimatedMenuHeight && spaceAbove > spaceBelow;
@@ -364,31 +433,31 @@ export const AllSongs = ({
             flexWrap: 'wrap',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
             {onBack && (
               <button
+                type="button"
                 onClick={onBack}
                 style={{
-                  background: theme.colors.surface,
-                  border: `1px solid ${theme.colors.border}`,
-                  color: theme.colors.textPrimary,
-                  cursor: 'pointer',
-                  display: 'flex',
+                  display: 'inline-flex',
                   alignItems: 'center',
-                  gap: '6px',
-                  fontSize: '13px',
-                  fontWeight: '600',
-                  padding: '7px 14px',
-                  borderRadius: theme.radius.md,
-                  transition: 'transform 0.2s, background-color 0.2s, scale 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
+                  gap: '4px',
+                  background: 'none',
+                  border: 'none',
+                  padding: '6px 4px',
+                  color: theme.colors.primary,
+                  cursor: 'pointer',
+                  fontSize: '0.9375rem',
+                  fontWeight: 600,
                 }}
               >
-                <ArrowLeft size={16} /> {t.back}
+                {t.close !== 'Close' ? <ArrowRight size={19} /> : <ArrowLeft size={19} />}
+                <span>{backLabel || t.back}</span>
               </button>
             )}
             <h1
               style={{
-                fontSize: 'clamp(20px, 2.5vw, 26px)',
+                fontSize: 'clamp(1.25rem, 2.5vw, 1.625rem)',
                 fontWeight: '800',
                 color: theme.colors.textPrimary,
                 margin: 0,
@@ -398,7 +467,7 @@ export const AllSongs = ({
             </h1>
             <span
               style={{
-                fontSize: '13px',
+                fontSize: '0.8125rem',
                 color: theme.colors.textSecondary,
                 fontWeight: '500',
               }}
@@ -428,7 +497,7 @@ export const AllSongs = ({
                   color: '#fff',
                   cursor: 'pointer',
                   fontWeight: '600',
-                  fontSize: '13px',
+                  fontSize: '0.8125rem',
                   transition: 'opacity 0.2s',
                 }}
               >
@@ -440,75 +509,175 @@ export const AllSongs = ({
         </div>
       )}
 
-      {/* نوار دکمه‌های بالا */}
+      {/* نوار دکمه‌های بالا (مرتب‌سازی، انتخاب و دکمه‌های عملیات روی آهنگ‌های انتخابی) */}
       <div style={styles.headerActions}>
-        <div style={{ marginInlineEnd: 'auto' }}>
+        <div
+          style={{
+            marginInlineEnd: 'auto',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            flexWrap: isMobile ? 'nowrap' : 'wrap',
+            minWidth: 0,
+          }}
+        >
           {isSelectMode && (
-            <button
-              onClick={handleSelectAll}
-              style={styles.actionBtn(theme, true)}
-            >
-              {selectedSongs.length ===
-                filteredAndSortedSongs.length &&
-              filteredAndSortedSongs.length > 0
-                ? t.deselectAll || 'Cancel All'
-                : t.selectAll || 'Select All'}
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={handleSelectAll}
+                style={{
+                  ...styles.actionBtn(theme, selectedSongs.length === filteredAndSortedSongs.length && filteredAndSortedSongs.length > 0),
+                  padding: isMobile ? '6px 10px' : '6px 12px',
+                  fontSize: isMobile ? '0.7813rem' : '0.8125rem',
+                }}
+              >
+                {selectedSongs.length === filteredAndSortedSongs.length &&
+                filteredAndSortedSongs.length > 0
+                  ? t.deselectAll || 'لغو انتخاب همه'
+                  : t.selectAll || 'انتخاب همه'}
+              </button>
+              {selectedSongs.length > 0 && (
+                <span
+                  style={{
+                    fontSize: '0.7813rem',
+                    fontWeight: 600,
+                    color: theme.colors.textSecondary,
+                    fontVariantNumeric: 'tabular-nums',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {selectedSongs.length}{!isMobile ? ` ${t.selected || 'انتخاب شده'}` : ''}
+                </span>
+              )}
+            </>
           )}
         </div>
 
-        <div style={{ display: 'flex', gap: '8px' }}>
-          {isSelectMode && (
-            <div style={{ position: 'relative' }} ref={topMenuRef}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            flexWrap: isMobile ? 'nowrap' : 'wrap',
+            justifyContent: 'flex-end',
+            flexShrink: 0,
+          }}
+        >
+          {isSelectMode && selectedSongs.length > 0 && !isMobile && (
+            <>
               <button
-                onClick={() => setIsTopMenuOpen(!isTopMenuOpen)}
-                style={styles.actionBtn(theme, isTopMenuOpen)}
+                type="button"
+                onClick={handlePlaySelected}
+                style={styles.actionBtn(theme, true)}
               >
-                <MoreHorizontal size={18} />{' '}
-                {t.more || 'More'}
+                <Play size={14} fill="currentColor" />
+                <span>{t.play || 'پخش'}</span>
               </button>
 
-              {isTopMenuOpen && (
-                <div style={styles.dropdown(theme)}>
+              <button
+                type="button"
+                onClick={() => handleOpenPlaylistModal()}
+                style={styles.actionBtn(theme, false)}
+              >
+                <FolderPlus size={15} />
+                <span>{t.addToPlaylist || 'افزودن به لیست'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleBulkPlayNext}
+                style={styles.actionBtn(theme, false)}
+              >
+                <SkipForward size={15} />
+                <span>{t.playNext || 'پخش بعدی'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleBulkDelete}
+                style={{
+                  ...styles.actionBtn(theme, false),
+                  color: theme.colors.danger || '#ff453a',
+                  borderColor: withAlpha(theme.colors.danger || '#ff453a', 0.35),
+                  backgroundColor: withAlpha(theme.colors.danger || '#ff453a', 0.1),
+                }}
+              >
+                <Trash2 size={15} />
+                <span>{deleteActionLabel || t.deleteSong}</span>
+              </button>
+            </>
+          )}
+
+          {isSelectMode && selectedSongs.length > 0 && isMobile && (
+            <div style={{ position: 'relative' }} ref={bulkMenuRef}>
+              <button
+                type="button"
+                aria-label={t.moreActions || 'Actions'}
+                onClick={() => setIsBulkMenuOpen((prev) => !prev)}
+                style={{
+                  ...styles.actionBtn(theme, isBulkMenuOpen),
+                  padding: '6px 10px',
+                }}
+              >
+                <MoreHorizontal size={17} />
+              </button>
+              {isBulkMenuOpen && (
+                <div style={styles.dropdown(theme, '190px')}>
                   <button
-                    onClick={() => handleOpenPlaylistModal()}
+                    type="button"
+                    onClick={() => {
+                      setIsBulkMenuOpen(false);
+                      handlePlaySelected();
+                    }}
                     style={menuItemStyle(theme)}
-                    onMouseEnter={(e) =>
-                      (e.currentTarget.style.backgroundColor = menuHoverBg)
-                    }
-                    onMouseLeave={(e) =>
-                      (e.currentTarget.style.backgroundColor = 'transparent')
-                    }
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = menuHoverBg)}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
                   >
-                    <FolderPlus size={16} />{' '}
-                    {t.addToPlaylist || 'Add to Playlist'}
+                    <Play size={15} />
+                    <span>{t.play || 'پخش'}</span>
                   </button>
                   <button
-                    onClick={handleBulkAddToQueue}
+                    type="button"
+                    onClick={() => {
+                      setIsBulkMenuOpen(false);
+                      handleOpenPlaylistModal();
+                    }}
                     style={menuItemStyle(theme)}
-                    onMouseEnter={(e) =>
-                      (e.currentTarget.style.backgroundColor = menuHoverBg)
-                    }
-                    onMouseLeave={(e) =>
-                      (e.currentTarget.style.backgroundColor = 'transparent')
-                    }
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = menuHoverBg)}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
                   >
-                    <ListPlus size={16} /> {t.addToQueue}
+                    <FolderPlus size={15} />
+                    <span>{t.addToPlaylist || 'افزودن به لیست'}</span>
                   </button>
                   <button
-                    onClick={handleBulkDelete}
+                    type="button"
+                    onClick={() => {
+                      setIsBulkMenuOpen(false);
+                      handleBulkPlayNext();
+                    }}
+                    style={menuItemStyle(theme)}
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = menuHoverBg)}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                  >
+                    <SkipForward size={15} />
+                    <span>{t.playNext || 'پخش بعدی'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsBulkMenuOpen(false);
+                      handleBulkDelete();
+                    }}
                     style={{
                       ...menuItemStyle(theme),
-                      color: theme.colors.danger,
+                      color: theme.colors.danger || '#ff453a',
                     }}
-                    onMouseEnter={(e) =>
-                      (e.currentTarget.style.backgroundColor = dangerHoverBg)
-                    }
-                    onMouseLeave={(e) =>
-                      (e.currentTarget.style.backgroundColor = 'transparent')
-                    }
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = dangerHoverBg)}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
                   >
-                    <Trash2 size={16} /> {deleteActionLabel || t.deleteSong}
+                    <Trash2 size={15} />
+                    <span>{deleteActionLabel || t.deleteSong}</span>
                   </button>
                 </div>
               )}
@@ -516,12 +685,27 @@ export const AllSongs = ({
           )}
 
           {songs.length > 0 && (
+            <button
+              type="button"
+              onClick={handleToggleSelectMode}
+              style={{
+                ...styles.actionBtn(theme, isSelectMode),
+                padding: isMobile ? '6px 10px' : '6px 12px',
+              }}
+            >
+              {isSelectMode ? <X size={15} /> : <CheckSquare size={15} />}
+              <span>{isSelectMode ? t.cancel || 'لغو' : t.select || 'انتخاب'}</span>
+            </button>
+          )}
+
+          {songs.length > 0 && !(isMobile && isSelectMode) && (
             <div style={{ position: 'relative' }} ref={sortMenuRef}>
               <button
+                type="button"
                 onClick={() => setIsSortMenuOpen(!isSortMenuOpen)}
                 style={styles.actionBtn(theme, isSortMenuOpen)}
               >
-                <ArrowUpDown size={16} /> {t.sortBy}
+                <ArrowUpDown size={15} /> {t.sortBy}
               </button>
               {isSortMenuOpen && (
                 <div style={styles.dropdown(theme, '160px')}>
@@ -529,6 +713,7 @@ export const AllSongs = ({
                     const isActive = sortBy === type;
                     return (
                       <button
+                        type="button"
                         key={type}
                         onClick={() => {
                           setSortBy(type as any);
@@ -574,7 +759,7 @@ export const AllSongs = ({
             margin: '20px 0',
           }}
         >
-          <p style={{ margin: 0, fontSize: '15px', fontWeight: '500' }}>
+          <p style={{ margin: 0, fontSize: '0.9375rem', fontWeight: '500' }}>
             {emptyMessage || (songs.length === 0 ? t.noSongs : t.notFound)}
           </p>
         </div>
@@ -623,9 +808,10 @@ export const AllSongs = ({
                   glassCardCovers
                 )}
               >
-                {/* پس‌زمینه کاور شیشه‌ای روی کارت آهنگ (مشابه نمونه ارسالی کاربر) */}
+                {/* پس‌زمینه کاور شیشه‌ای روی کارت آهنگ بدون شکست افقی رندر */}
                 {glassCardCovers && song.cover && (
                   <div
+                    aria-hidden="true"
                     style={{
                       position: 'absolute',
                       inset: 0,
@@ -635,27 +821,39 @@ export const AllSongs = ({
                       pointerEvents: 'none',
                     }}
                   >
-                    <div
+                    <img
+                      src={song.cover}
+                      alt=""
                       style={{
                         position: 'absolute',
-                        inset: 0,
-                        backgroundImage: `url(${song.cover})`,
-                        backgroundSize: 'cover',
-                        backgroundPosition: 'center',
-                        filter: 'blur(12px) brightness(0.65) saturate(180%)',
-                        transform: 'scale(1.25)',
-                        opacity: theme.isDark ? 0.65 : 0.45,
+                        inset: '-16px',
+                        width: 'calc(100% + 32px)',
+                        height: 'calc(100% + 32px)',
+                        objectFit: 'cover',
+                        objectPosition: 'center',
+                        filter: 'blur(26px) saturate(165%)',
+                        transform: 'scale(1.12)',
+                        opacity: theme.isDark ? 0.34 : 0.22,
                       }}
                     />
                     <div
                       style={{
                         position: 'absolute',
                         inset: 0,
-                        background: theme.isDark
-                          ? 'linear-gradient(90deg, rgba(14, 11, 26, 0.72) 0%, rgba(22, 18, 40, 0.44) 50%, rgba(14, 11, 26, 0.72) 100%)'
-                          : 'linear-gradient(90deg, rgba(255, 255, 255, 0.82) 0%, rgba(255, 255, 255, 0.6) 50%, rgba(255, 255, 255, 0.82) 100%)',
-                        backdropFilter: 'blur(6px)',
-                        WebkitBackdropFilter: 'blur(6px)',
+                        backgroundColor:
+                          isSelected || isCurrentSong
+                            ? withAlpha(
+                                mixHex(
+                                  theme.isDark ? theme.colors.surfaceSolid : mixHex('#ffffff', theme.colors.surfaceSolid, 0.72),
+                                  theme.colors.primary,
+                                  isSelected ? 0.2 : 0.14
+                                ),
+                                theme.isDark ? 0.44 : 0.56
+                              )
+                            : withAlpha(
+                                theme.isDark ? theme.colors.surfaceSolid : mixHex('#ffffff', theme.colors.surfaceSolid, 0.72),
+                                theme.isDark ? 0.36 : 0.46
+                              ),
                       }}
                     />
                   </div>
@@ -676,7 +874,7 @@ export const AllSongs = ({
                     }}
                   >
                     {isSelected && (
-                      <Check size={14} color="#fff" />
+                      <Check size={14} color={theme.colors.onPrimary || '#fff'} />
                     )}
                   </div>
                 )}
@@ -893,24 +1091,10 @@ export const AllSongs = ({
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                handleSelectSingleSong(activeMenuSong.id);
-              }}
-              style={menuItemStyle(theme)}
-              onMouseEnter={(e) =>
-                (e.currentTarget.style.backgroundColor = menuHoverBg)
-              }
-              onMouseLeave={(e) =>
-                (e.currentTarget.style.backgroundColor = 'transparent')
-              }
-            >
-              <CheckSquare size={16} />{' '}
-              {t.select || 'Select'}
-            </button>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setEditingSong(activeMenuSong);
-                setIsEditModalOpen(true);
+                setIsSelectMode(true);
+                setSelectedSongs((prev) =>
+                  prev.includes(activeMenuSong.id) ? prev : [...prev, activeMenuSong.id]
+                );
                 setActiveMenuId(null);
               }}
               style={menuItemStyle(theme)}
@@ -921,8 +1105,26 @@ export const AllSongs = ({
                 (e.currentTarget.style.backgroundColor = 'transparent')
               }
             >
-              <Edit2 size={16} />{' '}
-              {t.editSong || 'Edit Song'}
+              <CheckSquare size={16} />{' '}
+              {t.select || 'انتخاب'}
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setInfoSong(activeMenuSong);
+                setIsInfoModalOpen(true);
+                setActiveMenuId(null);
+              }}
+              style={menuItemStyle(theme)}
+              onMouseEnter={(e) =>
+                (e.currentTarget.style.backgroundColor = menuHoverBg)
+              }
+              onMouseLeave={(e) =>
+                (e.currentTarget.style.backgroundColor = 'transparent')
+              }
+            >
+              <Info size={16} />{' '}
+              {t.songInfo || 'اطلاعات آهنگ'}
             </button>
             <button
               onClick={(e) => {
@@ -943,7 +1145,11 @@ export const AllSongs = ({
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                addToQueue(activeMenuSong);
+                if (onPlayNext) {
+                  onPlayNext(activeMenuSong);
+                } else if (addToQueue) {
+                  addToQueue(activeMenuSong);
+                }
                 setActiveMenuId(null);
               }}
               style={menuItemStyle(theme)}
@@ -954,8 +1160,8 @@ export const AllSongs = ({
                 (e.currentTarget.style.backgroundColor = 'transparent')
               }
             >
-              <ListPlus size={16} />{' '}
-              {t.addToQueue}
+              <SkipForward size={16} />{' '}
+              {t.playNext || 'پخش بعدی'}
             </button>
             {onToggleFavorite && (
               <button
@@ -1006,6 +1212,19 @@ export const AllSongs = ({
           document.body
         )}
 
+      {/* مودال نمایش اطلاعات کامل آهنگ */}
+      <SongInfoModal
+        isOpen={isInfoModalOpen}
+        onClose={() => setIsInfoModalOpen(false)}
+        song={infoSong}
+        onEdit={(songToEdit) => {
+          setEditingSong(songToEdit);
+          setIsEditModalOpen(true);
+        }}
+        theme={theme}
+        t={t}
+      />
+
       {/* مودال ویرایش */}
       <EditSongModal
         isOpen={isEditModalOpen}
@@ -1025,6 +1244,8 @@ export const AllSongs = ({
             style={styles.modalOverlay}
           >
             <div
+              role="dialog"
+              aria-modal="true"
               onClick={(e) => e.stopPropagation()}
               style={styles.modalBox(theme)}
             >
@@ -1069,7 +1290,7 @@ export const AllSongs = ({
                       {pl.name}{' '}
                       <span
                         style={{
-                          fontSize: 12,
+                          fontSize: '0.75rem',
                           color:
                             theme.colors
                               .textSecondary,
@@ -1111,6 +1332,23 @@ export const AllSongs = ({
           </div>,
           document.body
         )}
+
+      <IOSConfirmDialog
+        isOpen={pendingDeleteIds !== null}
+        title={deleteActionLabel || t.deleteSong || 'حذف آهنگ'}
+        message={t.deleteConfirm}
+        confirmLabel={deleteActionLabel || t.deleteSong || 'حذف'}
+        cancelLabel={t.cancel || 'لغو'}
+        destructive
+        theme={theme}
+        isRtl={t.cancel === 'لغو' || t.home === 'خانه'}
+        onCancel={() => setPendingDeleteIds(null)}
+        onConfirm={() => {
+          const ids = pendingDeleteIds || [];
+          setPendingDeleteIds(null);
+          executeDeleteIds(ids);
+        }}
+      />
     </div>
   );
 };
@@ -1134,7 +1372,7 @@ const menuItemStyle = (
   display: 'flex',
   alignItems: 'center',
   gap: '9px',
-  fontSize: '13px',
+  fontSize: '0.8125rem',
   fontWeight: active ? 600 : 500,
   transition: 'background-color 0.12s ease, scale 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
   cursor: 'pointer',
@@ -1177,12 +1415,13 @@ const styles = {
     backgroundColor: active
       ? theme.colors.primary
       : theme.colors.surface,
-    color: active ? '#fff' : theme.colors.textPrimary,
+    color: active ? (theme.colors.onPrimary || '#fff') : theme.colors.textPrimary,
     cursor: 'pointer',
     fontWeight: '600',
-    fontSize: '13px',
+    fontSize: '0.8125rem',
     height: '34px',
-    transition: 'all 0.2s',
+    whiteSpace: 'nowrap' as const,
+    transition: 'background-color 0.16s ease, color 0.16s ease, border-color 0.16s ease',
   }),
   dropdown: (
     theme: any,
@@ -1192,9 +1431,7 @@ const styles = {
     top: 'calc(100% + 6px)',
     insetInlineEnd: 0,
     padding: '5px',
-    backgroundColor: theme.isDark
-      ? withAlpha(theme.colors.surfaceSolid, 0.96)
-      : 'rgba(255, 255, 255, 0.96)',
+    backgroundColor: withAlpha(theme.colors.surfaceSolid, 0.96),
     backdropFilter: 'blur(24px) saturate(180%)',
     WebkitBackdropFilter: 'blur(24px) saturate(180%)',
     borderRadius: theme.radius.md,
@@ -1211,52 +1448,64 @@ const styles = {
     isMenuOpen: boolean,
     isCurrentSong?: boolean,
     glassCardCovers?: boolean,
-  ) => ({
-    display: 'flex',
-    alignItems: 'center',
-    direction: 'ltr' as const,
-    textAlign: 'left' as const,
-    gap:
-      theme.display?.listDensity === 'compact'
-        ? '10px'
-        : theme.display?.listDensity === 'spacious'
-        ? '16px'
-        : '14px',
-    padding:
-      theme.display?.listDensity === 'compact'
-        ? '5px 12px'
-        : theme.display?.listDensity === 'spacious'
-        ? '12px 16px'
-        : '8px 14px',
-    borderRadius: theme.radius?.lg || '16px',
-    cursor: 'pointer',
-    position: 'relative' as const,
-    transition: 'background-color 0.2s cubic-bezier(0.2, 0, 0, 1), border-color 0.2s cubic-bezier(0.2, 0, 0, 1), box-shadow 0.2s cubic-bezier(0.2, 0, 0, 1)',
-    backdropFilter: `blur(${theme.display?.glassBlur ?? 24}px) saturate(180%)`,
-    WebkitBackdropFilter: `blur(${theme.display?.glassBlur ?? 24}px) saturate(180%)`,
-    backgroundColor: isSelected
-      ? `${theme.colors.primary}28`
-      : isCurrentSong
-      ? `${theme.colors.primary}20`
-      : isHovered
-      ? (theme.isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(255, 255, 255, 0.88)')
-      : glassCardCovers
-      ? (theme.isDark ? 'rgba(18, 14, 32, 0.45)' : 'rgba(255, 255, 255, 0.52)')
-      : (theme.isDark ? 'rgba(255, 255, 255, 0.04)' : 'rgba(255, 255, 255, 0.58)'),
-    border: `1px solid ${
-      isSelected || isCurrentSong
-        ? theme.colors.primary
+  ) => {
+    const surfaceBase = theme.isDark
+      ? theme.colors.surfaceSolid
+      : mixHex('#ffffff', theme.colors.surfaceSolid, 0.72);
+    const activeAlpha = theme.isDark ? 0.76 : 0.86;
+    const baseOpacity = Math.max(0.32, Math.min(0.92, theme.display?.glassOpacity ?? 0.65));
+
+    return {
+      display: 'flex',
+      alignItems: 'center',
+      direction: 'ltr' as const,
+      textAlign: 'left' as const,
+      gap:
+        theme.display?.listDensity === 'compact'
+          ? '10px'
+          : theme.display?.listDensity === 'spacious'
+          ? '16px'
+          : '14px',
+      padding:
+        theme.display?.listDensity === 'compact'
+          ? '5px 12px'
+          : theme.display?.listDensity === 'spacious'
+          ? '12px 16px'
+          : '8px 14px',
+      borderRadius: theme.radius?.lg || '16px',
+      cursor: 'pointer',
+      position: 'relative' as const,
+      transition: 'background-color 0.2s cubic-bezier(0.2, 0, 0, 1), border-color 0.2s cubic-bezier(0.2, 0, 0, 1), box-shadow 0.2s cubic-bezier(0.2, 0, 0, 1)',
+      backdropFilter: `blur(${theme.display?.glassBlur ?? 24}px) saturate(180%)`,
+      WebkitBackdropFilter: `blur(${theme.display?.glassBlur ?? 24}px) saturate(180%)`,
+      backgroundColor: isSelected
+        ? withAlpha(mixHex(surfaceBase, theme.colors.primary, theme.isDark ? 0.24 : 0.18), activeAlpha)
+        : isCurrentSong
+        ? withAlpha(mixHex(surfaceBase, theme.colors.primary, theme.isDark ? 0.18 : 0.14), activeAlpha)
         : isHovered
-        ? (theme.isDark ? 'rgba(255, 255, 255, 0.26)' : 'rgba(0, 0, 0, 0.18)')
-        : (theme.isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)')
-    }`,
-    boxShadow: isCurrentSong
-      ? `0 0 18px ${theme.colors.primary}40`
-      : isHovered
-      ? (theme.isDark ? '0 8px 24px rgba(0, 0, 0, 0.35)' : '0 4px 14px rgba(0, 0, 0, 0.08)')
-      : 'none',
-    zIndex: isMenuOpen ? 100 : isHovered ? 2 : 1,
-  }),
+        ? (theme.colors.surfaceHover || withAlpha(mixHex(surfaceBase, theme.colors.primary, 0.08), Math.min(0.94, baseOpacity + 0.16)))
+        : glassCardCovers
+        ? withAlpha(surfaceBase, theme.isDark ? Math.max(0.48, baseOpacity * 0.85) : Math.max(0.68, baseOpacity * 0.95))
+        : theme.colors.surface,
+      border: `1px solid ${
+        isSelected || isCurrentSong
+          ? theme.colors.primary
+          : isHovered
+          ? (theme.isDark ? 'rgba(255, 255, 255, 0.26)' : withAlpha(theme.colors.primary, 0.35))
+          : theme.colors.border
+      }`,
+      boxShadow: isCurrentSong
+        ? `0 6px 20px ${withAlpha(theme.colors.primary, 0.28)}, inset 0 1px 0 ${theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.75)'}`
+        : isHovered
+        ? (theme.isDark
+            ? '0 8px 24px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255,255,255,0.10)'
+            : '0 6px 18px rgba(0, 0, 0, 0.09), inset 0 1px 0 rgba(255,255,255,0.8)')
+        : (theme.isDark
+            ? '0 2px 10px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255,255,255,0.06)'
+            : '0 2px 10px rgba(0, 0, 0, 0.04), inset 0 1px 0 rgba(255,255,255,0.65)'),
+      zIndex: isMenuOpen ? 100 : isHovered ? 2 : 1,
+    };
+  },
   checkbox: (theme: any, isSelected: boolean) => ({
     width: '20px',
     height: '20px',
@@ -1271,7 +1520,7 @@ const styles = {
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
-    transition: 'all 0.2s',
+    transition: 'background-color 0.16s ease, border-color 0.16s ease',
     cursor: 'pointer',
   }),
   coverImage: {
@@ -1298,19 +1547,19 @@ const styles = {
   },
   songTitle: (theme: any, isSelected: boolean) => ({
     fontWeight: '600',
-    fontSize: 'clamp(13px, 1.4vw, 15px)',
+    fontSize: 'clamp(0.8125rem, 1.4vw, 0.9375rem)',
     whiteSpace: 'nowrap' as const,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     textAlign: 'left' as const,
-    textShadow: theme.isDark ? '0 1px 4px rgba(0, 0, 0, 0.9)' : '0 1px 2px rgba(255, 255, 255, 0.8)',
+    textShadow: theme.isDark ? '0 1px 4px rgba(0, 0, 0, 0.9)' : 'none',
     color: isSelected
       ? theme.colors.primary
       : theme.colors.textPrimary,
   }),
   songArtist: (theme: any) => ({
-    fontSize: 'clamp(11px, 1.2vw, 13px)',
-    color: theme.isDark ? 'rgba(255, 255, 255, 0.72)' : theme.colors.textSecondary,
+    fontSize: 'clamp(0.6875rem, 1.2vw, 0.8125rem)',
+    color: theme.colors.textSecondary,
     marginTop: '2px',
     whiteSpace: 'nowrap' as const,
     overflow: 'hidden',
@@ -1319,13 +1568,12 @@ const styles = {
     textShadow: theme.isDark ? '0 1px 3px rgba(0, 0, 0, 0.8)' : 'none',
   }),
   duration: (theme: any) => ({
-    fontSize: '12px',
+    fontSize: '0.75rem',
     color: theme.colors.textSecondary,
     marginInlineEnd: '-2px',
     flexShrink: 0,
     fontVariantNumeric: 'tabular-nums',
     lineHeight: '1',
-    transform: 'translateY(2px)',
   }),
   moreBtn: (theme: any, isHovered: boolean) => ({
     background: isHovered
@@ -1342,14 +1590,12 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    transition: 'all 0.2s',
+    transition: 'background-color 0.16s ease, border-color 0.16s ease',
   }),
   songMenu: (theme: any) => ({
     position: 'fixed' as const,
     padding: '5px',
-    backgroundColor: theme.isDark
-      ? withAlpha(theme.colors.surfaceSolid, 0.96)
-      : 'rgba(255, 255, 255, 0.96)',
+    backgroundColor: withAlpha(theme.colors.surfaceSolid, 0.96),
     backdropFilter: 'blur(26px) saturate(180%)',
     WebkitBackdropFilter: 'blur(26px) saturate(180%)',
     borderRadius: theme.radius.md,
@@ -1377,9 +1623,7 @@ const styles = {
     boxSizing: 'border-box' as const,
   },
   modalBox: (theme: any) => ({
-    backgroundColor: theme.isDark
-      ? withAlpha(theme.colors.surfaceSolid, 0.94)
-      : 'rgba(255, 255, 255, 0.95)',
+    backgroundColor: withAlpha(theme.colors.surfaceSolid, 0.95),
     backdropFilter: 'blur(28px) saturate(180%)',
     WebkitBackdropFilter: 'blur(28px) saturate(180%)',
     padding: 24,
@@ -1429,7 +1673,7 @@ const styles = {
     color: primary
       ? disabled
         ? theme.colors.textSecondary
-        : '#fff'
+        : (theme.colors.onPrimary || '#fff')
       : theme.colors.textPrimary,
     cursor: disabled ? 'not-allowed' : 'pointer',
     fontWeight: 600,

@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { CoverImage } from '../components/CoverImage';
 import { AllSongs } from './AllSongs';
+import { withAlpha } from '../utils/color';
 
 interface PlaylistsProps {
   playlists: Playlist[];
@@ -29,6 +30,7 @@ interface PlaylistsProps {
   isPlaying?: boolean;
   onPlaySongFromList: (song: Song, list: Song[]) => void;
   addToQueue: (song: Song) => void;
+  onPlayNext?: (songs: Song | Song[]) => void;
   onDeleteSong?: (id: string) => void;
   onUpdateSong?: (updatedSong: Song) => void;
   onAddSongToPlaylist?: (playlistId: string, song: Song) => void;
@@ -42,6 +44,8 @@ interface PlaylistsProps {
   language: 'fa' | 'en';
   glassCardCovers?: boolean;
   initialPlaylist?: { id: string; token: number } | null;
+  onBulkDeleteSongs?: (ids: string[]) => void;
+  confirmBeforeDelete?: boolean;
 }
 
 type ViewMode = 'grid' | 'list';
@@ -107,19 +111,21 @@ const PlaylistMenuButton = ({
   theme,
   position,
   offset,
+  ariaLabel,
 }: {
   isOpen: boolean;
   onClick: (e: React.MouseEvent) => void;
   theme: any;
   position: 'top' | 'inline';
   offset?: number;
+  ariaLabel?: string;
 }) => {
   const hoverBg = theme.colors.surfaceHover || 'rgba(255, 255, 255, 0.08)';
   const defaultBg = isOpen ? theme.colors.surface : 'transparent';
   return (
     <button
       onClick={onClick}
-      aria-label="menu"
+      aria-label={ariaLabel || 'Actions'}
       style={{
         position: position === 'top' ? 'absolute' : 'relative',
         ...(position === 'top' ? { top: offset ?? 10, insetInlineEnd: offset ?? 10 } : {}),
@@ -195,7 +201,7 @@ const MenuItem = ({
         e.currentTarget.style.backgroundColor = 'transparent';
       }}
     >
-      {icon} <span style={{ fontSize: 13.5, fontWeight: 500 }}>{label}</span>
+      {icon} <span style={{ fontSize: '0.8438rem', fontWeight: 500 }}>{label}</span>
     </button>
   );
 };
@@ -223,7 +229,7 @@ const PlaylistMenu = ({
       top: 'calc(100% + 6px)',
       [align === 'end' ? 'insetInlineEnd' : 'insetInlineStart']: 0,
       padding: '5px',
-      backgroundColor: theme.isDark ? 'rgba(22, 18, 42, 0.95)' : 'rgba(255, 255, 255, 0.97)',
+      backgroundColor: withAlpha(theme.colors.surfaceSolid || theme.colors.background, 0.97),
       backdropFilter: 'blur(26px) saturate(180%)',
       WebkitBackdropFilter: 'blur(26px) saturate(180%)',
       borderRadius: theme.radius.md,
@@ -280,7 +286,7 @@ const PlaylistCard = ({
         onMouseLeave={() => setHovered(false)}
         style={{
           backgroundColor: hovered
-            ? (theme.isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(255, 255, 255, 0.88)')
+            ? (theme.colors.surfaceHover || theme.colors.surface)
             : theme.colors.surface,
           backdropFilter: 'blur(26px) saturate(180%)',
           WebkitBackdropFilter: 'blur(26px) saturate(180%)',
@@ -293,15 +299,14 @@ const PlaylistCard = ({
             : (theme.isDark
                 ? '0 8px 24px rgba(0, 0, 0, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.06)'
                 : '0 4px 14px rgba(0, 0, 0, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.7)'),
-          transition: 'all 0.22s cubic-bezier(0.2, 0, 0, 1)',
-          transform: hovered ? 'translateY(-3px)' : 'translateY(0)',
+          transition: 'background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease',
         }}
       >
         <PlaylistCover songs={playlist.songs} theme={theme} />
         <h3
           style={{
             fontWeight: '700',
-            fontSize: 16,
+            fontSize: '1rem',
             color: theme.colors.textPrimary,
             marginTop: 12,
             whiteSpace: 'nowrap',
@@ -311,13 +316,20 @@ const PlaylistCard = ({
         >
           {playlist.name}
         </h3>
-        <p style={{ color: theme.colors.textSecondary, fontSize: 13, marginTop: 3 }}>
+        <p style={{ color: theme.colors.textSecondary, fontSize: '0.8125rem', marginTop: 3 }}>
           {playlist.songs.length} {t.allSongs}
         </p>
       </div>
 
       <div ref={menuRef} style={{ position: 'absolute', top: 12, insetInlineEnd: 12, zIndex: 50 }}>
-        <PlaylistMenuButton isOpen={menuOpen} onClick={onToggleMenu} theme={theme} position="top" offset={0} />
+        <PlaylistMenuButton
+          isOpen={menuOpen}
+          onClick={onToggleMenu}
+          theme={theme}
+          position="top"
+          offset={0}
+          ariaLabel={t.moreActions}
+        />
         {menuOpen && (
           <PlaylistMenu onRename={onRename} onAddSong={onAddSong} onDelete={onDelete} theme={theme} t={t} align="end" />
         )}
@@ -363,7 +375,7 @@ const PlaylistRow = ({
         gap: 15,
         padding: '12px 16px',
         backgroundColor: hovered
-          ? (theme.isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(255, 255, 255, 0.88)')
+          ? (theme.colors.surfaceHover || theme.colors.surface)
           : theme.colors.surface,
         backdropFilter: 'blur(22px) saturate(170%)',
         WebkitBackdropFilter: 'blur(22px) saturate(170%)',
@@ -373,8 +385,7 @@ const PlaylistRow = ({
         boxShadow: hovered
           ? '0 10px 28px rgba(0,0,0,0.28)'
           : (theme.isDark ? '0 4px 14px rgba(0,0,0,0.18)' : '0 2px 8px rgba(0,0,0,0.04)'),
-        transition: 'all 0.22s cubic-bezier(0.2, 0, 0, 1)',
-        transform: hovered ? 'scale(1.006)' : 'scale(1)',
+        transition: 'background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease',
         position: 'relative',
         zIndex: menuOpen ? 50 : (hovered ? 2 : 1),
       }}
@@ -386,7 +397,7 @@ const PlaylistRow = ({
         <div
           style={{
             fontWeight: 600,
-            fontSize: 15,
+            fontSize: '0.9375rem',
             color: theme.colors.textPrimary,
             whiteSpace: 'nowrap',
             overflow: 'hidden',
@@ -395,13 +406,19 @@ const PlaylistRow = ({
         >
           {playlist.name}
         </div>
-        <div style={{ fontSize: 13, color: theme.colors.textSecondary, marginTop: 2 }}>
+        <div style={{ fontSize: '0.8125rem', color: theme.colors.textSecondary, marginTop: 2 }}>
           {playlist.songs.length} {t.allSongs}
         </div>
       </div>
 
       <div ref={menuRef} style={{ position: 'relative', zIndex: 50 }}>
-        <PlaylistMenuButton isOpen={menuOpen} onClick={onToggleMenu} theme={theme} position="inline" />
+        <PlaylistMenuButton
+          isOpen={menuOpen}
+          onClick={onToggleMenu}
+          theme={theme}
+          position="inline"
+          ariaLabel={t.moreActions}
+        />
         {menuOpen && (
           <PlaylistMenu onRename={onRename} onAddSong={onAddSong} onDelete={onDelete} theme={theme} t={t} align="end" />
         )}
@@ -558,7 +575,7 @@ const AddSongModal = ({
 
   return (
     <Modal open={open} onClose={onClose} theme={theme} width={520}>
-      <h2 style={{ marginBottom: 16, fontSize: 20, color: theme.colors.textPrimary }}>
+      <h2 style={{ marginBottom: 16, fontSize: '1.25rem', color: theme.colors.textPrimary }}>
         {t.addSongsToPlaylist}
       </h2>
       <input
@@ -575,7 +592,7 @@ const AddSongModal = ({
           backgroundColor: theme.colors.surface,
           color: theme.colors.textPrimary,
           marginBottom: 16,
-          fontSize: 14,
+          fontSize: '0.875rem',
           outline: 'none',
           display: 'block',
           transition: 'border-color 0.2s ease, box-shadow 0.2s ease',
@@ -640,7 +657,7 @@ const AddSongModal = ({
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div
                     style={{
-                      fontSize: 14,
+                      fontSize: '0.875rem',
                       color: theme.colors.textPrimary,
                       whiteSpace: 'nowrap',
                       overflow: 'hidden',
@@ -649,12 +666,12 @@ const AddSongModal = ({
                   >
                     {song.name}
                   </div>
-                  <div style={{ fontSize: 12, color: theme.colors.textSecondary }}>
+                  <div style={{ fontSize: '0.75rem', color: theme.colors.textSecondary }}>
                     {song.artist}
                   </div>
                 </div>
                 {already && (
-                  <span style={{ fontSize: 12, color: theme.colors.textSecondary }}>
+                  <span style={{ fontSize: '0.75rem', color: theme.colors.textSecondary }}>
                     {t.alreadyAdded}
                   </span>
                 )}
@@ -705,7 +722,7 @@ const NameModal = ({
   t: any;
 }) => (
   <Modal open={open} onClose={onClose} theme={theme}>
-    <h2 style={{ marginBottom: 16, fontSize: 20, color: theme.colors.textPrimary }}>{title}</h2>
+    <h2 style={{ marginBottom: 16, fontSize: '1.25rem', color: theme.colors.textPrimary }}>{title}</h2>
     <input
       type="text"
       value={value}
@@ -721,7 +738,7 @@ const NameModal = ({
         backgroundColor: theme.colors.surface,
         color: theme.colors.textPrimary,
         marginBottom: 20,
-        fontSize: 15,
+        fontSize: '0.9375rem',
         outline: 'none',
         display: 'block',
         transition: 'border-color 0.2s ease, box-shadow 0.2s ease',
@@ -834,9 +851,7 @@ const SmartPlaylistCard = ({
       onMouseLeave={() => setHovered(false)}
       style={{
         backgroundColor: hovered
-          ? theme.isDark
-            ? 'rgba(255, 255, 255, 0.09)'
-            : 'rgba(255, 255, 255, 0.86)'
+          ? (theme.colors.surfaceHover || theme.colors.surface)
           : theme.colors.surface,
         backdropFilter: 'blur(26px) saturate(180%)',
         WebkitBackdropFilter: 'blur(26px) saturate(180%)',
@@ -847,8 +862,7 @@ const SmartPlaylistCard = ({
         flexDirection: 'column',
         gap: '12px',
         cursor: 'pointer',
-        transition: 'all 0.22s cubic-bezier(0.2, 0, 0, 1)',
-        transform: hovered ? 'translateY(-3px)' : 'translateY(0)',
+        transition: 'background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease',
         boxShadow: hovered
           ? `0 14px 32px rgba(0, 0, 0, 0.28), inset 0 1px 0 ${
               theme.isDark ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.9)'
@@ -888,7 +902,7 @@ const SmartPlaylistCard = ({
             <h3
               style={{
                 margin: 0,
-                fontSize: '14.5px',
+                fontSize: '0.9063rem',
                 fontWeight: 700,
                 color: theme.colors.textPrimary,
                 lineHeight: 1.25,
@@ -901,7 +915,7 @@ const SmartPlaylistCard = ({
             </h3>
             <span
               style={{
-                fontSize: '12px',
+                fontSize: '0.75rem',
                 color: theme.colors.textSecondary,
                 marginTop: '2px',
                 display: 'block',
@@ -928,7 +942,7 @@ const SmartPlaylistCard = ({
               borderRadius: '50%',
               backgroundColor: theme.colors.primary,
               border: 'none',
-              color: '#ffffff',
+              color: theme.colors.onPrimary || '#ffffff',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -941,7 +955,7 @@ const SmartPlaylistCard = ({
               flexShrink: 0,
             }}
           >
-            <Play size={14} fill="#ffffff" />
+            <Play size={14} fill={theme.colors.onPrimary || '#ffffff'} />
           </button>
         ) : (
           <div style={{ color: theme.colors.textSecondary, opacity: 0.55 }}>
@@ -985,7 +999,7 @@ const SmartPlaylistCard = ({
             {count > previewSongs.length && (
               <span
                 style={{
-                  fontSize: '12px',
+                  fontSize: '0.75rem',
                   fontWeight: 600,
                   color: theme.colors.textSecondary,
                   fontVariantNumeric: 'tabular-nums',
@@ -1001,7 +1015,7 @@ const SmartPlaylistCard = ({
           <p
             style={{
               margin: 0,
-              fontSize: '12px',
+              fontSize: '0.75rem',
               color: theme.colors.textSecondary,
               lineHeight: 1.4,
               opacity: 0.85,
@@ -1026,6 +1040,7 @@ export const Playlists = ({
   isPlaying = false,
   onPlaySongFromList,
   addToQueue,
+  onPlayNext,
   onDeleteSong,
   onUpdateSong,
   onAddSongToPlaylist,
@@ -1039,6 +1054,8 @@ export const Playlists = ({
   language,
   glassCardCovers = true,
   initialPlaylist = null,
+  onBulkDeleteSongs,
+  confirmBeforeDelete = true,
 }: PlaylistsProps) => {
   // شناسه پلی‌لیست عادی یا هوشمند که باز شده
   const [activePlaylistId, setActivePlaylistId] = useState<string | null>(() =>
@@ -1147,160 +1164,170 @@ export const Playlists = ({
   const addSongTarget = playlists.find((p) => p.id === addSongTargetId);
   const isRTL = language === 'fa';
 
-  // ---------- صفحه‌ی داخلی پلی‌لیست هوشمند (یکپارچه با AllSongs) ----------
-  if (activeSmartList) {
-    const smartConfig = {
-      recentlyAdded: {
-        title: t.recentlyAdded || 'اخیراً اضافه شده',
-        list: recentlyAdded,
-        empty: t.noSongs || 'هیچ آهنگی وجود ندارد.',
-      },
-      mostPlayed: {
-        title: t.mostPlayed || 'پرتکرارترین‌ها',
-        list: mostPlayed,
-        empty: t.noSongs || 'هنوز پخشی ثبت نشده است.',
-      },
-      recentlyPlayed: {
-        title: t.recentlyPlayed || 'اخیراً پخش شده',
-        list: recentlyPlayed,
-        empty: t.noRecentlyPlayed || 'هنوز هیچ آهنگی پخش نشده است.',
-      },
-      favorites: {
-        title: t.favouriteSongs || 'آهنگ‌های محبوب',
-        list: favouriteSongs,
-        empty: t.noFavorites || 'هنوز آهنگی به عنوان محبوب علامت‌گذاری نشده است.',
-      },
-    }[activeSmartList];
+  const smartConfig = activeSmartList
+    ? {
+        recentlyAdded: {
+          title: t.recentlyAdded || 'اخیراً اضافه شده',
+          list: recentlyAdded,
+          empty: t.noSongs || 'هیچ آهنگی وجود ندارد.',
+        },
+        mostPlayed: {
+          title: t.mostPlayed || 'پرتکرارترین‌ها',
+          list: mostPlayed,
+          empty: t.noSongs || 'هنوز پخشی ثبت نشده است.',
+        },
+        recentlyPlayed: {
+          title: t.recentlyPlayed || 'اخیراً پخش شده',
+          list: recentlyPlayed,
+          empty: t.noRecentlyPlayed || 'هنوز هیچ آهنگی پخش نشده است.',
+        },
+        favorites: {
+          title: t.favouriteSongs || 'آهنگ‌های محبوب',
+          list: favouriteSongs,
+          empty: t.noFavorites || 'هنوز آهنگی به عنوان محبوب علامت‌گذاری نشده است.',
+        },
+      }[activeSmartList]
+    : null;
 
-    return (
-      <AllSongs
-        songs={smartConfig.list}
-        playlists={playlists}
-        currentSong={currentSong}
-        isPlaying={isPlaying}
-        onPlaySongFromList={onPlaySongFromList}
-        onCreatePlaylist={onCreatePlaylist}
-        addToQueue={addToQueue}
-        onDeleteSong={onDeleteSong ?? (() => {})}
-        onUpdateSong={onUpdateSong ?? (() => {})}
-        onAddSongToPlaylist={onAddSongToPlaylist ?? (() => {})}
-        onToggleFavorite={onToggleFavorite}
-        t={t}
-        theme={theme}
-        title={smartConfig.title}
-        onBack={() => setActiveSmartList(null)}
-        emptyMessage={smartConfig.empty}
-        glassCardCovers={glassCardCovers}
-      />
-    );
-  }
-
-  // ---------- صفحه‌ی داخلی پلی‌لیست (یکپارچه با AllSongs) ----------
-  if (activePlaylist) {
-    return (
-      <>
-        <AllSongs
-          songs={activePlaylist.songs}
-          playlists={playlists}
-          currentSong={currentSong}
-          isPlaying={isPlaying}
-          onPlaySongFromList={onPlaySongFromList}
-          onCreatePlaylist={onCreatePlaylist}
-          addToQueue={addToQueue}
-          onDeleteSong={(songId) =>
-            onUpdatePlaylistSongs(
-              activePlaylist.id,
-              activePlaylist.songs.filter((s) => s.id !== songId)
-            )
-          }
-          onBulkDeleteSongs={(ids) => {
-            const idSet = new Set(ids);
-            onUpdatePlaylistSongs(
-              activePlaylist.id,
-              activePlaylist.songs.filter((s) => !idSet.has(s.id))
-            );
-          }}
-          deleteActionLabel={t.removeFromPlaylist || 'حذف از پلی‌لیست'}
-          onUpdateSong={onUpdateSong ?? (() => {})}
-          onAddSongToPlaylist={onAddSongToPlaylist ?? (() => {})}
-          onToggleFavorite={onToggleFavorite}
-          t={t}
-          theme={theme}
-          title={activePlaylist.name}
-          onBack={() => setActivePlaylistId(null)}
-          emptyMessage={t.noSongs || '—'}
-          glassCardCovers={glassCardCovers}
-          headerActions={
-            <button
-              onClick={() => {
-                setAddSongTargetId(activePlaylist.id);
-                setAddSongOpen(true);
-              }}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                padding: '7px 14px',
-                borderRadius: theme.radius.md,
-                border: `1px solid ${theme.colors.border}`,
-                backgroundColor: theme.colors.surface,
-                color: theme.colors.textPrimary,
-                cursor: 'pointer',
-                fontWeight: '600',
-                fontSize: '13px',
-                transition: 'background-color 0.15s ease, border-color 0.15s ease, scale 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.backgroundColor =
-                  theme.colors.surfaceHover || 'rgba(255, 255, 255, 0.08)';
-                e.currentTarget.style.borderColor = theme.colors.primary;
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.backgroundColor = theme.colors.surface;
-                e.currentTarget.style.borderColor = theme.colors.border;
-              }}
-            >
-              <Plus size={15} />
-              <span>{t.addSong}</span>
-            </button>
-          }
-        />
-
-        <AddSongModal
-          open={addSongOpen}
-          onClose={() => {
-            setAddSongOpen(false);
-            setAddSongTargetId(null);
-          }}
-          allSongs={allSongs}
-          existingIds={addSongTarget?.songs.map((s) => s.id) ?? []}
-          onConfirm={handleAddSongsConfirm}
-          theme={theme}
-          t={t}
-        />
-      </>
-    );
-  }
-
-  // ---------- صفحه‌ی اصلی پلی‌لیست‌ها ----------
   return (
-    <div
-      ref={pageRef}
-      style={{
-        flex: 1,
-        padding: 'clamp(10px, 1.8vw, 18px) clamp(14px, 3.5vw, 36px)',
-        paddingBottom: 150,
-        overflowY: 'auto',
-        overflowX: 'hidden',
-        boxSizing: 'border-box',
-        direction: isRTL ? 'rtl' : 'ltr',
-      }}
-    >
+    <div style={{ width: '100%', flex: 1, overflowX: 'clip' }}>
+      <AnimatePresence mode="wait" initial={false}>
+        {activeSmartList && smartConfig ? (
+          <motion.div
+            key={`playlist-smart-${activeSmartList}`}
+            initial={{ opacity: 0, x: isRTL ? -24 : 24 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: isRTL ? -20 : 20 }}
+            transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+            style={{ width: '100%', display: 'flex', flexDirection: 'column' }}
+          >
+            <AllSongs
+              songs={smartConfig.list}
+              playlists={playlists}
+              currentSong={currentSong}
+              isPlaying={isPlaying}
+              onPlaySongFromList={onPlaySongFromList}
+              onCreatePlaylist={onCreatePlaylist}
+              addToQueue={addToQueue}
+              onPlayNext={onPlayNext}
+              onDeleteSong={onDeleteSong ?? (() => {})}
+              onUpdateSong={onUpdateSong ?? (() => {})}
+              onAddSongToPlaylist={onAddSongToPlaylist ?? (() => {})}
+              onToggleFavorite={onToggleFavorite}
+              t={t}
+              theme={theme}
+              title={smartConfig.title}
+              onBack={() => setActiveSmartList(null)}
+              backLabel={t.playlists || 'پلی‌لیست‌ها'}
+              emptyMessage={smartConfig.empty}
+              glassCardCovers={glassCardCovers}
+              onBulkDeleteSongs={onBulkDeleteSongs}
+              confirmBeforeDelete={confirmBeforeDelete}
+            />
+          </motion.div>
+        ) : activePlaylist ? (
+          <motion.div
+            key={`playlist-detail-${activePlaylist.id}`}
+            initial={{ opacity: 0, x: isRTL ? -24 : 24 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: isRTL ? -20 : 20 }}
+            transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+            style={{ width: '100%', display: 'flex', flexDirection: 'column' }}
+          >
+            <AllSongs
+              songs={activePlaylist.songs}
+              playlists={playlists}
+              currentSong={currentSong}
+              isPlaying={isPlaying}
+              onPlaySongFromList={onPlaySongFromList}
+              onCreatePlaylist={onCreatePlaylist}
+              addToQueue={addToQueue}
+              onPlayNext={onPlayNext}
+              onDeleteSong={(songId) =>
+                onUpdatePlaylistSongs(
+                  activePlaylist.id,
+                  activePlaylist.songs.filter((s) => s.id !== songId)
+                )
+              }
+              onBulkDeleteSongs={(ids) => {
+                const idSet = new Set(ids);
+                onUpdatePlaylistSongs(
+                  activePlaylist.id,
+                  activePlaylist.songs.filter((s) => !idSet.has(s.id))
+                );
+              }}
+              deleteActionLabel={t.removeFromPlaylist || 'حذف از پلی‌لیست'}
+              onUpdateSong={onUpdateSong ?? (() => {})}
+              onAddSongToPlaylist={onAddSongToPlaylist ?? (() => {})}
+              onToggleFavorite={onToggleFavorite}
+              t={t}
+              theme={theme}
+              title={activePlaylist.name}
+              onBack={() => setActivePlaylistId(null)}
+              backLabel={t.playlists || 'پلی‌لیست‌ها'}
+              emptyMessage={t.noSongs || '—'}
+              glassCardCovers={glassCardCovers}
+              confirmBeforeDelete={confirmBeforeDelete}
+              headerActions={
+                <button
+                  onClick={() => {
+                    setAddSongTargetId(activePlaylist.id);
+                    setAddSongOpen(true);
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '7px 14px',
+                    borderRadius: theme.radius.md,
+                    border: `1px solid ${theme.colors.border}`,
+                    backgroundColor: theme.colors.surface,
+                    color: theme.colors.textPrimary,
+                    cursor: 'pointer',
+                    fontWeight: '600',
+                    fontSize: '0.8125rem',
+                    transition: 'background-color 0.15s ease, border-color 0.15s ease',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor =
+                      theme.colors.surfaceHover || 'rgba(255, 255, 255, 0.08)';
+                    e.currentTarget.style.borderColor = theme.colors.primary;
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = theme.colors.surface;
+                    e.currentTarget.style.borderColor = theme.colors.border;
+                  }}
+                >
+                  <Plus size={15} />
+                  <span>{t.addSong}</span>
+                </button>
+              }
+            />
+          </motion.div>
+        ) : (
+          <motion.div
+            key="playlists-main"
+            ref={pageRef}
+            initial={{ opacity: 0, x: isRTL ? 20 : -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: isRTL ? 20 : -20 }}
+            transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+            style={{
+              flex: 1,
+              width: '100%',
+              padding: 'clamp(10px, 1.8vw, 18px) clamp(14px, 3.5vw, 36px)',
+              paddingBottom: 150,
+              overflowY: 'auto',
+              overflowX: 'hidden',
+              boxSizing: 'border-box',
+              direction: isRTL ? 'rtl' : 'ltr',
+            }}
+          >
       {/* بخش ۱: پلی‌لیست‌های هوشمند */}
       <div style={{ marginBottom: 24 }}>
         <h2
           style={{
-            fontSize: '15px',
+            fontSize: '0.9375rem',
             fontWeight: 700,
             color: theme.colors.textSecondary,
             margin: '0 0 12px 0',
@@ -1398,7 +1425,7 @@ export const Playlists = ({
       >
         <h2
           style={{
-            fontSize: '15px',
+            fontSize: '0.9375rem',
             fontWeight: 700,
             color: theme.colors.textSecondary,
             margin: 0,
@@ -1444,7 +1471,7 @@ export const Playlists = ({
               borderRadius: theme.radius.md,
               cursor: 'pointer',
               fontWeight: 'bold',
-              fontSize: '13.5px',
+              fontSize: '0.8438rem',
               boxShadow: `0 2px 10px ${theme.colors.primary}44`,
               transition: 'filter 0.15s ease, opacity 0.15s ease, scale 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
               whiteSpace: 'nowrap',
@@ -1536,6 +1563,9 @@ export const Playlists = ({
           ))}
         </div>
       )}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <NameModal
         open={renameOpen}
@@ -1586,7 +1616,7 @@ export const Playlists = ({
         onClose={() => setDeleteTargetId(null)}
         theme={theme}
       >
-        <h2 style={{ marginBottom: 12, fontSize: 20, color: theme.colors.textPrimary }}>
+        <h2 style={{ marginBottom: 12, fontSize: '1.25rem', color: theme.colors.textPrimary }}>
           {t.deletePlaylist}
         </h2>
         <p style={{ marginBottom: 20, color: theme.colors.textSecondary }}>

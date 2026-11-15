@@ -13,11 +13,11 @@ interface PlaybackControlsProps {
   repeatMode: RepeatMode;
   onToggleRepeat: () => void;
   primaryColor?: string;
+  t?: any;
 }
 
 /**
  * دکمه‌های کنترل پخش موزیک (Play, Pause, Next, Prev, Shuffle, Repeat)
- * با حس کلیک نرم و فیزیک لمسی iOS
  */
 export const PlaybackControls = memo(({
   isPlaying,
@@ -29,6 +29,7 @@ export const PlaybackControls = memo(({
   repeatMode,
   onToggleRepeat,
   primaryColor = '#0a84ff',
+  t = {},
 }: PlaybackControlsProps) => {
   return (
     <div
@@ -47,7 +48,7 @@ export const PlaybackControls = memo(({
       <motion.button
         whileTap={{ scale: 0.85 }}
         onClick={onToggleShuffle}
-        title="Shuffle"
+        title={isShuffle ? (t.shuffleOn || 'Shuffle On') : (t.shuffleOff || 'Shuffle Off')}
         style={{
           background: 'none',
           border: 'none',
@@ -80,7 +81,7 @@ export const PlaybackControls = memo(({
       <motion.button
         whileTap={{ scale: 0.85 }}
         onClick={onPrev}
-        title="Previous"
+        title={t.previous || 'Previous'}
         style={{
           background: 'none',
           border: 'none',
@@ -100,7 +101,7 @@ export const PlaybackControls = memo(({
         whileTap={{ scale: 0.9 }}
         whileHover={{ scale: 1.05 }}
         onClick={onTogglePlay}
-        title={isPlaying ? 'Pause' : 'Play'}
+        title={isPlaying ? (t.pause || 'Pause') : (t.play || 'Play')}
         style={{
           width: '68px',
           height: '68px',
@@ -127,7 +128,7 @@ export const PlaybackControls = memo(({
       <motion.button
         whileTap={{ scale: 0.85 }}
         onClick={onNext}
-        title="Next"
+        title={t.next || 'Next'}
         style={{
           background: 'none',
           border: 'none',
@@ -146,7 +147,13 @@ export const PlaybackControls = memo(({
       <motion.button
         whileTap={{ scale: 0.85 }}
         onClick={onToggleRepeat}
-        title="Repeat"
+        title={
+          repeatMode === 'one'
+            ? (t.repeatOne || 'Repeat One')
+            : repeatMode === 'all'
+            ? (t.repeatAll || 'Repeat All')
+            : (t.repeatOff || 'Repeat Off')
+        }
         style={{
           background: 'none',
           border: 'none',

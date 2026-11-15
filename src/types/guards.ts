@@ -78,6 +78,10 @@ export const isDisplaySettings = (value: unknown): value is import('./index').Di
     value.cornerStyle === 'pill') &&
   typeof value.glassOpacity === 'number' &&
   typeof value.glassBlur === 'number' &&
+  (value.playerBarOpacity === undefined ||
+    (typeof value.playerBarOpacity === 'number' && Number.isFinite(value.playerBarOpacity))) &&
+  (value.playerBarBlur === undefined ||
+    (typeof value.playerBarBlur === 'number' && Number.isFinite(value.playerBarBlur))) &&
   typeof value.oledPureBlack === 'boolean' &&
   typeof value.ambientGlow === 'boolean' &&
   (value.playerBarStyle === 'floating' || value.playerBarStyle === 'docked') &&
@@ -85,5 +89,17 @@ export const isDisplaySettings = (value: unknown): value is import('./index').Di
   (value.visualizerStyle === 'bars' ||
     value.visualizerStyle === 'wave' ||
     value.visualizerStyle === 'ring') &&
+  (value.homeLayout === undefined ||
+    value.homeLayout === 'wide' ||
+    value.homeLayout === 'widget') &&
   typeof value.reduceMotion === 'boolean';
 
+export const isPlaybackPreferences = (
+  value: unknown
+): value is import('./index').PlaybackPreferences =>
+  isRecord(value) &&
+  typeof value.autoPlayOnImport === 'boolean' &&
+  typeof value.rememberPlaybackPosition === 'boolean' &&
+  typeof value.confirmBeforeDelete === 'boolean' &&
+  typeof value.skipDuplicatesOnImport === 'boolean' &&
+  (value.seekStepSeconds === 5 || value.seekStepSeconds === 10 || value.seekStepSeconds === 15);

@@ -175,7 +175,7 @@ export const NowPlayingSheet = memo(({
                 <div style={{ textAlign: 'center' }}>
                   <div
                     style={{
-                      fontSize: '11px',
+                      fontSize: '0.6875rem',
                       textTransform: 'uppercase',
                       letterSpacing: '1px',
                       color: 'rgba(255, 255, 255, 0.55)',
@@ -186,7 +186,7 @@ export const NowPlayingSheet = memo(({
                   </div>
                   <div
                     style={{
-                      fontSize: '13px',
+                      fontSize: '0.8125rem',
                       fontWeight: '700',
                       color: '#ffffff',
                       marginTop: '1px',
@@ -244,7 +244,7 @@ export const NowPlayingSheet = memo(({
               <div style={{ flex: 1, minWidth: 0, paddingRight: '12px' }}>
                 <div
                   style={{
-                    fontSize: 'clamp(18px, 4vw, 24px)',
+                    fontSize: 'clamp(1.125rem, 4vw, 1.5rem)',
                     fontWeight: '800',
                     color: '#ffffff',
                     whiteSpace: 'nowrap',
@@ -257,7 +257,7 @@ export const NowPlayingSheet = memo(({
                 </div>
                 <div
                   style={{
-                    fontSize: 'clamp(14px, 3vw, 17px)',
+                    fontSize: 'clamp(0.875rem, 3vw, 1.0625rem)',
                     color: 'rgba(255, 255, 255, 0.72)',
                     fontWeight: '500',
                     whiteSpace: 'nowrap',
@@ -312,6 +312,7 @@ export const NowPlayingSheet = memo(({
               repeatMode={repeatMode}
               onToggleRepeat={onToggleRepeat}
               primaryColor={primaryColor}
+              t={t}
             />
 
             {/* اسلایدر میزان صدا */}
@@ -334,7 +335,7 @@ export const NowPlayingSheet = memo(({
             >
               <button
                 onClick={() => setActiveTab('artwork')}
-                title="Artwork"
+                title={t.artworkTab || 'Artwork'}
                 style={{
                   background: activeTab === 'artwork' ? 'rgba(255, 255, 255, 0.18)' : 'transparent',
                   border: 'none',
@@ -345,7 +346,7 @@ export const NowPlayingSheet = memo(({
                   alignItems: 'center',
                   gap: '6px',
                   color: activeTab === 'artwork' ? '#ffffff' : 'rgba(255, 255, 255, 0.45)',
-                  fontSize: '13px',
+                  fontSize: '0.8125rem',
                   fontWeight: '600',
                   transition: 'all 0.2s',
                 }}
@@ -367,7 +368,7 @@ export const NowPlayingSheet = memo(({
                   alignItems: 'center',
                   gap: '6px',
                   color: activeTab === 'queue' ? '#ffffff' : 'rgba(255, 255, 255, 0.45)',
-                  fontSize: '13px',
+                  fontSize: '0.8125rem',
                   fontWeight: '600',
                   transition: 'all 0.2s',
                 }}

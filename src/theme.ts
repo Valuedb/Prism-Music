@@ -1,4 +1,4 @@
-import { withAlpha } from './utils/color';
+import { getContrastText, mixHex, withAlpha } from './utils/color';
 
 export type PaletteType =
   | 'classic-blue'
@@ -40,16 +40,17 @@ const baseTransitions = {
 const lightThemes: Record<PaletteType, any> = {
   'classic-blue': {
     name: 'سفید آبی',
+    nameEn: 'Classic Blue',
     colors: {
       primary: '#0066FF',
       accent: '#2563EB',
       secondary: '#1D4ED8',
-      background: '#FFFFFF',
-      surface: 'rgba(240, 246, 255, 0.78)',
-      surfaceSolid: '#EFF6FF',
-      surfaceHover: 'rgba(0, 102, 255, 0.08)',
+      background: '#F4F8FF',
+      surface: 'rgba(235, 243, 255, 0.80)',
+      surfaceSolid: '#E3EEFF',
+      surfaceHover: 'rgba(220, 234, 255, 0.92)',
       textPrimary: '#0A0E17',
-      textSecondary: '#4B5563',
+      textSecondary: '#475569',
       textInverse: '#ffffff',
       border: 'rgba(0, 102, 255, 0.20)',
       borderLight: 'rgba(255, 255, 255, 0.95)',
@@ -60,14 +61,15 @@ const lightThemes: Record<PaletteType, any> = {
   },
   'classic-red': {
     name: 'سفید قرمز',
+    nameEn: 'Classic Red',
     colors: {
       primary: '#DC2626',
       accent: '#EF4444',
       secondary: '#B91C1C',
-      background: '#FFFFFF',
-      surface: 'rgba(254, 242, 242, 0.78)',
-      surfaceSolid: '#FEF2F2',
-      surfaceHover: 'rgba(220, 38, 38, 0.08)',
+      background: '#FFF6F6',
+      surface: 'rgba(255, 236, 236, 0.80)',
+      surfaceSolid: '#FFE4E4',
+      surfaceHover: 'rgba(254, 220, 220, 0.92)',
       textPrimary: '#140808',
       textSecondary: '#5A4A4A',
       textInverse: '#ffffff',
@@ -80,6 +82,7 @@ const lightThemes: Record<PaletteType, any> = {
   },
   amethyst: {
     name: 'آمیتیست بنفش',
+    nameEn: 'Amethyst',
     colors: {
       primary: '#5B4BFF',
       accent: '#7C3AED',
@@ -100,6 +103,7 @@ const lightThemes: Record<PaletteType, any> = {
   },
   sapphire: {
     name: 'یاقوت کبود',
+    nameEn: 'Sapphire',
     colors: {
       primary: '#2563EB',
       accent: '#1D4ED8',
@@ -120,6 +124,7 @@ const lightThemes: Record<PaletteType, any> = {
   },
   amber: {
     name: 'قهوه و موکا',
+    nameEn: 'Amber Mocha',
     colors: {
       primary: '#AE541B',
       accent: '#9A4612',
@@ -140,6 +145,7 @@ const lightThemes: Record<PaletteType, any> = {
   },
   sunset: {
     name: 'غروب نارنجی',
+    nameEn: 'Sunset',
     colors: {
       primary: '#BB460A',
       accent: '#C2410C',
@@ -160,6 +166,7 @@ const lightThemes: Record<PaletteType, any> = {
   },
   emerald: {
     name: 'زمرد و بیشه',
+    nameEn: 'Emerald',
     colors: {
       primary: '#15803D',
       accent: '#166534',
@@ -180,6 +187,7 @@ const lightThemes: Record<PaletteType, any> = {
   },
   teal: {
     name: 'تالاب دریایی',
+    nameEn: 'Teal Lagoon',
     colors: {
       primary: '#0F766E',
       accent: '#115E59',
@@ -200,6 +208,7 @@ const lightThemes: Record<PaletteType, any> = {
   },
   synthwave: {
     name: 'نئون سایبر',
+    nameEn: 'Synthwave',
     colors: {
       primary: '#D41B44',
       accent: '#BE123C',
@@ -220,46 +229,49 @@ const lightThemes: Record<PaletteType, any> = {
   },
   glacier: {
     name: 'یخچال قطبی',
+    nameEn: 'Glacier',
     colors: {
-      primary: '#11212D',
-      accent: '#4A5C6A',
-      secondary: '#253745',
-      background: '#CCD0CF',
-      surface: 'rgba(255, 255, 255, 0.72)',
-      surfaceSolid: '#E2E6E5',
-      surfaceHover: 'rgba(17, 33, 45, 0.08)',
-      textPrimary: '#06141B',
-      textSecondary: '#253745',
+      primary: '#1E5B7A',
+      accent: '#2E7D9E',
+      secondary: '#15445C',
+      background: '#ECF3F7',
+      surface: 'rgba(225, 238, 245, 0.78)',
+      surfaceSolid: '#D8E7F0',
+      surfaceHover: 'rgba(206, 227, 239, 0.92)',
+      textPrimary: '#0B1B26',
+      textSecondary: '#3E5666',
       textInverse: '#ffffff',
-      border: 'rgba(74, 92, 106, 0.25)',
-      borderLight: 'rgba(255, 255, 255, 0.9)',
-      glow: '#4A5C6A',
+      border: 'rgba(30, 91, 122, 0.22)',
+      borderLight: 'rgba(255, 255, 255, 0.92)',
+      glow: '#2E7D9E',
       danger: '#DC2626',
       success: '#16A34A',
     },
   },
   nordic: {
     name: 'نوردیک استیل',
+    nameEn: 'Nordic Steel',
     colors: {
-      primary: '#191D23',
-      accent: '#57707A',
-      secondary: '#7B919C',
-      background: '#DEDCDC',
-      surface: 'rgba(255, 255, 255, 0.72)',
-      surfaceSolid: '#C5BAC4',
-      surfaceHover: 'rgba(87, 112, 122, 0.1)',
-      textPrimary: '#191D23',
-      textSecondary: '#4D636B',
+      primary: '#46616E',
+      accent: '#5C7A87',
+      secondary: '#334852',
+      background: '#EFF2F4',
+      surface: 'rgba(229, 235, 239, 0.78)',
+      surfaceSolid: '#DFE6EA',
+      surfaceHover: 'rgba(213, 222, 228, 0.92)',
+      textPrimary: '#161D22',
+      textSecondary: '#4A5B66',
       textInverse: '#ffffff',
-      border: 'rgba(87, 112, 122, 0.25)',
-      borderLight: 'rgba(255, 255, 255, 0.9)',
-      glow: '#57707A',
+      border: 'rgba(70, 97, 110, 0.22)',
+      borderLight: 'rgba(255, 255, 255, 0.92)',
+      glow: '#5C7A87',
       danger: '#DC2626',
       success: '#16A34A',
     },
   },
   mauve: {
     name: 'مخملی بنفش',
+    nameEn: 'Velvet Mauve',
     colors: {
       primary: '#86198F',
       accent: '#701A75',
@@ -280,6 +292,7 @@ const lightThemes: Record<PaletteType, any> = {
   },
   mint: {
     name: 'فیروزه و نعنا',
+    nameEn: 'Mint Breeze',
     colors: {
       primary: '#0B7C72',
       accent: '#0F766E',
@@ -306,6 +319,7 @@ lightThemes.default = lightThemes['classic-blue'];
 const darkThemes: Record<PaletteType, any> = {
   'classic-blue': {
     name: 'مشکی آبی',
+    nameEn: 'Midnight Blue',
     colors: {
       primary: '#38BDF8',
       accent: '#60A5FA',
@@ -326,6 +340,7 @@ const darkThemes: Record<PaletteType, any> = {
   },
   'classic-red': {
     name: 'مشکی قرمز',
+    nameEn: 'Crimson Dark',
     colors: {
       primary: '#EF4444',
       accent: '#F87171',
@@ -346,6 +361,7 @@ const darkThemes: Record<PaletteType, any> = {
   },
   amethyst: {
     name: 'آمیتیست بنفش',
+    nameEn: 'Amethyst',
     colors: {
       primary: '#8B7CC7',
       accent: '#A78BFA',
@@ -366,6 +382,7 @@ const darkThemes: Record<PaletteType, any> = {
   },
   sapphire: {
     name: 'یاقوت کبود',
+    nameEn: 'Sapphire',
     colors: {
       primary: '#3B82F6',
       accent: '#60A5FA',
@@ -386,6 +403,7 @@ const darkThemes: Record<PaletteType, any> = {
   },
   amber: {
     name: 'قهوه و موکا',
+    nameEn: 'Amber Mocha',
     colors: {
       primary: '#D5C4AE',
       accent: '#C6601F',
@@ -406,6 +424,7 @@ const darkThemes: Record<PaletteType, any> = {
   },
   sunset: {
     name: 'غروب نارنجی',
+    nameEn: 'Sunset',
     colors: {
       primary: '#FF7A00',
       accent: '#FFA94D',
@@ -426,6 +445,7 @@ const darkThemes: Record<PaletteType, any> = {
   },
   emerald: {
     name: 'زمرد و بیشه',
+    nameEn: 'Emerald',
     colors: {
       primary: '#48BB78',
       accent: '#8EB69B',
@@ -446,6 +466,7 @@ const darkThemes: Record<PaletteType, any> = {
   },
   teal: {
     name: 'تالاب دریایی',
+    nameEn: 'Teal Lagoon',
     colors: {
       primary: '#14B8A6',
       accent: '#7FB3B8',
@@ -466,6 +487,7 @@ const darkThemes: Record<PaletteType, any> = {
   },
   synthwave: {
     name: 'نئون سایبر',
+    nameEn: 'Synthwave',
     colors: {
       primary: '#FF6B6B',
       accent: '#D6598F',
@@ -486,6 +508,7 @@ const darkThemes: Record<PaletteType, any> = {
   },
   glacier: {
     name: 'یخچال قطبی',
+    nameEn: 'Glacier',
     colors: {
       primary: '#CCD0CF',
       accent: '#4A5C6A',
@@ -506,6 +529,7 @@ const darkThemes: Record<PaletteType, any> = {
   },
   nordic: {
     name: 'نوردیک استیل',
+    nameEn: 'Nordic Steel',
     colors: {
       primary: '#C5BAC4',
       accent: '#57707A',
@@ -526,6 +550,7 @@ const darkThemes: Record<PaletteType, any> = {
   },
   mauve: {
     name: 'مخملی بنفش',
+    nameEn: 'Velvet Mauve',
     colors: {
       primary: '#DFB6B2',
       accent: '#D946EF',
@@ -546,6 +571,7 @@ const darkThemes: Record<PaletteType, any> = {
   },
   mint: {
     name: 'فیروزه و نعنا',
+    nameEn: 'Mint Breeze',
     colors: {
       primary: '#2DD4BF',
       accent: '#99F6E4',
@@ -577,11 +603,14 @@ export const DEFAULT_DISPLAY_SETTINGS: import('./types').DisplaySettings = {
   cornerStyle: 'balanced',
   glassOpacity: 0.62,
   glassBlur: 24,
+  playerBarOpacity: 0.56,
+  playerBarBlur: 28,
   oledPureBlack: false,
   ambientGlow: true,
   playerBarStyle: 'floating',
   artworkStyle: 'classic',
   visualizerStyle: 'bars',
+  homeLayout: 'widget',
   reduceMotion: false,
 };
 
@@ -600,6 +629,7 @@ const RADIUS_PRESETS: Record<import('./types').CornerStyle, typeof baseRadius> =
 export interface ThemeDisplayOptions {
   display?: Partial<import('./types').DisplaySettings>;
   overridePrimaryHex?: string | null;
+  hasWallpaper?: boolean;
 }
 
 export const getTheme = (
@@ -612,32 +642,51 @@ export const getTheme = (
   const baseTheme = effectiveMode === 'light' ? lightThemes[paletteKey] : darkThemes[paletteKey];
   const display = { ...DEFAULT_DISPLAY_SETTINGS, ...options?.display };
   const isDark = effectiveMode === 'dark';
+  const hasWallpaper = Boolean(options?.hasWallpaper);
 
   const activePrimary = options?.overridePrimaryHex || baseTheme.colors.primary;
   const surfaceAlpha = Math.max(0.22, Math.min(0.95, display.glassOpacity));
   const blurPx = Math.max(0, Math.min(36, Math.round(display.glassBlur)));
 
   const resolvedBackground =
-    isDark && display.oledPureBlack ? '#000000' : baseTheme.colors.background;
+    isDark && display.oledPureBlack
+      ? '#000000'
+      : options?.overridePrimaryHex && !isDark
+      ? mixHex(baseTheme.colors.background, activePrimary, 0.06)
+      : baseTheme.colors.background;
   const resolvedSurfaceSolid =
-    isDark && display.oledPureBlack ? '#0a0a0d' : baseTheme.colors.surfaceSolid;
+    isDark && display.oledPureBlack
+      ? '#0a0a0d'
+      : options?.overridePrimaryHex
+      ? mixHex(baseTheme.colors.surfaceSolid, activePrimary, isDark ? 0.10 : 0.14)
+      : baseTheme.colors.surfaceSolid;
+
+  const lightSurfaceBase = options?.overridePrimaryHex
+    ? mixHex('#ffffff', activePrimary, 0.11)
+    : mixHex('#ffffff', resolvedSurfaceSolid, 0.72);
+  const effectiveDarkAlpha = hasWallpaper ? Math.min(surfaceAlpha, 0.68) : surfaceAlpha;
+  const effectiveLightAlpha = hasWallpaper
+    ? Math.min(0.82, Math.max(0.45, surfaceAlpha * 0.82))
+    : Math.min(0.96, surfaceAlpha + 0.16);
   const resolvedSurface = isDark
-    ? withAlpha(resolvedSurfaceSolid, surfaceAlpha)
-    : withAlpha('#ffffff', Math.min(0.96, surfaceAlpha + 0.14));
+    ? withAlpha(resolvedSurfaceSolid, effectiveDarkAlpha)
+    : withAlpha(lightSurfaceBase, effectiveLightAlpha);
+  const resolvedSurfaceHover = isDark
+    ? withAlpha(mixHex(resolvedSurfaceSolid, activePrimary, 0.15), Math.min(0.96, effectiveDarkAlpha + 0.14))
+    : withAlpha(mixHex(lightSurfaceBase, activePrimary, 0.10), Math.min(0.98, effectiveLightAlpha + 0.14));
 
   const colors = {
     ...baseTheme.colors,
     primary: activePrimary,
+    onPrimary: getContrastText(activePrimary),
     accent: options?.overridePrimaryHex ? activePrimary : baseTheme.colors.accent,
     glow: options?.overridePrimaryHex ? activePrimary : baseTheme.colors.glow,
     background: resolvedBackground,
     surfaceSolid: resolvedSurfaceSolid,
     surface: resolvedSurface,
-    surfaceHover: options?.overridePrimaryHex
-      ? withAlpha(activePrimary, isDark ? 0.14 : 0.08)
-      : baseTheme.colors.surfaceHover,
+    surfaceHover: resolvedSurfaceHover,
     border: isDark && display.oledPureBlack
-      ? withAlpha(activePrimary, 0.2)
+      ? withAlpha(activePrimary, 0.22)
       : options?.overridePrimaryHex
       ? withAlpha(activePrimary, 0.24)
       : baseTheme.colors.border,
@@ -649,8 +698,8 @@ export const getTheme = (
   };
 
   const baseShadows = {
-    soft: isDark ? '0 8px 24px rgba(0, 0, 0, 0.35)' : '0 4px 18px rgba(0, 0, 0, 0.05)',
-    hard: isDark ? '0 16px 40px rgba(0, 0, 0, 0.55)' : '0 10px 30px rgba(0, 0, 0, 0.1)',
+    soft: isDark ? '0 8px 24px rgba(0, 0, 0, 0.35)' : `0 4px 18px ${withAlpha(activePrimary, 0.08)}`,
+    hard: isDark ? '0 16px 40px rgba(0, 0, 0, 0.55)' : `0 10px 30px ${withAlpha(activePrimary, 0.14)}`,
     glow: `0 8px 30px ${withAlpha(colors.glow, 0.28)}`,
   };
 
@@ -668,7 +717,7 @@ export const getTheme = (
       border: `1px solid ${colors.border}`,
       boxShadow: isDark
         ? '0 12px 36px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.08)'
-        : '0 8px 24px rgba(0, 0, 0, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.6)',
+        : `0 8px 24px ${withAlpha(activePrimary, 0.07)}, inset 0 1px 0 rgba(255, 255, 255, 0.72)`,
     },
     row: {
       backgroundColor: colors.surface,
@@ -677,30 +726,42 @@ export const getTheme = (
       border: `1px solid ${colors.border}`,
       boxShadow: isDark
         ? '0 4px 16px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.05)'
-        : '0 2px 10px rgba(0, 0, 0, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.4)',
+        : `0 2px 10px ${withAlpha(activePrimary, 0.05)}, inset 0 1px 0 rgba(255, 255, 255, 0.55)`,
     },
   };
 
-  const { primary, surfaceSolid, textPrimary } = colors;
+  const { primary, surfaceSolid } = colors;
+  const barAlpha = Math.max(0.15, Math.min(0.95, display.playerBarOpacity ?? 0.56));
+  const barBlurPx = Math.max(0, Math.min(44, Math.round(display.playerBarBlur ?? Math.max(24, blurPx))));
+  const barFilter = barBlurPx > 0 ? `blur(${barBlurPx}px) saturate(190%)` : 'none';
   const bar = isDark
     ? {
-        background: withAlpha(surfaceSolid, Math.min(0.96, surfaceAlpha + 0.12)),
-        border: '1px solid rgba(255, 255, 255, 0.12)',
+        background: `linear-gradient(180deg, ${withAlpha(
+          mixHex(surfaceSolid, '#ffffff', 0.08),
+          Math.min(0.96, barAlpha + 0.06)
+        )} 0%, ${withAlpha(surfaceSolid, barAlpha)} 100%)`,
+        backdropFilter: barFilter,
+        border: `1px solid ${withAlpha(primary, 0.26)}`,
         boxShadow: [
-          '0 16px 40px rgba(0, 0, 0, 0.5)',
-          'inset 0 1px 0 rgba(255, 255, 255, 0.08)',
+          '0 18px 44px rgba(0, 0, 0, 0.55)',
+          `0 6px 24px ${withAlpha(primary, 0.20)}`,
+          'inset 0 1px 0 rgba(255, 255, 255, 0.16)',
         ].join(', '),
       }
     : {
-        background: `linear-gradient(${withAlpha(textPrimary, 0.07)}, ${withAlpha(
-          textPrimary,
-          0.07
-        )}), rgba(255, 255, 255, ${Math.min(0.95, surfaceAlpha * 0.9)})`,
-        border: `1px solid ${withAlpha(textPrimary, 0.12)}`,
+        background: `linear-gradient(180deg, ${withAlpha(
+          mixHex('#ffffff', surfaceSolid, 0.42),
+          Math.min(0.95, barAlpha + 0.08)
+        )} 0%, ${withAlpha(
+          mixHex('#ffffff', surfaceSolid, 0.72),
+          barAlpha
+        )} 100%)`,
+        backdropFilter: barFilter,
+        border: `1px solid ${colors.border}`,
         boxShadow: [
-          `0 14px 36px ${withAlpha(primary, 0.22)}`,
-          '0 2px 8px rgba(0, 0, 0, 0.08)',
-          'inset 0 1px 0 rgba(255, 255, 255, 0.9)',
+          `0 16px 38px ${withAlpha(primary, 0.20)}`,
+          '0 4px 14px rgba(0, 0, 0, 0.08)',
+          'inset 0 1px 0 rgba(255, 255, 255, 0.85)',
         ].join(', '),
       };
 

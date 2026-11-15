@@ -7,6 +7,8 @@ import {
   Eye,
   Image as ImageIcon,
   Layers,
+  LayoutGrid,
+  LayoutTemplate,
   Monitor,
   Moon,
   Palette,
@@ -19,17 +21,25 @@ import {
   Type,
   Upload,
 } from 'lucide-react';
-import { motion } from 'framer-motion';
 import type {
   ArtworkStyle,
   CornerStyle,
   DisplaySettings as DisplaySettingsType,
   FontChoice,
+  HomeLayoutStyle,
   ListDensity,
   PlayerBarStyle,
   VisualizerStyle,
 } from '../types';
 import { DEFAULT_DISPLAY_SETTINGS, type PaletteType, type ThemeMode } from '../theme';
+import {
+  IOSGroupedSection,
+  IOSRow,
+  IOSSegmentedControl,
+  IOSSlider,
+  IOSSquircleIcon,
+  IOSSwitch,
+} from '../components/IOSSettingsPrimitives';
 
 interface DisplaySettingsProps {
   displaySettings: DisplaySettingsType;
@@ -55,8 +65,8 @@ interface DisplaySettingsProps {
 const PALETTES: { id: PaletteType; labelFa: string; labelEn: string; color: string; secondaryColor: string }[] = [
   { id: 'classic-blue', labelFa: 'آبی کلاسیک', labelEn: 'Classic Blue', color: '#0066FF', secondaryColor: '#38BDF8' },
   { id: 'classic-red', labelFa: 'قرمز کلاسیک', labelEn: 'Classic Red', color: '#DC2626', secondaryColor: '#EF4444' },
-  { id: 'nordic', labelFa: 'نوردیک استیل', labelEn: 'Nordic Steel', color: '#57707A', secondaryColor: '#C5BAC4' },
-  { id: 'glacier', labelFa: 'اقیانوس و قطب', labelEn: 'Glacier', color: '#4A5C6A', secondaryColor: '#CCD0CF' },
+  { id: 'nordic', labelFa: 'نوردیک استیل', labelEn: 'Nordic Steel', color: '#46616E', secondaryColor: '#C5BAC4' },
+  { id: 'glacier', labelFa: 'اقیانوس و قطب', labelEn: 'Glacier', color: '#1E5B7A', secondaryColor: '#8FBCD4' },
   { id: 'amethyst', labelFa: 'آمیتیست بنفش', labelEn: 'Amethyst', color: '#8B7CC7', secondaryColor: '#5A3B8C' },
   { id: 'sapphire', labelFa: 'یاقوت کبود', labelEn: 'Sapphire', color: '#3B82F6', secondaryColor: '#1C2541' },
   { id: 'amber', labelFa: 'قهوه و موکا', labelEn: 'Amber Mocha', color: '#C6601F', secondaryColor: '#A88462' },
@@ -68,150 +78,30 @@ const PALETTES: { id: PaletteType; labelFa: string; labelEn: string; color: stri
   { id: 'mint', labelFa: 'فیروزه و نعنا', labelEn: 'Mint', color: '#2DD4BF', secondaryColor: '#99F6E4' },
 ];
 
-const WALLPAPER_PRESETS = [
-  { id: 'nebula', labelFa: 'کیهان و ستاره‌ها', labelEn: 'Cosmos', url: 'https://images.unsplash.com/photo-1506703719100-a0f3a48c0f86?w=1600&auto=format&fit=crop&q=80' },
-  { id: 'mountain', labelFa: 'کوهستان برفی', labelEn: 'Alpine', url: 'https://images.unsplash.com/photo-1519681393784-d120267933ba?w=1600&auto=format&fit=crop&q=80' },
-  { id: 'cyber', labelFa: 'افق نئونی شب', labelEn: 'Neon Skyline', url: 'https://images.unsplash.com/photo-1514565131-fce0801e5785?w=1600&auto=format&fit=crop&q=80' },
-  { id: 'ocean', labelFa: 'امواج اقیانوس', labelEn: 'Ocean', url: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=1600&auto=format&fit=crop&q=80' },
-  { id: 'gradient', labelFa: 'گرادیان ارغوانی', labelEn: 'Violet Flow', url: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=1600&auto=format&fit=crop&q=80' },
-];
-
-const ToggleSwitch = ({
-  checked,
-  onChange,
-  theme,
-  ariaLabel,
-  disabled = false,
-}: {
-  checked: boolean;
-  onChange: (next: boolean) => void;
-  theme: any;
-  ariaLabel: string;
-  disabled?: boolean;
-}) => (
-  <button
-    type="button"
-    role="switch"
-    aria-checked={checked}
-    aria-label={ariaLabel}
-    disabled={disabled}
-    onClick={() => !disabled && onChange(!checked)}
-    style={{
-      position: 'relative',
-      direction: 'ltr',
-      width: '48px',
-      height: '28px',
-      borderRadius: '14px',
-      backgroundColor: checked ? theme.colors.primary : theme.colors.border,
-      border: 'none',
-      cursor: disabled ? 'not-allowed' : 'pointer',
-      opacity: disabled ? 0.45 : 1,
-      transition: 'background-color 0.22s ease, opacity 0.2s ease, scale 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
-      padding: 0,
-      outline: 'none',
-      flexShrink: 0,
-    }}
-  >
-    <motion.span
-      initial={false}
-      animate={{ left: checked ? 23 : 3 }}
-      transition={{ type: 'spring', stiffness: 500, damping: 32 }}
-      style={{
-        position: 'absolute',
-        top: '3px',
-        width: '22px',
-        height: '22px',
-        borderRadius: '50%',
-        backgroundColor: '#ffffff',
-        boxShadow: '0 2px 5px rgba(0,0,0,0.28)',
-      }}
-    />
-  </button>
-);
-
-const RangeSlider = ({
-  value,
-  min,
-  max,
-  step,
-  onChange,
-  theme,
-}: {
-  value: number;
-  min: number;
-  max: number;
-  step: number;
-  onChange: (val: number) => void;
-  theme: any;
-}) => {
-  const span = max - min || 1;
-  const percent = Math.max(0, Math.min(100, ((value - min) / span) * 100));
-
-  return (
-    <div
-      style={{
-        position: 'relative',
-        width: '100%',
-        height: '26px',
-        display: 'flex',
-        alignItems: 'center',
-        direction: 'ltr',
-      }}
-    >
-      <div
-        style={{
-          position: 'absolute',
-          left: 0,
-          right: 0,
-          height: '6px',
-          borderRadius: '3px',
-          backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.09)',
-          overflow: 'hidden',
-        }}
-      >
-        <div
-          style={{
-            width: `${percent}%`,
-            height: '100%',
-            backgroundColor: theme.colors.primary,
-            borderRadius: '3px',
-          }}
-        />
-      </div>
-      <div
-        style={{
-          position: 'absolute',
-          left: `calc(${percent}% - 8px)`,
-          width: '16px',
-          height: '16px',
-          borderRadius: '50%',
-          backgroundColor: '#ffffff',
-          border: `2px solid ${theme.colors.primary}`,
-          boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
-          pointerEvents: 'none',
-        }}
-      />
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        style={{
-          position: 'absolute',
-          inset: 0,
-          width: '100%',
-          height: '100%',
-          opacity: 0,
-          cursor: 'pointer',
-          margin: 0,
-          zIndex: 2,
-        }}
-      />
-    </div>
-  );
+const makeMeshWallpaper = (c1: string, c2: string, c3: string, c4: string): string => {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
+    <defs>
+      <radialGradient id="g1" cx="20%" cy="20%" r="65%"><stop offset="0%" stop-color="${c2}" stop-opacity="0.9"/><stop offset="100%" stop-color="${c1}" stop-opacity="0"/></radialGradient>
+      <radialGradient id="g2" cx="85%" cy="30%" r="65%"><stop offset="0%" stop-color="${c3}" stop-opacity="0.85"/><stop offset="100%" stop-color="${c1}" stop-opacity="0"/></radialGradient>
+      <radialGradient id="g3" cx="50%" cy="90%" r="70%"><stop offset="0%" stop-color="${c4}" stop-opacity="0.85"/><stop offset="100%" stop-color="${c1}" stop-opacity="0"/></radialGradient>
+    </defs>
+    <rect width="800" height="600" fill="${c1}"/>
+    <rect width="800" height="600" fill="url(#g1)"/>
+    <rect width="800" height="600" fill="url(#g2)"/>
+    <rect width="800" height="600" fill="url(#g3)"/>
+  </svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 };
+
+/** والپیپرهای آفلاین و بومی سبک Apple Mesh */
+const WALLPAPER_PRESETS = [
+  { id: 'midnight', labelFa: 'شفق نیلی', labelEn: 'Midnight Indigo', url: makeMeshWallpaper('#090D1F', '#1D4ED8', '#7C3AED', '#0EA5E9') },
+  { id: 'aurora', labelFa: 'شفق قطبی', labelEn: 'Aurora Borealis', url: makeMeshWallpaper('#061A1E', '#10B981', '#06B6D4', '#3B82F6') },
+  { id: 'velvet', labelFa: 'مخمل غروب', labelEn: 'Velvet Dusk', url: makeMeshWallpaper('#1A0918', '#EC4899', '#8B5CF6', '#F97316') },
+  { id: 'obsidian', labelFa: 'ابسیدین دودی', labelEn: 'Obsidian Silk', url: makeMeshWallpaper('#0B0B10', '#334155', '#64748B', '#1E293B') },
+  { id: 'sunrise', labelFa: 'سپیده روشن', labelEn: 'Soft Sunrise', url: makeMeshWallpaper('#F5EFE6', '#FBBF24', '#FB7185', '#38BDF8') },
+  { id: 'glacier-light', labelFa: 'نسیم قطبی', labelEn: 'Glacier Mist', url: makeMeshWallpaper('#ECF5FF', '#60A5FA', '#A78BFA', '#34D399') },
+];
 
 export const DisplaySettings: React.FC<DisplaySettingsProps> = ({
   displaySettings,
@@ -243,20 +133,6 @@ export const DisplaySettings: React.FC<DisplaySettingsProps> = ({
     setDisplaySettings((prev) => ({ ...prev, [key]: value }));
   };
 
-  const handleWallpaperUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const result = event.target?.result;
-      if (typeof result === 'string') {
-        setCustomBackground?.(result);
-      }
-    };
-    reader.readAsDataURL(file);
-    e.target.value = '';
-  };
-
   const handleResetAllDisplay = () => {
     setDisplaySettings({ ...DEFAULT_DISPLAY_SETTINGS });
     setThemeMode('system');
@@ -267,52 +143,55 @@ export const DisplaySettings: React.FC<DisplaySettingsProps> = ({
     setGlassCardCovers?.(true);
   };
 
-  const rowStyle: React.CSSProperties = {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: '16px',
-    padding: '18px 24px',
-    borderBottom: `1px solid ${theme.colors.border}`,
+  const handleApplyCustomWallpaper = (dataUrl: string) => {
+    if (displaySettings.adaptiveArtworkWallpaper) {
+      updateDisplay('adaptiveArtworkWallpaper', false);
+    }
+    setCustomBackground?.(dataUrl);
   };
 
-  const blockStyle: React.CSSProperties = {
-    padding: '18px 24px',
-    borderBottom: `1px solid ${theme.colors.border}`,
+  const handleWallpaperUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const result = event.target?.result;
+      if (typeof result !== 'string') return;
+      // فشرده‌سازی هوشمند تصاویر خیلی حجیم برای ذخیره‌سازی مطمئن و اجرای روان
+      if (file.type !== 'image/svg+xml' && result.length > 350_000) {
+        const img = new Image();
+        img.onload = () => {
+          const maxDim = 1920;
+          const scale = Math.min(1, maxDim / Math.max(img.width || 1, img.height || 1));
+          const w = Math.max(1, Math.round(img.width * scale));
+          const h = Math.max(1, Math.round(img.height * scale));
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, w, h);
+            const optimized = canvas.toDataURL('image/jpeg', 0.86);
+            handleApplyCustomWallpaper(optimized);
+            return;
+          }
+          handleApplyCustomWallpaper(result);
+        };
+        img.onerror = () => handleApplyCustomWallpaper(result);
+        img.src = result;
+      } else {
+        handleApplyCustomWallpaper(result);
+      }
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
   };
-
-  const sectionHeadingStyle: React.CSSProperties = {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '10px',
-    padding: '18px 24px 12px',
-    fontSize: '13.5px',
-    fontWeight: 700,
-    color: theme.colors.primary,
-    borderBottom: `1px solid ${theme.colors.border}`,
-    backgroundColor: theme.isDark ? 'rgba(255,255,255,0.025)' : 'rgba(0,0,0,0.02)',
-  };
-
-  const segmentedBtn = (active: boolean): React.CSSProperties => ({
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: '6px',
-    padding: '7px 12px',
-    borderRadius: theme.radius.sm || '8px',
-    border: `1px solid ${active ? theme.colors.primary : theme.colors.border}`,
-    backgroundColor: active ? theme.colors.primary : theme.colors.background,
-    color: active ? '#ffffff' : theme.colors.textPrimary,
-    fontSize: '12.5px',
-    fontWeight: active ? 600 : 500,
-    cursor: 'pointer',
-    whiteSpace: 'nowrap',
-  });
 
   return (
     <div
       style={{
         flex: 1,
-        padding: 'clamp(16px, 3.5vw, 40px)',
+        padding: 'clamp(14px, 3vw, 32px)',
         paddingBottom: '140px',
         overflowY: 'auto',
         display: 'flex',
@@ -321,849 +200,703 @@ export const DisplaySettings: React.FC<DisplaySettingsProps> = ({
         boxSizing: 'border-box',
       }}
     >
-      {/* هدر بالا */}
-      <div
-        style={{
-          width: '100%',
-          maxWidth: '1000px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: '12px',
-          marginBottom: '22px',
-          flexWrap: 'wrap',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+      <div style={{ width: '100%', maxWidth: '820px' }}>
+        {/* نوار ناوبری بالا */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+            marginBottom: '20px',
+            flexWrap: 'wrap',
+          }}
+        >
           <button
             type="button"
             onClick={onBack}
             style={{
-              display: 'flex',
+              display: 'inline-flex',
               alignItems: 'center',
-              gap: '6px',
-              padding: '8px 14px',
-              borderRadius: theme.radius.md || '12px',
-              border: `1px solid ${theme.colors.border}`,
-              backgroundColor: theme.colors.surface,
-              color: theme.colors.textPrimary,
+              gap: '4px',
+              background: 'none',
+              border: 'none',
+              padding: '6px 4px',
+              color: theme.colors.primary,
               cursor: 'pointer',
-              fontSize: '13.5px',
+              fontSize: '0.9375rem',
               fontWeight: 600,
-              whiteSpace: 'nowrap',
             }}
           >
-            {isRTL ? <ArrowRight size={16} /> : <ArrowLeft size={16} />}
-            <span>{t.back || 'بازگشت'}</span>
+            {isRTL ? <ArrowRight size={19} /> : <ArrowLeft size={19} />}
+            <span>{t.settings || 'تنظیمات'}</span>
           </button>
 
           <h1
             style={{
-              fontSize: 'clamp(22px, 3vw, 30px)',
+              fontSize: 'clamp(1.25rem, 2.6vw, 1.625rem)',
               fontWeight: 800,
               margin: 0,
               color: theme.colors.textPrimary,
+              letterSpacing: '-0.02em',
             }}
           >
             {t.displayPageTitle || 'ظاهر و نمایش'}
           </h1>
-        </div>
 
-        <button
-          type="button"
-          onClick={handleResetAllDisplay}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            padding: '8px 14px',
-            borderRadius: theme.radius.md || '12px',
-            border: `1px solid ${theme.colors.border}`,
-            backgroundColor: theme.colors.surface,
-            color: theme.colors.textSecondary,
-            cursor: 'pointer',
-            fontSize: '13px',
-            fontWeight: 600,
-            whiteSpace: 'nowrap',
-          }}
-        >
-          <RotateCcw size={15} />
-          <span>{t.resetDisplaySettings || 'بازنشانی ظاهر'}</span>
-        </button>
-      </div>
-
-      {/* کارت اصلی تنظیمات ظاهر */}
-      <div
-        style={{
-          ...theme.glass?.card,
-          borderRadius: theme.radius.xl || '24px',
-          width: '100%',
-          maxWidth: '1000px',
-          overflow: 'hidden',
-          border: `1px solid ${theme.colors.border}`,
-        }}
-      >
-        {/* پیش‌نمایش زنده سبک ظاهری فعلی */}
-        <div
-          style={{
-            padding: '18px 24px',
-            borderBottom: `1px solid ${theme.colors.border}`,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: '16px',
-            flexWrap: 'wrap',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-            <div
-              style={{
-                width: '44px',
-                height: '44px',
-                borderRadius:
-                  displaySettings.artworkStyle === 'vinyl'
-                    ? '50%'
-                    : theme.radius.md || '12px',
-                background: `linear-gradient(135deg, ${theme.colors.primary}, ${theme.colors.accent || theme.colors.secondary})`,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: '#ffffff',
-                boxShadow: `0 6px 18px ${theme.colors.primary}44`,
-                flexShrink: 0,
-              }}
-            >
-              <Disc3 size={22} />
-            </div>
-            <div>
-              <div style={{ fontSize: '15px', fontWeight: 700, color: theme.colors.textPrimary }}>
-                {theme.name || (theme.isDark ? t.dark : t.light)}
-              </div>
-              <div
-                style={{
-                  fontSize: '12px',
-                  color: theme.colors.textSecondary,
-                  marginTop: '3px',
-                  fontVariantNumeric: 'tabular-nums',
-                }}
-              >
-                {[
-                  themeMode === 'system' ? t.system || 'سیستم' : theme.isDark ? t.dark : t.light,
-                  displaySettings.oledPureBlack && theme.isDark ? 'OLED' : null,
-                  `${Math.round(displaySettings.fontScale * 100)}%`,
-                  displaySettings.playerBarStyle === 'docked'
-                    ? t.playerBarDocked || 'تمام‌عرض'
-                    : t.playerBarFloating || 'شناور',
-                ]
-                  .filter(Boolean)
-                  .join(' · ')}
-              </div>
-            </div>
-          </div>
-
-          <div
+          <button
+            type="button"
+            onClick={handleResetAllDisplay}
             style={{
-              display: 'flex',
+              display: 'inline-flex',
               alignItems: 'center',
-              gap: '8px',
+              gap: '6px',
+              padding: '7px 12px',
+              borderRadius: '999px',
+              border: `1px solid ${theme.colors.border}`,
+              backgroundColor: theme.colors.surface,
+              color: theme.colors.textSecondary,
+              cursor: 'pointer',
+              fontSize: '0.7813rem',
+              fontWeight: 600,
             }}
           >
-            <div
-              style={{
-                width: '76px',
-                height: '12px',
-                borderRadius: theme.radius.sm || '6px',
-                backgroundColor: theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)',
-                overflow: 'hidden',
-              }}
-            >
+            <RotateCcw size={14} />
+            <span>{t.resetDisplaySettings || 'بازنشانی'}</span>
+          </button>
+        </div>
+
+        {/* کارت خلاصه تم فعال */}
+        <IOSGroupedSection theme={theme}>
+          <IOSRow
+            theme={theme}
+            isLast
+            icon={
+              <IOSSquircleIcon color={theme.colors.primary} gradientTo={theme.colors.accent || theme.colors.secondary} size={36}>
+                <Disc3 size={20} />
+              </IOSSquircleIcon>
+            }
+            title={
+              (isRTL ? theme.name : (theme.nameEn || theme.name)) ||
+              (theme.isDark ? t.dark : t.light)
+            }
+            subtitle={[
+              themeMode === 'system' ? t.system || 'سیستم' : theme.isDark ? t.dark : t.light,
+              displaySettings.oledPureBlack && theme.isDark ? 'OLED' : null,
+              `${Math.round(displaySettings.fontScale * 100)}%`,
+              displaySettings.playerBarStyle === 'docked'
+                ? t.playerBarDocked || 'تمام‌عرض'
+                : t.playerBarFloating || 'شناور',
+            ]
+              .filter(Boolean)
+              .join(' · ')}
+            trailing={
               <div
                 style={{
-                  width: '62%',
-                  height: '100%',
-                  backgroundColor: theme.colors.primary,
-                  borderRadius: theme.radius.sm || '6px',
+                  width: '44px',
+                  height: '10px',
+                  borderRadius: '999px',
+                  backgroundColor: theme.isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.08)',
+                  overflow: 'hidden',
                 }}
-              />
-            </div>
-          </div>
-        </div>
+              >
+                <div style={{ width: '65%', height: '100%', backgroundColor: theme.colors.primary, borderRadius: '999px' }} />
+              </div>
+            }
+          />
+        </IOSGroupedSection>
 
         {/* بخش ۱: تم و رنگ‌بندی هوشمند */}
-        <div style={sectionHeadingStyle}>
-          <Palette size={17} />
-          <span>{t.displaySectionTheme || 'تم و رنگ‌بندی هوشمند'}</span>
-        </div>
-
-        <div style={{ ...blockStyle, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
-          <div>
-            <div style={{ fontSize: '15.5px', fontWeight: 600, color: theme.colors.textPrimary }}>
-              {t.theme || 'تم برنامه'}
-            </div>
-            <div style={{ fontSize: '12.5px', color: theme.colors.textSecondary, marginTop: '2px' }}>
-              {themeMode === 'system' ? t.system || 'پیش‌فرض سیستم' : themeMode === 'dark' ? t.dark : t.light}
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-            {(
-              [
-                { id: 'system', label: t.system || 'سیستم', icon: <Smartphone size={14} /> },
-                { id: 'light', label: t.light || 'روشن', icon: <Sun size={14} /> },
-                { id: 'dark', label: t.dark || 'تیره', icon: <Moon size={14} /> },
-              ] as { id: ThemeMode; label: string; icon: React.ReactNode }[]
-            ).map((opt) => (
-              <button
-                key={opt.id}
-                type="button"
-                onClick={() => setThemeMode(opt.id)}
-                style={segmentedBtn(themeMode === opt.id)}
-              >
-                {opt.icon}
-                <span>{opt.label}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div style={rowStyle}>
-          <div>
-            <div style={{ fontSize: '15.5px', fontWeight: 600, color: theme.colors.textPrimary }}>
-              {t.oledPureBlackLabel || 'حالت مشکی مطلق (OLED)'}
-            </div>
-            <div style={{ fontSize: '12.5px', color: theme.colors.textSecondary, marginTop: '2px' }}>
-              {t.oledPureBlackDesc || 'استفاده از پس‌زمینه تمام‌مشکی در تم تیره برای کنتراست بیشتر'}
-            </div>
-          </div>
-          <ToggleSwitch
-            checked={displaySettings.oledPureBlack}
-            onChange={(next) => updateDisplay('oledPureBlack', next)}
+        <IOSGroupedSection header={t.displaySectionTheme || 'تم و رنگ‌بندی هوشمند'} theme={theme}>
+          <IOSRow
             theme={theme}
-            ariaLabel={t.oledPureBlackLabel || 'Pure Black OLED'}
-          />
-        </div>
+            icon={
+              <IOSSquircleIcon color="#5856D6" gradientTo="#7C3AED">
+                {themeMode === 'dark' ? <Moon size={16} /> : themeMode === 'light' ? <Sun size={16} /> : <Smartphone size={16} />}
+              </IOSSquircleIcon>
+            }
+            title={t.theme || 'تم برنامه'}
+            subtitle={themeMode === 'system' ? t.system || 'پیش‌فرض سیستم' : themeMode === 'dark' ? t.dark : t.light}
+          >
+            <IOSSegmentedControl<ThemeMode>
+              groupId="display-theme-mode"
+              fullWidth
+              theme={theme}
+              value={themeMode}
+              onChange={setThemeMode}
+              options={[
+                { value: 'system', label: <><Smartphone size={13} /><span>{t.system || 'سیستم'}</span></> },
+                { value: 'light', label: <><Sun size={13} /><span>{t.light || 'روشن'}</span></> },
+                { value: 'dark', label: <><Moon size={13} /><span>{t.dark || 'تیره'}</span></> },
+              ]}
+            />
+          </IOSRow>
 
-        <div style={blockStyle}>
-          <div style={{ fontSize: '15.5px', fontWeight: 600, color: theme.colors.textPrimary, marginBottom: '12px' }}>
-            {t.colorPalette || 'پالت رنگی'}
-          </div>
-          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-            {PALETTES.map((palette) => {
-              const selected =
-                colorPalette === palette.id ||
-                (colorPalette === 'default' && palette.id === 'classic-blue');
-              return (
-                <button
-                  key={palette.id}
-                  type="button"
-                  onClick={() => setColorPalette(palette.id)}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    padding: '7px 12px',
-                    borderRadius: theme.radius.md || '14px',
-                    border: selected
-                      ? `2px solid ${palette.color}`
-                      : `1px solid ${theme.colors.border}`,
-                    backgroundColor: selected ? `${palette.color}20` : theme.colors.background,
-                    boxShadow: selected ? `0 0 12px ${palette.color}44` : 'none',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <div
+          <IOSRow
+            theme={theme}
+            icon={
+              <IOSSquircleIcon color="#1C1C1E" gradientTo="#3A3A3C">
+                <Moon size={16} />
+              </IOSSquircleIcon>
+            }
+            title={t.oledPureBlackLabel || 'حالت مشکی مطلق (OLED)'}
+            subtitle={t.oledPureBlackDesc || 'استفاده از پس‌زمینه تمام‌مشکی در تم تیره برای کنتراست بیشتر'}
+            trailing={
+              <IOSSwitch
+                checked={displaySettings.oledPureBlack}
+                onChange={(next) => updateDisplay('oledPureBlack', next)}
+                theme={theme}
+                ariaLabel={t.oledPureBlackLabel || 'OLED'}
+              />
+            }
+          />
+
+          <IOSRow
+            theme={theme}
+            icon={
+              <IOSSquircleIcon color="#FF2D55" gradientTo="#FF9500">
+                <Palette size={16} />
+              </IOSSquircleIcon>
+            }
+            title={t.colorPalette || 'پالت رنگی'}
+          >
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              {PALETTES.map((palette) => {
+                const selected =
+                  colorPalette === palette.id ||
+                  (colorPalette === 'default' && palette.id === 'classic-blue');
+                return (
+                  <button
+                    key={palette.id}
+                    type="button"
+                    onClick={() => setColorPalette(palette.id)}
                     style={{
-                      width: '16px',
-                      height: '16px',
-                      borderRadius: '50%',
-                      background: `linear-gradient(135deg, ${palette.color} 50%, ${palette.secondaryColor} 50%)`,
-                      border: '1.5px solid rgba(255, 255, 255, 0.4)',
-                      flexShrink: 0,
-                    }}
-                  />
-                  <span
-                    style={{
-                      fontSize: '12.5px',
-                      fontWeight: selected ? 700 : 500,
-                      color: selected ? theme.colors.textPrimary : theme.colors.textSecondary,
-                      whiteSpace: 'nowrap',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '7px',
+                      padding: '6px 11px',
+                      borderRadius: '11px',
+                      border: selected
+                        ? `1.5px solid ${palette.color}`
+                        : `1px solid ${theme.colors.border}`,
+                      backgroundColor: selected ? `${palette.color}20` : theme.colors.background,
+                      cursor: 'pointer',
                     }}
                   >
-                    {isRTL ? palette.labelFa : palette.labelEn}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
+                    <span
+                      style={{
+                        width: '14px',
+                        height: '14px',
+                        borderRadius: '50%',
+                        background: `linear-gradient(135deg, ${palette.color} 50%, ${palette.secondaryColor} 50%)`,
+                        flexShrink: 0,
+                      }}
+                    />
+                    <span
+                      style={{
+                        fontSize: '0.75rem',
+                        fontWeight: selected ? 700 : 500,
+                        color: selected ? theme.colors.textPrimary : theme.colors.textSecondary,
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {isRTL ? palette.labelFa : palette.labelEn}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </IOSRow>
 
-        <div style={rowStyle}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <Sparkles size={18} color={theme.colors.primary} />
-            <div>
-              <div style={{ fontSize: '15.5px', fontWeight: 600, color: theme.colors.textPrimary }}>
-                {t.adaptiveAccentLabel || 'رنگ تاکیدی هوشمند از کاور'}
-              </div>
-              <div style={{ fontSize: '12.5px', color: theme.colors.textSecondary, marginTop: '2px' }}>
-                {t.adaptiveAccentDesc || 'استخراج خودکار رنگ غالب کاور آهنگ فعلی برای دکمه‌ها و نوار پخش'}
-              </div>
-            </div>
-          </div>
-          <ToggleSwitch
-            checked={displaySettings.adaptiveArtworkAccent}
-            onChange={(next) => updateDisplay('adaptiveArtworkAccent', next)}
+          <IOSRow
             theme={theme}
-            ariaLabel={t.adaptiveAccentLabel || 'Adaptive Artwork Accent'}
+            icon={
+              <IOSSquircleIcon color="#AF52DE" gradientTo="#5856D6">
+                <Sparkles size={16} />
+              </IOSSquircleIcon>
+            }
+            title={t.adaptiveAccentLabel || 'رنگ تاکیدی هوشمند از کاور'}
+            subtitle={t.adaptiveAccentDesc || 'استخراج خودکار رنگ غالب کاور آهنگ فعلی'}
+            trailing={
+              <IOSSwitch
+                checked={displaySettings.adaptiveArtworkAccent}
+                onChange={(next) => updateDisplay('adaptiveArtworkAccent', next)}
+                theme={theme}
+                ariaLabel={t.adaptiveAccentLabel || 'Adaptive Accent'}
+              />
+            }
           />
-        </div>
 
-        <div style={rowStyle}>
-          <div>
-            <div style={{ fontSize: '15.5px', fontWeight: 600, color: theme.colors.textPrimary }}>
-              {t.ambientGlowLabel || 'هاله‌های نورانی پس‌زمینه'}
-            </div>
-            <div style={{ fontSize: '12.5px', color: theme.colors.textSecondary, marginTop: '2px' }}>
-              {t.ambientGlowDesc || 'نمایش گرادیان‌های رنگی نرم در پشت صفحات برنامه'}
-            </div>
-          </div>
-          <ToggleSwitch
-            checked={displaySettings.ambientGlow}
-            onChange={(next) => updateDisplay('ambientGlow', next)}
+          <IOSRow
             theme={theme}
-            ariaLabel={t.ambientGlowLabel || 'Ambient Glow'}
+            isLast
+            icon={
+              <IOSSquircleIcon color="#32ADE6" gradientTo="#007AFF">
+                <Sparkles size={16} />
+              </IOSSquircleIcon>
+            }
+            title={t.ambientGlowLabel || 'هاله‌های نورانی پس‌زمینه'}
+            subtitle={t.ambientGlowDesc || 'نمایش گرادیان‌های رنگی نرم در پشت صفحات برنامه'}
+            trailing={
+              <IOSSwitch
+                checked={displaySettings.ambientGlow}
+                onChange={(next) => updateDisplay('ambientGlow', next)}
+                theme={theme}
+                ariaLabel={t.ambientGlowLabel || 'Ambient Glow'}
+              />
+            }
           />
-        </div>
+        </IOSGroupedSection>
 
         {/* بخش ۲: پس‌زمینه و متریال شیشه‌ای */}
-        <div style={sectionHeadingStyle}>
-          <ImageIcon size={17} />
-          <span>{t.displaySectionBackdrop || 'پس‌زمینه و متریال شیشه‌ای'}</span>
-        </div>
-
-        <div style={rowStyle}>
-          <div>
-            <div style={{ fontSize: '15.5px', fontWeight: 600, color: theme.colors.textPrimary }}>
-              {t.adaptiveWallpaperLabel || 'والپیپر پویا با کاور آهنگ'}
-            </div>
-            <div style={{ fontSize: '12.5px', color: theme.colors.textSecondary, marginTop: '2px' }}>
-              {t.adaptiveWallpaperDesc || 'تبدیل خودکار کاور تار شده آهنگ فعلی به پس‌زمینه کل برنامه'}
-            </div>
-          </div>
-          <ToggleSwitch
-            checked={displaySettings.adaptiveArtworkWallpaper}
-            onChange={(next) => updateDisplay('adaptiveArtworkWallpaper', next)}
+        <IOSGroupedSection header={t.displaySectionBackdrop || 'پس‌زمینه و متریال شیشه‌ای'} theme={theme}>
+          <IOSRow
             theme={theme}
-            ariaLabel={t.adaptiveWallpaperLabel || 'Dynamic Artwork Wallpaper'}
+            icon={
+              <IOSSquircleIcon color="#FF9500" gradientTo="#FF3B30">
+                <ImageIcon size={16} />
+              </IOSSquircleIcon>
+            }
+            title={t.adaptiveWallpaperLabel || 'والپیپر پویا با کاور آهنگ'}
+            subtitle={t.adaptiveWallpaperDesc || 'تبدیل خودکار کاور تار شده آهنگ فعلی به پس‌زمینه کل برنامه'}
+            trailing={
+              <IOSSwitch
+                checked={displaySettings.adaptiveArtworkWallpaper}
+                onChange={(next) => updateDisplay('adaptiveArtworkWallpaper', next)}
+                theme={theme}
+                ariaLabel={t.adaptiveWallpaperLabel || 'Dynamic Wallpaper'}
+              />
+            }
           />
-        </div>
 
-        <div style={blockStyle}>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              marginBottom: '12px',
-              flexWrap: 'wrap',
-              gap: '12px',
-            }}
-          >
-            <div>
-              <div style={{ fontSize: '15.5px', fontWeight: 600, color: theme.colors.textPrimary }}>
-                {t.customBackground || 'پس‌زمینه دلخواه برنامه'}
-              </div>
-              <div style={{ fontSize: '12.5px', color: theme.colors.textSecondary, marginTop: '2px' }}>
-                {t.selectWallpaperHint || 'تصویر دلخواه خود را برای بک‌گراند شیشه‌ای برنامه تنظیم کنید.'}
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-              {customBackground && (
+          <IOSRow
+            theme={theme}
+            title={t.customBackground || 'پس‌زمینه دلخواه برنامه'}
+            subtitle={t.selectWallpaperHint}
+            trailing={
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                {customBackground && (
+                  <button
+                    type="button"
+                    onClick={() => setCustomBackground?.(null)}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      padding: '6px 10px',
+                      borderRadius: '999px',
+                      border: `1px solid ${theme.colors.border}`,
+                      backgroundColor: theme.colors.background,
+                      color: theme.colors.textSecondary,
+                      cursor: 'pointer',
+                      fontSize: '0.75rem',
+                      fontWeight: 600,
+                    }}
+                  >
+                    <RefreshCw size={13} />
+                    <span>{t.resetWallpaper || 'پیش‌فرض'}</span>
+                  </button>
+                )}
+                <input
+                  ref={wallpaperInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={handleWallpaperUpload}
+                  style={{ display: 'none' }}
+                />
                 <button
                   type="button"
-                  onClick={() => setCustomBackground?.(null)}
+                  onClick={() => wallpaperInputRef.current?.click()}
                   style={{
-                    display: 'flex',
+                    display: 'inline-flex',
                     alignItems: 'center',
                     gap: '6px',
                     padding: '7px 12px',
-                    borderRadius: theme.radius.sm || '10px',
-                    border: `1px solid ${theme.colors.border}`,
-                    backgroundColor: theme.colors.background,
-                    color: theme.colors.textSecondary,
+                    borderRadius: '999px',
+                    border: 'none',
+                    backgroundColor: theme.colors.primary,
+                    color: theme.colors.onPrimary || '#ffffff',
                     cursor: 'pointer',
-                    fontSize: '12px',
+                    fontSize: '0.7813rem',
                     fontWeight: 600,
                   }}
                 >
-                  <RefreshCw size={14} />
-                  <span>{t.resetWallpaper || 'پیش‌فرض'}</span>
+                  <Upload size={13} />
+                  <span>{t.uploadWallpaper || 'انتخاب تصویر'}</span>
                 </button>
-              )}
+              </div>
+            }
+          >
+            <div style={{ display: 'flex', gap: '10px', overflowX: 'auto', paddingBottom: '4px' }}>
+              {WALLPAPER_PRESETS.map((preset) => {
+                const isSelected = !displaySettings.adaptiveArtworkWallpaper && customBackground === preset.url;
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => handleApplyCustomWallpaper(preset.url)}
+                    title={isRTL ? preset.labelFa : preset.labelEn}
+                    style={{
+                      position: 'relative',
+                      width: '76px',
+                      height: '52px',
+                      borderRadius: '11px',
+                      overflow: 'hidden',
+                      border: isSelected
+                        ? `2.5px solid ${theme.colors.primary}`
+                        : `1px solid ${theme.colors.border}`,
+                      cursor: 'pointer',
+                      padding: 0,
+                      flexShrink: 0,
+                    }}
+                  >
+                    <img
+                      src={preset.url}
+                      alt={isRTL ? preset.labelFa : preset.labelEn}
+                      style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                    />
+                    {isSelected && (
+                      <div
+                        style={{
+                          position: 'absolute',
+                          inset: 0,
+                          backgroundColor: `${theme.colors.primary}40`,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        <Check size={17} color="#fff" strokeWidth={3} />
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
 
-              <input
-                ref={wallpaperInputRef}
-                type="file"
-                accept="image/*"
-                onChange={handleWallpaperUpload}
-                style={{ display: 'none' }}
-              />
-
-              <button
-                type="button"
-                onClick={() => wallpaperInputRef.current?.click()}
+            {(customBackground || displaySettings.adaptiveArtworkWallpaper) && (
+              <div
                 style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '7px 14px',
-                  borderRadius: theme.radius.sm || '10px',
-                  border: 'none',
-                  backgroundColor: theme.colors.primary,
-                  color: '#ffffff',
-                  cursor: 'pointer',
-                  fontSize: '12.5px',
-                  fontWeight: 600,
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
+                  gap: '14px',
+                  marginTop: '6px',
                 }}
               >
-                <Upload size={14} />
-                <span>{t.uploadWallpaper || 'انتخاب تصویر دلخواه'}</span>
-              </button>
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', gap: '10px', overflowX: 'auto', paddingBottom: '4px' }}>
-            {WALLPAPER_PRESETS.map((preset) => {
-              const isSelected = customBackground === preset.url;
-              return (
-                <button
-                  key={preset.id}
-                  type="button"
-                  onClick={() => setCustomBackground?.(preset.url)}
-                  title={isRTL ? preset.labelFa : preset.labelEn}
-                  style={{
-                    position: 'relative',
-                    width: '74px',
-                    height: '52px',
-                    borderRadius: theme.radius.sm || '10px',
-                    overflow: 'hidden',
-                    border: isSelected
-                      ? `2.5px solid ${theme.colors.primary}`
-                      : `1px solid ${theme.colors.border}`,
-                    cursor: 'pointer',
-                    padding: 0,
-                    flexShrink: 0,
-                  }}
-                >
-                  <img
-                    src={preset.url}
-                    alt={isRTL ? preset.labelFa : preset.labelEn}
-                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                  />
-                  {isSelected && (
-                    <div
-                      style={{
-                        position: 'absolute',
-                        inset: 0,
-                        backgroundColor: `${theme.colors.primary}40`,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                      }}
-                    >
-                      <Check size={18} color="#fff" strokeWidth={3} />
-                    </div>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-
-          {(customBackground || displaySettings.adaptiveArtworkWallpaper) && (
-            <div
-              style={{
-                marginTop: '14px',
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-                gap: '16px',
-              }}
-            >
-              <div>
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    fontSize: '12.5px',
-                    color: theme.colors.textSecondary,
-                    marginBottom: '4px',
-                  }}
-                >
-                  <span>{t.wallpaperBlur || 'میزان تاری تصویر (Blur)'}</span>
-                  <span style={{ fontWeight: 700, color: theme.colors.primary, fontVariantNumeric: 'tabular-nums' }}>
-                    {customBgBlur}px
-                  </span>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: theme.colors.textSecondary, marginBottom: '6px' }}>
+                    <span>{t.wallpaperBlur || 'میزان تاری'}</span>
+                    <span style={{ fontWeight: 700, color: theme.colors.primary, fontVariantNumeric: 'tabular-nums' }}>{customBgBlur}px</span>
+                  </div>
+                  <IOSSlider value={customBgBlur} min={0} max={36} step={1} onChange={(v) => setCustomBgBlur?.(v)} theme={theme} />
                 </div>
-                <RangeSlider
-                  value={customBgBlur}
-                  min={0}
-                  max={36}
-                  step={1}
-                  onChange={(val) => setCustomBgBlur?.(val)}
-                  theme={theme}
-                />
-              </div>
-
-              <div>
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    fontSize: '12.5px',
-                    color: theme.colors.textSecondary,
-                    marginBottom: '4px',
-                  }}
-                >
-                  <span>{t.wallpaperDim || 'تیرگی لایه محافظ'}</span>
-                  <span style={{ fontWeight: 700, color: theme.colors.primary, fontVariantNumeric: 'tabular-nums' }}>
-                    {customBgDim}%
-                  </span>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: theme.colors.textSecondary, marginBottom: '6px' }}>
+                    <span>{t.wallpaperDim || 'تیرگی لایه محافظ'}</span>
+                    <span style={{ fontWeight: 700, color: theme.colors.primary, fontVariantNumeric: 'tabular-nums' }}>{customBgDim}%</span>
+                  </div>
+                  <IOSSlider value={customBgDim} min={0} max={85} step={1} onChange={(v) => setCustomBgDim?.(v)} theme={theme} />
                 </div>
-                <RangeSlider
-                  value={customBgDim}
-                  min={10}
-                  max={85}
-                  step={1}
-                  onChange={(val) => setCustomBgDim?.(val)}
-                  theme={theme}
-                />
               </div>
-            </div>
-          )}
-        </div>
+            )}
+          </IOSRow>
 
-        <div style={rowStyle}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <Layers size={18} color={theme.colors.primary} />
-            <div>
-              <div style={{ fontSize: '15.5px', fontWeight: 600, color: theme.colors.textPrimary }}>
-                {t.glassCardCovers || 'کاور شیشه‌ای روی کارت آهنگ‌ها'}
-              </div>
-              <div style={{ fontSize: '12.5px', color: theme.colors.textSecondary, marginTop: '2px' }}>
-                {t.glassCardCoversDesc || 'نمایش تصویر کاور هر آهنگ به صورت پس‌زمینه شیشه‌ای روی کارت آن'}
-              </div>
-            </div>
-          </div>
-          <ToggleSwitch
-            checked={glassCardCovers}
-            onChange={(next) => setGlassCardCovers?.(next)}
+          <IOSRow
             theme={theme}
-            ariaLabel={t.glassCardCovers || 'Glass Card Covers'}
+            icon={
+              <IOSSquircleIcon color="#007AFF" gradientTo="#30B0C7">
+                <Layers size={16} />
+              </IOSSquircleIcon>
+            }
+            title={t.glassCardCovers || 'کاور شیشه‌ای روی کارت آهنگ‌ها'}
+            subtitle={t.glassCardCoversDesc}
+            trailing={
+              <IOSSwitch
+                checked={glassCardCovers}
+                onChange={(next) => setGlassCardCovers?.(next)}
+                theme={theme}
+                ariaLabel={t.glassCardCovers || 'Glass Card Covers'}
+              />
+            }
           />
-        </div>
 
-        <div style={blockStyle}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '18px' }}>
-            <div>
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  marginBottom: '6px',
-                }}
-              >
-                <div>
-                  <div style={{ fontSize: '15px', fontWeight: 600, color: theme.colors.textPrimary }}>
-                    {t.glassOpacityLabel || 'شفافیت لایه‌های شیشه‌ای'}
-                  </div>
-                  <div style={{ fontSize: '12px', color: theme.colors.textSecondary }}>
-                    {t.glassOpacityDesc || 'تنظیم میزان ماتی یا شفافیت کارت‌ها و پنل‌ها'}
-                  </div>
-                </div>
-                <span style={{ fontSize: '13.5px', fontWeight: 700, color: theme.colors.primary, fontVariantNumeric: 'tabular-nums' }}>
-                  {Math.round(displaySettings.glassOpacity * 100)}%
-                </span>
-              </div>
-              <RangeSlider
-                value={Math.round(displaySettings.glassOpacity * 100)}
-                min={25}
-                max={95}
-                step={5}
-                onChange={(val) => updateDisplay('glassOpacity', val / 100)}
-                theme={theme}
-              />
-            </div>
+          <IOSRow
+            theme={theme}
+            title={t.glassOpacityLabel || 'شفافیت لایه‌های شیشه‌ای'}
+            valueText={`${Math.round(displaySettings.glassOpacity * 100)}%`}
+          >
+            <IOSSlider
+              value={Math.round(displaySettings.glassOpacity * 100)}
+              min={25}
+              max={95}
+              step={5}
+              onChange={(val) => updateDisplay('glassOpacity', val / 100)}
+              theme={theme}
+            />
+          </IOSRow>
 
-            <div>
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  marginBottom: '6px',
-                }}
-              >
-                <div>
-                  <div style={{ fontSize: '15px', fontWeight: 600, color: theme.colors.textPrimary }}>
-                    {t.glassBlurLabel || 'میزان بلور شیشه'}
-                  </div>
-                  <div style={{ fontSize: '12px', color: theme.colors.textSecondary }}>
-                    {t.glassBlurDesc || 'تنظیم شدت محوشدگی پس‌زمینه پشت کارت‌های شیشه‌ای'}
-                  </div>
-                </div>
-                <span style={{ fontSize: '13.5px', fontWeight: 700, color: theme.colors.primary, fontVariantNumeric: 'tabular-nums' }}>
-                  {displaySettings.glassBlur}px
-                </span>
-              </div>
-              <RangeSlider
-                value={displaySettings.glassBlur}
-                min={0}
-                max={36}
-                step={2}
-                onChange={(val) => updateDisplay('glassBlur', val)}
-                theme={theme}
-              />
-            </div>
-          </div>
-        </div>
+          <IOSRow
+            theme={theme}
+            isLast
+            title={t.glassBlurLabel || 'میزان بلور شیشه'}
+            valueText={`${displaySettings.glassBlur}px`}
+          >
+            <IOSSlider
+              value={displaySettings.glassBlur}
+              min={0}
+              max={36}
+              step={2}
+              onChange={(val) => updateDisplay('glassBlur', val)}
+              theme={theme}
+            />
+          </IOSRow>
+        </IOSGroupedSection>
 
         {/* بخش ۳: فونت، چیدمان و انیمیشن */}
-        <div style={sectionHeadingStyle}>
-          <Type size={17} />
-          <span>{t.displaySectionTypography || 'فونت، چیدمان و انیمیشن'}</span>
-        </div>
-
-        <div style={{ ...blockStyle, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
-          <div>
-            <div style={{ fontSize: '15.5px', fontWeight: 600, color: theme.colors.textPrimary }}>
-              {t.fontFamilyLabel || 'فونت برنامه'}
-            </div>
-            <div style={{ fontSize: '12.5px', color: theme.colors.textSecondary, marginTop: '2px' }}>
-              {t.fontFamilyDesc || 'انتخاب سبک تایپوگرافی در سراسر رابط کاربری'}
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-            {(
-              [
-                { id: 'vazirmatn', label: t.fontVazirmatn || 'وزیرمتن' },
-                { id: 'system', label: t.fontSystem || 'فونت سیستم' },
-                { id: 'editorial', label: t.fontEditorial || 'ادیتوریال' },
-              ] as { id: FontChoice; label: string }[]
-            ).map((opt) => (
-              <button
-                key={opt.id}
-                type="button"
-                onClick={() => updateDisplay('fontFamily', opt.id)}
-                style={segmentedBtn(displaySettings.fontFamily === opt.id)}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div style={blockStyle}>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: '12px',
-              marginBottom: '8px',
-            }}
+        <IOSGroupedSection header={t.displaySectionTypography || 'فونت، چیدمان و انیمیشن'} theme={theme}>
+          <IOSRow
+            theme={theme}
+            icon={
+              <IOSSquircleIcon color="#0A84FF" gradientTo="#5856D6">
+                <LayoutGrid size={16} />
+              </IOSSquircleIcon>
+            }
+            title={t.homeLayoutLabel || 'چیدمان صفحه خانه'}
+            subtitle={t.homeLayoutDesc || 'انتخاب بین نمای پهن کلاسیک (نوع اول) یا نمای ویجتی مدرن (نوع دوم)'}
           >
-            <div>
-              <div style={{ fontSize: '15.5px', fontWeight: 600, color: theme.colors.textPrimary }}>
-                {t.fontScaleLabel || 'مقیاس و اندازه متن'}
-              </div>
-              <div style={{ fontSize: '12.5px', color: theme.colors.textSecondary, marginTop: '2px' }}>
-                {t.fontScaleDesc || 'بزرگ یا کوچک کردن متون و اجزای رابط کاربری'}
-              </div>
-            </div>
-            <span style={{ fontSize: '14px', fontWeight: 700, color: theme.colors.primary, fontVariantNumeric: 'tabular-nums' }}>
-              {Math.round(displaySettings.fontScale * 100)}%
-            </span>
-          </div>
-          <RangeSlider
-            value={Math.round(displaySettings.fontScale * 100)}
-            min={85}
-            max={115}
-            step={5}
-            onChange={(val) => updateDisplay('fontScale', val / 100)}
+            <IOSSegmentedControl<HomeLayoutStyle>
+              groupId="display-home-layout"
+              fullWidth
+              theme={theme}
+              value={displaySettings.homeLayout || 'widget'}
+              onChange={(val) => updateDisplay('homeLayout', val)}
+              options={[
+                {
+                  value: 'wide',
+                  label: (
+                    <>
+                      <LayoutTemplate size={13} />
+                      <span>{t.homeLayoutWide || 'نوع ۱: حالت پهن'}</span>
+                    </>
+                  ),
+                },
+                {
+                  value: 'widget',
+                  label: (
+                    <>
+                      <LayoutGrid size={13} />
+                      <span>{t.homeLayoutWidget || 'نوع ۲: ویجت مدرن'}</span>
+                    </>
+                  ),
+                },
+              ]}
+            />
+          </IOSRow>
+
+          <IOSRow
             theme={theme}
-          />
-        </div>
+            icon={
+              <IOSSquircleIcon color="#34C759" gradientTo="#30D158">
+                <Type size={16} />
+              </IOSSquircleIcon>
+            }
+            title={t.fontFamilyLabel || 'فونت برنامه'}
+            subtitle={t.fontFamilyDesc}
+          >
+            <IOSSegmentedControl<FontChoice>
+              groupId="display-font-family"
+              fullWidth
+              theme={theme}
+              value={displaySettings.fontFamily}
+              onChange={(val) => updateDisplay('fontFamily', val)}
+              options={[
+                { value: 'vazirmatn', label: t.fontVazirmatn || 'وزیرمتن' },
+                { value: 'system', label: t.fontSystem || 'سیستم' },
+                { value: 'editorial', label: t.fontEditorial || 'ادیتوریال' },
+              ]}
+            />
+          </IOSRow>
 
-        <div style={{ ...blockStyle, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
-          <div>
-            <div style={{ fontSize: '15.5px', fontWeight: 600, color: theme.colors.textPrimary }}>
-              {t.cornerStyleLabel || 'فرم گوشه‌ها'}
-            </div>
-            <div style={{ fontSize: '12.5px', color: theme.colors.textSecondary, marginTop: '2px' }}>
-              {t.cornerStyleDesc || 'میزان گردی کارت‌ها، دکمه‌ها و کاورها'}
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-            {(
-              [
-                { id: 'sharp', label: t.cornerSharp || 'تیز' },
-                { id: 'balanced', label: t.cornerBalanced || 'متعادل' },
-                { id: 'pill', label: t.cornerPill || 'بسیار گرد' },
-              ] as { id: CornerStyle; label: string }[]
-            ).map((opt) => (
-              <button
-                key={opt.id}
-                type="button"
-                onClick={() => updateDisplay('cornerStyle', opt.id)}
-                style={segmentedBtn(displaySettings.cornerStyle === opt.id)}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div style={{ ...blockStyle, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
-          <div>
-            <div style={{ fontSize: '15.5px', fontWeight: 600, color: theme.colors.textPrimary }}>
-              {t.listDensityLabel || 'تراکم و فاصله لیست‌ها'}
-            </div>
-            <div style={{ fontSize: '12.5px', color: theme.colors.textSecondary, marginTop: '2px' }}>
-              {t.listDensityDesc || 'تنظیم فضای بین ردیف‌ها و کارت‌های موسیقی'}
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-            {(
-              [
-                { id: 'compact', label: t.densityCompact || 'فشرده' },
-                { id: 'comfortable', label: t.densityComfortable || 'استاندارد' },
-                { id: 'spacious', label: t.densitySpacious || 'باز و راحت' },
-              ] as { id: ListDensity; label: string }[]
-            ).map((opt) => (
-              <button
-                key={opt.id}
-                type="button"
-                onClick={() => updateDisplay('listDensity', opt.id)}
-                style={segmentedBtn(displaySettings.listDensity === opt.id)}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div style={rowStyle}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <Eye size={18} color={theme.colors.primary} />
-            <div>
-              <div style={{ fontSize: '15.5px', fontWeight: 600, color: theme.colors.textPrimary }}>
-                {t.reduceMotionLabel || 'کاهش انیمیشن‌ها'}
-              </div>
-              <div style={{ fontSize: '12.5px', color: theme.colors.textSecondary, marginTop: '2px' }}>
-                {t.reduceMotionDesc || 'جابه‌جایی فوری و کاهش حرکت‌های گرافیکی برای سرعت بیشتر'}
-              </div>
-            </div>
-          </div>
-          <ToggleSwitch
-            checked={displaySettings.reduceMotion}
-            onChange={(next) => updateDisplay('reduceMotion', next)}
+          <IOSRow
             theme={theme}
-            ariaLabel={t.reduceMotionLabel || 'Reduce Motion'}
+            title={t.fontScaleLabel || 'مقیاس و اندازه متن'}
+            subtitle={t.fontScaleDesc}
+            valueText={`${Math.round(displaySettings.fontScale * 100)}%`}
+          >
+            <IOSSlider
+              value={Math.round(displaySettings.fontScale * 100)}
+              min={80}
+              max={125}
+              step={5}
+              onChange={(val) => updateDisplay('fontScale', val / 100)}
+              theme={theme}
+            />
+          </IOSRow>
+
+          <IOSRow
+            theme={theme}
+            title={t.cornerStyleLabel || 'فرم گوشه‌ها'}
+            subtitle={t.cornerStyleDesc}
+          >
+            <IOSSegmentedControl<CornerStyle>
+              groupId="display-corner-style"
+              fullWidth
+              theme={theme}
+              value={displaySettings.cornerStyle}
+              onChange={(val) => updateDisplay('cornerStyle', val)}
+              options={[
+                { value: 'sharp', label: t.cornerSharp || 'تیز' },
+                { value: 'balanced', label: t.cornerBalanced || 'متعادل' },
+                { value: 'pill', label: t.cornerPill || 'بسیار گرد' },
+              ]}
+            />
+          </IOSRow>
+
+          <IOSRow
+            theme={theme}
+            title={t.listDensityLabel || 'تراکم لیست‌ها'}
+            subtitle={t.listDensityDesc}
+          >
+            <IOSSegmentedControl<ListDensity>
+              groupId="display-list-density"
+              fullWidth
+              theme={theme}
+              value={displaySettings.listDensity}
+              onChange={(val) => updateDisplay('listDensity', val)}
+              options={[
+                { value: 'compact', label: t.densityCompact || 'فشرده' },
+                { value: 'comfortable', label: t.densityComfortable || 'استاندارد' },
+                { value: 'spacious', label: t.densitySpacious || 'باز و راحت' },
+              ]}
+            />
+          </IOSRow>
+
+          <IOSRow
+            theme={theme}
+            isLast
+            icon={
+              <IOSSquircleIcon color="#8E8E93" gradientTo="#636366">
+                <Eye size={16} />
+              </IOSSquircleIcon>
+            }
+            title={t.reduceMotionLabel || 'کاهش انیمیشن‌ها'}
+            subtitle={t.reduceMotionDesc}
+            trailing={
+              <IOSSwitch
+                checked={displaySettings.reduceMotion}
+                onChange={(next) => updateDisplay('reduceMotion', next)}
+                theme={theme}
+                ariaLabel={t.reduceMotionLabel || 'Reduce Motion'}
+              />
+            }
           />
-        </div>
+        </IOSGroupedSection>
 
         {/* بخش ۴: ظاهر پخش‌کننده و تمام‌صفحه */}
-        <div style={sectionHeadingStyle}>
-          <Monitor size={17} />
-          <span>{t.displaySectionPlayer || 'ظاهر پخش‌کننده و تمام‌صفحه'}</span>
-        </div>
+        <IOSGroupedSection header={t.displaySectionPlayer || 'ظاهر پخش‌کننده و تمام‌صفحه'} theme={theme}>
+          <IOSRow
+            theme={theme}
+            icon={
+              <IOSSquircleIcon color="#0A84FF" gradientTo="#5E5CE6">
+                <Monitor size={16} />
+              </IOSSquircleIcon>
+            }
+            title={t.playerBarStyleLabel || 'استایل نوار پلیر پایین'}
+            subtitle={t.playerBarStyleDesc}
+          >
+            <IOSSegmentedControl<PlayerBarStyle>
+              groupId="display-player-bar"
+              fullWidth
+              theme={theme}
+              value={displaySettings.playerBarStyle}
+              onChange={(val) => updateDisplay('playerBarStyle', val)}
+              options={[
+                { value: 'floating', label: t.playerBarFloating || 'شناور' },
+                { value: 'docked', label: t.playerBarDocked || 'تمام‌عرض' },
+              ]}
+            />
+          </IOSRow>
 
-        <div style={{ ...blockStyle, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
-          <div>
-            <div style={{ fontSize: '15.5px', fontWeight: 600, color: theme.colors.textPrimary }}>
-              {t.playerBarStyleLabel || 'استایل نوار پلیر پایین'}
-            </div>
-            <div style={{ fontSize: '12.5px', color: theme.colors.textSecondary, marginTop: '2px' }}>
-              {t.playerBarStyleDesc || 'انتخاب بین نوار شناور کپسولی یا نوار چسبیده تمام‌عرض'}
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-            {(
-              [
-                { id: 'floating', label: t.playerBarFloating || 'شناور' },
-                { id: 'docked', label: t.playerBarDocked || 'تمام‌عرض' },
-              ] as { id: PlayerBarStyle; label: string }[]
-            ).map((opt) => (
-              <button
-                key={opt.id}
-                type="button"
-                onClick={() => updateDisplay('playerBarStyle', opt.id)}
-                style={segmentedBtn(displaySettings.playerBarStyle === opt.id)}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </div>
+          <IOSRow
+            theme={theme}
+            title={t.playerBarOpacityLabel || 'شفافیت شیشه‌ای نوار پخش'}
+            subtitle={t.playerBarOpacityDesc}
+            valueText={`${Math.round((displaySettings.playerBarOpacity ?? 0.56) * 100)}%`}
+          >
+            <IOSSlider
+              value={Math.round((displaySettings.playerBarOpacity ?? 0.56) * 100)}
+              min={15}
+              max={95}
+              step={5}
+              onChange={(val) => updateDisplay('playerBarOpacity', val / 100)}
+              theme={theme}
+            />
+          </IOSRow>
 
-        <div style={{ ...blockStyle, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
-          <div>
-            <div style={{ fontSize: '15.5px', fontWeight: 600, color: theme.colors.textPrimary }}>
-              {t.artworkStyleLabel || 'سبک کاور در تمام‌صفحه'}
-            </div>
-            <div style={{ fontSize: '12.5px', color: theme.colors.textSecondary, marginTop: '2px' }}>
-              {t.artworkStyleDesc || 'نمایش کاور کلاسیک یا دیسک وینیل چرخان هنگام پخش'}
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-            {(
-              [
-                { id: 'classic', label: t.artworkClassic || 'کلاسیک مربعی' },
-                { id: 'vinyl', label: t.artworkVinyl || 'صفحه وینیل' },
-              ] as { id: ArtworkStyle; label: string }[]
-            ).map((opt) => (
-              <button
-                key={opt.id}
-                type="button"
-                onClick={() => updateDisplay('artworkStyle', opt.id)}
-                style={segmentedBtn(displaySettings.artworkStyle === opt.id)}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </div>
+          <IOSRow
+            theme={theme}
+            title={t.playerBarBlurLabel || 'شدت بلور شیشه‌ای نوار پخش'}
+            subtitle={t.playerBarBlurDesc}
+            valueText={`${displaySettings.playerBarBlur ?? 28}px`}
+          >
+            <IOSSlider
+              value={displaySettings.playerBarBlur ?? 28}
+              min={0}
+              max={44}
+              step={2}
+              onChange={(val) => updateDisplay('playerBarBlur', val)}
+              theme={theme}
+            />
+          </IOSRow>
 
-        <div style={{ ...blockStyle, borderBottom: 'none', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <Sliders size={18} color={theme.colors.primary} />
-            <div>
-              <div style={{ fontSize: '15.5px', fontWeight: 600, color: theme.colors.textPrimary }}>
-                {t.visualizerStyleLabel || 'استایل ویژوالایزر'}
-              </div>
-              <div style={{ fontSize: '12.5px', color: theme.colors.textSecondary, marginTop: '2px' }}>
-                {t.visualizerStyleDesc || 'نوع نمایش ریتم و طیف زنده در پخش تمام‌صفحه'}
-              </div>
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-            {(
-              [
-                { id: 'bars', label: t.vizBars || 'میله‌ای' },
-                { id: 'wave', label: t.vizWave || 'موج نرم' },
-                { id: 'ring', label: t.vizRing || 'هاله دور کاور' },
-              ] as { id: VisualizerStyle; label: string }[]
-            ).map((opt) => (
-              <button
-                key={opt.id}
-                type="button"
-                onClick={() => updateDisplay('visualizerStyle', opt.id)}
-                style={segmentedBtn(displaySettings.visualizerStyle === opt.id)}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </div>
+          <IOSRow
+            theme={theme}
+            icon={
+              <IOSSquircleIcon color="#FF375F" gradientTo="#FF2D55">
+                <Disc3 size={16} />
+              </IOSSquircleIcon>
+            }
+            title={t.artworkStyleLabel || 'سبک کاور در تمام‌صفحه'}
+            subtitle={t.artworkStyleDesc}
+          >
+            <IOSSegmentedControl<ArtworkStyle>
+              groupId="display-artwork-style"
+              fullWidth
+              theme={theme}
+              value={displaySettings.artworkStyle}
+              onChange={(val) => updateDisplay('artworkStyle', val)}
+              options={[
+                { value: 'classic', label: t.artworkClassic || 'کلاسیک' },
+                { value: 'vinyl', label: t.artworkVinyl || 'صفحه وینیل' },
+              ]}
+            />
+          </IOSRow>
+
+          <IOSRow
+            theme={theme}
+            isLast
+            icon={
+              <IOSSquircleIcon color="#5AC8FA" gradientTo="#007AFF">
+                <Sliders size={16} />
+              </IOSSquircleIcon>
+            }
+            title={t.visualizerStyleLabel || 'استایل ویژوالایزر'}
+            subtitle={t.visualizerStyleDesc}
+          >
+            <IOSSegmentedControl<VisualizerStyle>
+              groupId="display-visualizer-style"
+              fullWidth
+              theme={theme}
+              value={displaySettings.visualizerStyle}
+              onChange={(val) => updateDisplay('visualizerStyle', val)}
+              options={[
+                { value: 'bars', label: t.vizBars || 'میله‌ای' },
+                { value: 'wave', label: t.vizWave || 'موج نرم' },
+                { value: 'ring', label: t.vizRing || 'هاله دور کاور' },
+              ]}
+            />
+          </IOSRow>
+        </IOSGroupedSection>
       </div>
     </div>
   );

@@ -5,18 +5,39 @@ import { DEMO_SONGS } from './player/demoSongs';
 import { PlayerBar } from './components/PlayerBar';
 import { TopBar } from './components/TopBar';
 import type { SearchNavigateTarget } from './components/SearchBar';
+import { OfflineIndicator } from './components/PWAInstallControl';
 import { Home } from './features/Home';
 import { usePersistentState } from './hooks/usePersistentState';
 import { usePlayer } from './hooks/usePlayer';
 import { STORAGE_KEYS } from './storage/keys';
 import { readJSON } from './storage/safeStorage';
-import { isDisplaySettings, isEqualizerSettings, isPlaylistList, isSongList, isSoundSettings } from './types/guards';
-import type { DisplaySettings, EqualizerSettings, Playlist, SleepTimerState, Song, SoundSettings } from './types';
+import {
+  isDisplaySettings,
+  isEqualizerSettings,
+  isPlaybackPreferences,
+  isPlaylistList,
+  isSongList,
+  isSoundSettings,
+} from './types/guards';
+import type {
+  DisplaySettings,
+  EqualizerSettings,
+  PlaybackPreferences,
+  Playlist,
+  SleepTimerState,
+  Song,
+  SoundSettings,
+} from './types';
 import { DEFAULT_EQ_SETTINGS, DEFAULT_SOUND_SETTINGS, audioEffects } from './player/audioEffects';
+import { DEFAULT_PLAYBACK_PREFERENCES } from './player/constants';
 import { translations, type Language } from './locales';
 import { DEFAULT_DISPLAY_SETTINGS, getTheme, type PaletteType, type ThemeMode } from './theme';
 import { getAudioBlobsBatch, deleteAudioBlob } from './storage/mediaStore';
-import { extractDroppedAudioFiles, extractSongsBatched } from './utils/audioMetadata';
+import {
+  extractDroppedAudioFiles,
+  extractSongsBatched,
+  partitionDuplicateSongs,
+} from './utils/audioMetadata';
 import { extractDominantHex } from './utils/artworkColor';
 
 // بارگذاری تنبل صفحات غیر اول برای سرعت بالای راه‌اندازی روی ویندوز
@@ -41,6 +62,10 @@ function App() {
   const [currentTabIndex, setCurrentTabIndex] = useState(0);
   const currentTab = tabs[currentTabIndex];
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [settingsSubPage, setSettingsSubPage] = useState<{
+    page: 'main' | 'sound' | 'display' | 'library' | 'shortcuts';
+    token: number;
+  } | null>(null);
   const [direction, setDirection] = useState(0);
 
   const [language, setLanguage] = usePersistentState<Language>(
@@ -131,20 +156,33 @@ function App() {
     DEFAULT_DISPLAY_SETTINGS,
     isDisplaySettings
   );
+  const [playbackPrefs, setPlaybackPrefs] = usePersistentState<PlaybackPreferences>(
+    STORAGE_KEYS.playbackPrefs,
+    DEFAULT_PLAYBACK_PREFERENCES,
+    isPlaybackPreferences
+  );
   const [adaptivePrimaryHex, setAdaptivePrimaryHex] = useState<string | null>(null);
   const player = usePlayer(songs);
 
-  // اعمال یکپارچه‌ی تمام تنظیمات صدا و موتور DSP بر روی خروجی صوتی
+  const songsRef = useRef(songs);
+  const playbackPrefsRef = useRef(playbackPrefs);
+
+  useEffect(() => {
+    songsRef.current = songs;
+  }, [songs]);
+
+  useEffect(() => {
+    playbackPrefsRef.current = playbackPrefs;
+  }, [playbackPrefs]);
+
+  // اعمال یکپارچه‌ی تمام تنظیمات صدا و اکولایزر روی موتور DSP خروجی صوتی
+  useEffect(() => {
+    audioEffects.applySettings(equalizerSettings);
+  }, [equalizerSettings]);
+
   useEffect(() => {
     audioEffects.applySoundSettings(soundSettings);
   }, [soundSettings]);
-
-  // در صورت خالی بودن دیتابیس لوکال، ۳ آهنگ دمو به صورت خودکار بارگذاری شوند
-  useEffect(() => {
-    if (songs.length === 0) {
-      setSongs(DEMO_SONGS);
-    }
-  }, [songs.length, setSongs]);
 
   // بازیابی یکپارچه و سریع لینک‌های فایل‌های صوتی ذخیره‌شده در IndexedDB + بازیابی آخرین آهنگ پخش‌شده
   useEffect(() => {
@@ -190,15 +228,17 @@ function App() {
         );
       }
 
-      // بازیابی آخرین آهنگ در حال پخش نشست قبلی
-      const savedPlayback = readJSON<{ songId?: string; currentTime?: number } | null>(
-        STORAGE_KEYS.lastPlayback,
-        null
-      );
-      if (savedPlayback?.songId) {
-        const lastSong = restoredList.find((s) => s.id === savedPlayback.songId);
-        if (lastSong) {
-          player.restoreSong(lastSong);
+      // بازیابی آخرین آهنگ در حال پخش نشست قبلی (در صورت فعال بودن تنظیم)
+      if (playbackPrefsRef.current.rememberPlaybackPosition) {
+        const savedPlayback = readJSON<{ songId?: string; currentTime?: number } | null>(
+          STORAGE_KEYS.lastPlayback,
+          null
+        );
+        if (savedPlayback?.songId) {
+          const lastSong = restoredList.find((s) => s.id === savedPlayback.songId);
+          if (lastSong) {
+            player.restoreSong(lastSong);
+          }
         }
       }
     };
@@ -221,11 +261,35 @@ function App() {
       const files = await Promise.all(launchParams.files.map((handle) => handle.getFile()));
       const imported = await extractSongsBatched(files);
       if (imported.length === 0) return;
-      setSongs((prev) => {
-        const updated = [...prev, ...imported];
-        player.playSongFromList(imported[0], updated);
-        return updated;
-      });
+
+      const prefs = playbackPrefsRef.current;
+      const existing = songsRef.current;
+      const { unique, duplicates } = prefs.skipDuplicatesOnImport
+        ? partitionDuplicateSongs(imported, existing)
+        : { unique: imported, duplicates: [] as Song[] };
+
+      if (duplicates.length > 0) {
+        duplicates.forEach((dup) => {
+          if (dup.fileUrl.startsWith('blob:')) URL.revokeObjectURL(dup.fileUrl);
+          void deleteAudioBlob(dup.id);
+        });
+      }
+
+      if (unique.length > 0) {
+        const updated = [...existing, ...unique];
+        setSongs(updated);
+        if (prefs.autoPlayOnImport || !player.currentSong) {
+          player.playSongFromList(unique[0], updated);
+        }
+      } else if (duplicates.length > 0 && (prefs.autoPlayOnImport || !player.currentSong)) {
+        const firstDup = duplicates[0];
+        const matched = existing.find(
+          (s) => s.name === firstDup.name && s.artist === firstDup.artist
+        );
+        if (matched) {
+          player.playSongFromList(matched, existing);
+        }
+      }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -249,9 +313,15 @@ function App() {
     };
   }, [displaySettings.adaptiveArtworkAccent, player.currentSong?.cover, resolvedMode]);
 
+  const activeBackdrop =
+    displaySettings.adaptiveArtworkWallpaper && player.currentSong?.cover
+      ? player.currentSong.cover
+      : customBackground;
+
   const theme = getTheme(resolvedMode, colorPalette, {
     display: displaySettings,
     overridePrimaryHex: adaptivePrimaryHex,
+    hasWallpaper: Boolean(activeBackdrop),
   });
 
   // همگام‌سازی کلاس dark، فونت، مقیاس و کاهش انیمیشن
@@ -262,28 +332,59 @@ function App() {
     } else {
       root.classList.remove('dark');
     }
+    const scale = displaySettings.fontScale || 1;
     root.style.setProperty('--app-font', theme.fonts.main);
-    root.style.fontSize = `${Math.round(16 * (displaySettings.fontScale || 1) * 10) / 10}px`;
+    root.style.setProperty('--ui-scale', String(scale));
+    root.style.fontSize = `${(16 * scale).toFixed(2)}px`;
     root.setAttribute('data-density', displaySettings.listDensity);
     root.setAttribute('data-reduce-motion', displaySettings.reduceMotion ? 'true' : 'false');
+    document.body.style.backgroundColor = theme.colors.background;
+    document.body.style.color = theme.colors.textPrimary;
   }, [
     resolvedMode,
     theme.fonts.main,
+    theme.colors.background,
+    theme.colors.textPrimary,
     displaySettings.fontScale,
     displaySettings.listDensity,
     displaySettings.reduceMotion,
   ]);
 
+  /** ثبت خودکار زمان آخرین پخش برای تغییر ترک از طریق صف، کراس‌فید، گپ‌لس یا میانبرها */
+  useEffect(() => {
+    const currentId = player.currentSong?.id;
+    if (player.playToken <= 0 || !currentId) return;
+    const now = Date.now();
+    setSongs((prev) =>
+      prev.map((s) => (s.id === currentId ? { ...s, lastPlayedAt: now } : s))
+    );
+    setPlaylists((prev) =>
+      prev.map((p) => ({
+        ...p,
+        songs: p.songs.map((s) => (s.id === currentId ? { ...s, lastPlayedAt: now } : s)),
+      }))
+    );
+  }, [player.playToken, player.currentSong?.id, setPlaylists, setSongs]);
+
   /** وقتی یک پخش «واقعی» حساب شد، شمارنده‌ی پخش زیاد می‌شه و تاریخ پخش ثبت می‌شه */
   const handleSongPlayed = useCallback(
     (id: string) => {
+      const now = Date.now();
       setSongs((prev) =>
         prev.map((s) =>
-          s.id === id ? { ...s, playCount: s.playCount + 1, lastPlayedAt: Date.now() } : s
+          s.id === id ? { ...s, playCount: s.playCount + 1, lastPlayedAt: now } : s
         )
       );
+      setPlaylists((prev) =>
+        prev.map((p) => ({
+          ...p,
+          songs: p.songs.map((s) =>
+            s.id === id ? { ...s, playCount: s.playCount + 1, lastPlayedAt: now } : s
+          ),
+        }))
+      );
     },
-    [setSongs]
+    [setPlaylists, setSongs]
   );
 
   /** تغییر وضعیت آهنگ محبوب (Favorite) */
@@ -401,6 +502,22 @@ function App() {
     [setPlaylists]
   );
 
+  const handleAddSongsToPlaylist = useCallback(
+    (playlistId: string, selectedSongs: Song[]) => {
+      if (selectedSongs.length === 0) return;
+      setPlaylists((prev) =>
+        prev.map((p) => {
+          if (p.id !== playlistId) return p;
+          const existingIds = new Set(p.songs.map((s) => s.id));
+          const uniqueToAdd = selectedSongs.filter((s) => !existingIds.has(s.id));
+          if (uniqueToAdd.length === 0) return p;
+          return { ...p, songs: [...p.songs, ...uniqueToAdd] };
+        })
+      );
+    },
+    [setPlaylists]
+  );
+
   const deleteSong = useCallback(
     (id: string) => {
       setSongs((prev) => {
@@ -414,7 +531,30 @@ function App() {
         prev.map((p) => ({ ...p, songs: p.songs.filter((s) => s.id !== id) }))
       );
       player.removeSong(id);
-      deleteAudioBlob(id);
+      void deleteAudioBlob(id);
+    },
+    [player, setPlaylists, setSongs]
+  );
+
+  const handleBulkDeleteSongs = useCallback(
+    (ids: string[]) => {
+      if (ids.length === 0) return;
+      const idSet = new Set(ids);
+      setSongs((prev) => {
+        prev.forEach((s) => {
+          if (idSet.has(s.id) && s.fileUrl.startsWith('blob:')) {
+            URL.revokeObjectURL(s.fileUrl);
+          }
+        });
+        return prev.filter((s) => !idSet.has(s.id));
+      });
+      setPlaylists((prev) =>
+        prev.map((p) => ({ ...p, songs: p.songs.filter((s) => !idSet.has(s.id)) }))
+      );
+      ids.forEach((id) => {
+        player.removeSong(id);
+        void deleteAudioBlob(id);
+      });
     },
     [player, setPlaylists, setSongs]
   );
@@ -478,17 +618,26 @@ function App() {
       setCustomFolders((prev) => (prev.includes(trimmed) ? prev : [...prev, trimmed]));
       const idSet = new Set(songIds);
       setSongs((prev) => prev.map((s) => (idSet.has(s.id) ? { ...s, folder: trimmed } : s)));
+      setPlaylists((prev) =>
+        prev.map((p) => ({
+          ...p,
+          songs: p.songs.map((s) => (idSet.has(s.id) ? { ...s, folder: trimmed } : s)),
+        }))
+      );
       if (player.currentSong && idSet.has(player.currentSong.id)) {
         player.syncSong({ ...player.currentSong, folder: trimmed });
       }
     },
-    [player, setCustomFolders, setSongs]
+    [player, setCustomFolders, setPlaylists, setSongs]
   );
 
   const setTab = useCallback(
     (tab: string) => {
       if (tab === 'settings') {
-        setIsSettingsOpen(true);
+        setSettingsSubPage((prev) =>
+          isSettingsOpen ? prev : { page: 'main', token: Date.now() }
+        );
+        setIsSettingsOpen((prev) => !prev);
         return;
       }
       const index = tabs.findIndex((name) => name === tab);
@@ -500,7 +649,7 @@ function App() {
       }
       setIsSettingsOpen(false);
     },
-    [currentTabIndex]
+    [currentTabIndex, isSettingsOpen]
   );
 
   const handleNavigateFromSearch = useCallback(
@@ -555,13 +704,26 @@ function App() {
     const newSongs = await extractSongsBatched(extractedItems);
     if (newSongs.length === 0) return;
 
-    setSongs((prev) => {
-      const updated = [...prev, ...newSongs];
-      if (!player.currentSong) {
-        player.playSongFromList(newSongs[0], updated);
-      }
-      return updated;
-    });
+    const prefs = playbackPrefsRef.current;
+    const existing = songsRef.current;
+    const { unique, duplicates } = prefs.skipDuplicatesOnImport
+      ? partitionDuplicateSongs(newSongs, existing)
+      : { unique: newSongs, duplicates: [] as Song[] };
+
+    if (duplicates.length > 0) {
+      duplicates.forEach((dup) => {
+        if (dup.fileUrl.startsWith('blob:')) URL.revokeObjectURL(dup.fileUrl);
+        void deleteAudioBlob(dup.id);
+      });
+    }
+
+    if (unique.length === 0) return;
+
+    const updated = [...existing, ...unique];
+    setSongs(updated);
+    if (prefs.autoPlayOnImport || !player.currentSong) {
+      player.playSongFromList(unique[0], updated);
+    }
   };
 
   // انیمیشن جابه‌جایی صفحات به سبک One UI / Samsung Music بدون جمع شدن صفحه
@@ -601,6 +763,10 @@ function App() {
         <Settings
           songs={songs}
           setSongs={setSongs}
+          playlists={playlists}
+          setPlaylists={setPlaylists}
+          customFolders={customFolders}
+          setCustomFolders={setCustomFolders}
           t={t}
           language={language}
           setLanguage={setLanguage}
@@ -614,6 +780,8 @@ function App() {
           setSoundSettings={setSoundSettings}
           displaySettings={displaySettings}
           setDisplaySettings={setDisplaySettings}
+          playbackPrefs={playbackPrefs}
+          setPlaybackPrefs={setPlaybackPrefs}
           theme={theme}
           customBackground={customBackground}
           setCustomBackground={setCustomBackground}
@@ -625,6 +793,10 @@ function App() {
           setGlassCardCovers={setGlassCardCovers}
           sleepTimer={sleepTimer}
           onSetSleepTimer={setSleepTimer}
+          onPlayImported={handlePlaySongFromList}
+          onDeleteSongsBatch={handleBulkDeleteSongs}
+          onCloseSettings={() => setIsSettingsOpen(false)}
+          initialSubPage={settingsSubPage}
         />
       );
     }
@@ -648,6 +820,8 @@ function App() {
             language={language}
             isPlaying={isPlaying}
             glassCardCovers={glassCardCovers}
+            homeLayout={displaySettings.homeLayout ?? 'widget'}
+            reduceMotion={displaySettings.reduceMotion}
           />
         );
       case 'allSongs':
@@ -660,7 +834,10 @@ function App() {
             onPlaySongFromList={handlePlaySongFromList}
             onCreatePlaylist={handleCreatePlaylist}
             addToQueue={player.addToQueue}
+            onPlayNext={player.playNextSongs}
             onDeleteSong={deleteSong}
+            onBulkDeleteSongs={handleBulkDeleteSongs}
+            confirmBeforeDelete={playbackPrefs.confirmBeforeDelete}
             onUpdateSong={updateSong}
             onAddSongToPlaylist={addSongToPlaylist}
             onToggleFavorite={toggleFavoriteSong}
@@ -678,7 +855,10 @@ function App() {
             isPlaying={isPlaying}
             onPlaySongFromList={handlePlaySongFromList}
             addToQueue={player.addToQueue}
+            onPlayNext={player.playNextSongs}
             onDeleteSong={deleteSong}
+            onBulkDeleteSongs={handleBulkDeleteSongs}
+            confirmBeforeDelete={playbackPrefs.confirmBeforeDelete}
             onUpdateSong={updateSong}
             onAddSongToPlaylist={addSongToPlaylist}
             onToggleFavorite={toggleFavoriteSong}
@@ -705,7 +885,10 @@ function App() {
             onPlaySongFromList={handlePlaySongFromList}
             onCreatePlaylist={handleCreatePlaylist}
             addToQueue={player.addToQueue}
+            onPlayNext={player.playNextSongs}
             onDeleteSong={deleteSong}
+            onBulkDeleteSongs={handleBulkDeleteSongs}
+            confirmBeforeDelete={playbackPrefs.confirmBeforeDelete}
             onUpdateSong={updateSong}
             onAddSongToPlaylist={addSongToPlaylist}
             onToggleFavorite={toggleFavoriteSong}
@@ -728,7 +911,10 @@ function App() {
             onPlaySongFromList={handlePlaySongFromList}
             onCreatePlaylist={handleCreatePlaylist}
             addToQueue={player.addToQueue}
+            onPlayNext={player.playNextSongs}
             onDeleteSong={deleteSong}
+            onBulkDeleteSongs={handleBulkDeleteSongs}
+            confirmBeforeDelete={playbackPrefs.confirmBeforeDelete}
             onUpdateSong={updateSong}
             onAddSongToPlaylist={addSongToPlaylist}
             onToggleFavorite={toggleFavoriteSong}
@@ -757,7 +943,11 @@ function App() {
             onPlaySongFromList={handlePlaySongFromList}
             onCreatePlaylist={handleCreatePlaylist}
             addToQueue={player.addToQueue}
+            onPlayNext={player.playNextSongs}
             onDeleteSong={deleteSong}
+            onBulkDeleteSongs={handleBulkDeleteSongs}
+            confirmBeforeDelete={playbackPrefs.confirmBeforeDelete}
+            skipDuplicatesOnImport={playbackPrefs.skipDuplicatesOnImport}
             onUpdateSong={updateSong}
             onAddSongToPlaylist={addSongToPlaylist}
             onToggleFavorite={toggleFavoriteSong}
@@ -774,11 +964,6 @@ function App() {
         return null;
     }
   };
-
-  const activeBackdrop =
-    displaySettings.adaptiveArtworkWallpaper && player.currentSong?.cover
-      ? player.currentSong.cover
-      : customBackground;
 
   return (
     <MotionConfig reducedMotion={displaySettings.reduceMotion ? 'always' : 'user'}>
@@ -811,20 +996,24 @@ function App() {
             zIndex: 0,
           }}
         >
-          <div
+          <img
+            src={activeBackdrop}
+            alt=""
             style={{
               position: 'absolute',
-              inset: '-24px',
-              backgroundImage: `url(${activeBackdrop})`,
-              backgroundSize: 'cover',
-              backgroundPosition: 'center',
+              inset: '-28px',
+              width: 'calc(100% + 56px)',
+              height: 'calc(100% + 56px)',
+              objectFit: 'cover',
+              objectPosition: 'center',
+              display: 'block',
               filter: `blur(${
                 displaySettings.adaptiveArtworkWallpaper && player.currentSong?.cover
                   ? Math.max(24, customBgBlur)
                   : customBgBlur
               }px)`,
               transform: 'scale(1.06)',
-              transition: displaySettings.reduceMotion ? 'none' : 'filter 0.3s ease, background-image 0.45s ease',
+              transition: displaySettings.reduceMotion ? 'none' : 'filter 0.3s ease, opacity 0.35s ease',
             }}
           />
           <div
@@ -832,16 +1021,15 @@ function App() {
               position: 'absolute',
               inset: 0,
               backgroundColor: theme.isDark
-                ? `rgba(0, 0, 0, ${customBgDim / 100})`
-                : `rgba(255, 255, 255, ${customBgDim / 100})`,
-              backdropFilter: 'saturate(130%)',
-              transition: displaySettings.reduceMotion ? 'none' : 'background-color 0.3s ease',
+                ? `rgba(0, 0, 0, ${((customBgDim * 0.85) / 100).toFixed(3)})`
+                : `rgba(255, 255, 255, ${((customBgDim * 0.45) / 100).toFixed(3)})`,
+              transition: displaySettings.reduceMotion ? 'none' : 'background-color 0.25s ease',
             }}
           />
         </div>
       )}
 
-      {/* هاله نور پس‌زمینه زنده و سیال به سبک اپل موزیک */}
+      {/* هاله نور پس‌زمینه زنده و سیال */}
       {displaySettings.ambientGlow && (
       <div
         aria-hidden="true"
@@ -851,7 +1039,7 @@ function App() {
           pointerEvents: 'none',
           zIndex: 0,
           overflow: 'hidden',
-          opacity: activeBackdrop ? 0.45 : 1,
+          opacity: activeBackdrop ? 0.22 : 1,
           transition: 'opacity 0.4s ease',
         }}
       >
@@ -865,9 +1053,11 @@ function App() {
             minWidth: '320px',
             minHeight: '320px',
             borderRadius: '50%',
-            background: `radial-gradient(circle, ${theme.colors.primary}38 0%, ${theme.colors.glow || theme.colors.primary}18 50%, transparent 70%)`,
+            background: theme.isDark
+              ? `radial-gradient(circle, ${theme.colors.primary}38 0%, ${theme.colors.glow || theme.colors.primary}18 50%, transparent 70%)`
+              : `radial-gradient(circle, ${theme.colors.primary}3d 0%, ${theme.colors.glow || theme.colors.primary}1f 52%, transparent 72%)`,
             filter: 'blur(75px)',
-            opacity: theme.isDark ? 0.75 : 0.45,
+            opacity: theme.isDark ? 0.75 : 0.72,
             transform: 'translate3d(0,0,0)',
             transition: 'background 0.4s ease',
           }}
@@ -882,9 +1072,11 @@ function App() {
             minWidth: '360px',
             minHeight: '360px',
             borderRadius: '50%',
-            background: `radial-gradient(circle, ${theme.colors.accent || theme.colors.primary}30 0%, ${theme.colors.secondary || theme.colors.primary}16 50%, transparent 70%)`,
+            background: theme.isDark
+              ? `radial-gradient(circle, ${theme.colors.accent || theme.colors.primary}30 0%, ${theme.colors.secondary || theme.colors.primary}16 50%, transparent 70%)`
+              : `radial-gradient(circle, ${theme.colors.accent || theme.colors.primary}34 0%, ${theme.colors.secondary || theme.colors.primary}1c 52%, transparent 72%)`,
             filter: 'blur(90px)',
-            opacity: theme.isDark ? 0.65 : 0.38,
+            opacity: theme.isDark ? 0.65 : 0.65,
             transform: 'translate3d(0,0,0)',
             transition: 'background 0.4s ease',
           }}
@@ -899,15 +1091,19 @@ function App() {
             minWidth: '260px',
             minHeight: '260px',
             borderRadius: '50%',
-            background: `radial-gradient(circle, ${theme.colors.secondary || theme.colors.primary}24 0%, transparent 70%)`,
+            background: theme.isDark
+              ? `radial-gradient(circle, ${theme.colors.secondary || theme.colors.primary}24 0%, transparent 70%)`
+              : `radial-gradient(circle, ${theme.colors.glow || theme.colors.primary}2b 0%, transparent 72%)`,
             filter: 'blur(80px)',
-            opacity: theme.isDark ? 0.55 : 0.32,
+            opacity: theme.isDark ? 0.55 : 0.58,
             transform: 'translate3d(0,0,0)',
             transition: 'background 0.4s ease',
           }}
         />
       </div>
       )}
+
+      <OfflineIndicator theme={theme} t={t} isRTL={language === 'fa'} />
 
       <TopBar
         currentTab={isSettingsOpen ? 'settings' : currentTab}
@@ -918,6 +1114,10 @@ function App() {
         playlists={playlists}
         customFolders={customFolders}
         onPlaySong={handlePlaySongFromList}
+        onPlayNext={player.playNextSongs}
+        onAddToQueue={player.addToQueue}
+        onAddSongsToPlaylist={handleAddSongsToPlaylist}
+        onCreatePlaylist={handleCreatePlaylist}
         onSearchNavigate={handleNavigateFromSearch}
       />
 
@@ -977,6 +1177,7 @@ function App() {
         <PlayerBar
           currentSong={player.currentSong}
           queue={player.queue}
+          currentQueueIndex={player.currentQueueIndex}
           removeFromQueue={player.removeFromQueueAt}
           playNext={player.playNext}
           playPrev={player.playPrev}
@@ -988,6 +1189,7 @@ function App() {
           playToken={player.playToken}
           onSongPlayed={handleSongPlayed}
           onToggleFavorite={toggleFavoriteSong}
+          onUpdateSong={updateSong}
           t={t}
           theme={theme}
           onPlayStateChange={setIsPlaying}
@@ -1004,6 +1206,7 @@ function App() {
           peekNext={player.peekNext}
           soundSettings={soundSettings}
           displaySettings={displaySettings}
+          playbackPrefs={playbackPrefs}
         />
       </div>
 
@@ -1016,7 +1219,7 @@ function App() {
             zIndex: 999999,
             borderRadius: '24px',
             border: `2px dashed ${theme.colors.primary}`,
-            backgroundColor: theme.isDark ? 'rgba(12, 10, 24, 0.78)' : 'rgba(255, 255, 255, 0.82)',
+            backgroundColor: theme.colors.surfaceHover || theme.colors.surface,
             backdropFilter: 'blur(20px)',
             WebkitBackdropFilter: 'blur(20px)',
             display: 'flex',
@@ -1028,10 +1231,10 @@ function App() {
           }}
         >
           <Upload size={44} color={theme.colors.primary} />
-          <div style={{ fontSize: '20px', fontWeight: 700, color: theme.colors.textPrimary }}>
+          <div style={{ fontSize: '1.25rem', fontWeight: 700, color: theme.colors.textPrimary }}>
             {t.dropAudioTitle || 'فایل یا پوشه موسیقی را اینجا رها کنید'}
           </div>
-          <div style={{ fontSize: '14px', color: theme.colors.textSecondary }}>
+          <div style={{ fontSize: '0.875rem', color: theme.colors.textSecondary }}>
             {t.dropAudioHint || 'برای افزودن فوری به کتابخانه رها کنید'}
           </div>
         </div>

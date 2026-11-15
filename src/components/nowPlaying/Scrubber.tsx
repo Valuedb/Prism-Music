@@ -123,7 +123,7 @@ export const Scrubber = memo(({
           display: 'flex',
           justifyContent: 'space-between',
           marginTop: '2px',
-          fontSize: '12px',
+          fontSize: '0.75rem',
           fontWeight: '500',
           color: 'rgba(255, 255, 255, 0.6)',
           fontVariantNumeric: 'tabular-nums',

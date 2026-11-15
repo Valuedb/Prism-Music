@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
   Play,
   Pause,
@@ -14,12 +15,17 @@ import {
   Music,
   ChevronLeft,
   ChevronRight,
+  Maximize2,
   Check,
   X,
 } from 'lucide-react';
-import type { Playlist, SleepTimerState, Song } from '../types';
+import type { HomeLayoutStyle, Playlist, SleepTimerState, Song } from '../types';
 import type { SearchNavigateTarget } from '../components/SearchBar';
 import { CoverImage } from '../components/CoverImage';
+import { MarqueeText } from '../components/MarqueeText';
+import { IOSSquircleIcon } from '../components/IOSSettingsPrimitives';
+import { audioEffects } from '../player/audioEffects';
+import { withAlpha } from '../utils/color';
 
 interface HomeProps {
   songs: Song[];
@@ -37,6 +43,8 @@ interface HomeProps {
   language: 'fa' | 'en';
   isPlaying?: boolean;
   glassCardCovers?: boolean;
+  homeLayout?: HomeLayoutStyle;
+  reduceMotion?: boolean;
 }
 
 const formatTrackDuration = (seconds?: number): string => {
@@ -79,6 +87,10 @@ interface TopArtistEntry {
   cover: string;
 }
 
+const WAVE_REST_PROFILE = [0.24, 0.4, 0.58, 0.78, 0.94, 0.78, 0.58, 0.4, 0.24] as const;
+const WAVE_ACTIVE_ENVELOPE = [0.46, 0.66, 0.82, 0.94, 1.0, 0.94, 0.82, 0.66, 0.46] as const;
+const IOS_EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
+
 export const Home: React.FC<HomeProps> = ({
   songs,
   playlists,
@@ -95,8 +107,18 @@ export const Home: React.FC<HomeProps> = ({
   language,
   isPlaying = false,
   glassCardCovers = true,
+  homeLayout = 'widget',
+  reduceMotion = false,
 }) => {
   const isRTL = language === 'fa';
+  const [viewportWidth, setViewportWidth] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth : 1280
+  );
+  const isSmallPhone = viewportWidth < 480;
+  const isMobile = viewportWidth < 640;
+  const isTablet = viewportWidth >= 640 && viewportWidth < 960;
+  const isDesktop = viewportWidth >= 960;
+  const isWideDesktop = viewportWidth >= 1160;
   const [pickSeed, setPickSeed] = useState(0);
   const [sleepMenuOpen, setSleepMenuOpen] = useState(false);
   const [nowTs, setNowTs] = useState(() => Date.now());
@@ -104,12 +126,20 @@ export const Home: React.FC<HomeProps> = ({
   const [hoveredHeroSong, setHoveredHeroSong] = useState(false);
   const [hoveredQuickId, setHoveredQuickId] = useState<string | null>(null);
   const [hoveredArtist, setHoveredArtist] = useState<string | null>(null);
+  const [hoveredStatIdx, setHoveredStatIdx] = useState<number | null>(null);
   const sleepButtonRef = useRef<HTMLButtonElement>(null);
   const sleepPortalRef = useRef<HTMLDivElement>(null);
+  const waveBarsRef = useRef<(HTMLDivElement | null)[]>([]);
   const [sleepMenuPos, setSleepMenuPos] = useState<{ top: number; left: number }>({
     top: 0,
     left: 0,
   });
+
+  useEffect(() => {
+    const onResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   // به‌روزرسانی شمارنده تایمر خواب فقط وقتی تایمر زمان‌دار فعال است
   useEffect(() => {
@@ -134,7 +164,7 @@ export const Home: React.FC<HomeProps> = ({
     setSleepMenuPos({ top, left });
   }, [isRTL, sleepTimer.mode]);
 
-  // بستن منوی تایمر خواب با کلیک بیرون یا Escape و همگام‌سازی مختصات هنگام اسکرول/تغییر اندازه
+  // بستن منوی تایمر خواب با کلیک بیرون یا Escape
   useEffect(() => {
     if (!sleepMenuOpen) return;
     updateSleepMenuPos();
@@ -163,7 +193,7 @@ export const Home: React.FC<HomeProps> = ({
     };
   }, [sleepMenuOpen, updateSleepMenuPos]);
 
-  // آهنگ اصلی برای باکس Continue Listening
+  // آهنگ اصلی برای باکس Continue Listening / Now Playing
   const heroSong = useMemo<Song | null>(() => {
     if (currentSong) return currentSong;
     if (songs.length === 0) return null;
@@ -177,6 +207,96 @@ export const Home: React.FC<HomeProps> = ({
   const isHeroPlaying = Boolean(
     isPlaying && currentSong && heroSong && currentSong.id === heroSong.id
   );
+
+  // انیمیشن اکولایزر گرافیکی زنده با کنترل داینامیک گین خودکار (AGC) بدون قفل شدن در سقف
+  useEffect(() => {
+    if (homeLayout !== 'widget') return;
+
+    if (!isHeroPlaying) {
+      waveBarsRef.current.forEach((bar, idx) => {
+        if (!bar) return;
+        const rest = WAVE_REST_PROFILE[idx] ?? 0.5;
+        bar.style.transform = `scaleY(${rest.toFixed(3)})`;
+      });
+      return;
+    }
+
+    let rafId = 0;
+    const bins = new Uint8Array(audioEffects.getFrequencyBinCount() || 64);
+    const smoothed = new Float32Array(WAVE_ACTIVE_ENVELOPE.length);
+    for (let i = 0; i < smoothed.length; i++) {
+      smoothed[i] = WAVE_REST_PROFILE[i];
+    }
+    let runningPeak = 95;
+    let prevAvg = 0;
+
+    const tick = (now: number) => {
+      const ok = audioEffects.getFrequencyData(bins);
+      const limit = Math.min(bins.length - 1, 48);
+      let framePeak = 0;
+      let frameSum = 0;
+      if (ok && limit > 0) {
+        for (let i = 1; i <= limit; i++) {
+          const val = bins[i];
+          if (val > framePeak) framePeak = val;
+          frameSum += val;
+        }
+      }
+
+      const hasAudio = ok && framePeak > 2;
+      if (hasAudio) {
+        runningPeak = Math.max(42, runningPeak * 0.982, framePeak * 1.04);
+      }
+      const frameAvg = hasAudio ? frameSum / limit / runningPeak : 0;
+      const flux = Math.max(0, frameAvg - prevAvg) * 1.8;
+      prevAvg = prevAvg * 0.72 + frameAvg * 0.28;
+
+      const centerIdx = (WAVE_ACTIVE_ENVELOPE.length - 1) / 2;
+
+      for (let i = 0; i < WAVE_ACTIVE_ENVELOPE.length; i++) {
+        const bar = waveBarsRef.current[i];
+        if (!bar) continue;
+        const distFromCenter = Math.abs(i - centerIdx);
+        const envelope = WAVE_ACTIVE_ENVELOPE[i];
+
+        // موج ارگانیک نرم برای زنده نگه‌داشتن حرکت بین فریم‌ها و ایجاد تنوع بین چپ و راست
+        const organicWave =
+          0.5 +
+          0.5 *
+            Math.sin(now * 0.0085 - distFromCenter * 0.95 + (i - centerIdx) * 0.28) *
+            Math.cos(now * 0.0041 + i * 0.65);
+
+        let energy: number;
+        if (!hasAudio) {
+          energy = 0.22 + organicWave * 0.74;
+        } else {
+          // نگاشت باندهای فرکانسی به فاصله از مرکز: مرکز=بیس و پانچ، اطراف=وکال و زیر
+          const bandStart = Math.max(1, Math.floor((distFromCenter / centerIdx) * 18) + 1);
+          const bandEnd = Math.min(limit, bandStart + 5);
+          let bandSum = 0;
+          for (let b = bandStart; b <= bandEnd; b++) {
+            bandSum += bins[b];
+          }
+          const bandNorm = bandSum / ((bandEnd - bandStart + 1) * runningPeak);
+          const dynamicContrast = Math.pow(Math.min(1, bandNorm * 1.15), 1.25);
+          energy = Math.min(
+            1,
+            0.16 + dynamicContrast * 0.64 + flux * 0.35 + organicWave * 0.22
+          );
+        }
+
+        const target = Math.max(0.18, Math.min(1.06, envelope * (0.24 + energy * 0.82)));
+        const prev = smoothed[i];
+        const next = prev + (target - prev) * (target > prev ? 0.56 : 0.28);
+        smoothed[i] = next;
+        bar.style.transform = `scaleY(${next.toFixed(3)})`;
+      }
+      rafId = window.requestAnimationFrame(tick);
+    };
+
+    rafId = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(rafId);
+  }, [isHeroPlaying, homeLayout]);
 
   // محاسبه آمار کتابخانه و آرتیست‌های برتر
   const {
@@ -229,7 +349,7 @@ export const Home: React.FC<HomeProps> = ({
     };
   }, [songs, customFolders, t.unknownArtist]);
 
-  // انتخاب ۶ آهنگ پیشنهادی با قابلیت Refresh بدون پرش ناخواسته
+  // انتخاب ۶ آهنگ پیشنهادی با قابلیت Refresh
   const quickPicks = useMemo<Song[]>(() => {
     if (songs.length === 0) return [];
     const scored = songs.map((song, idx) => {
@@ -321,1174 +441,1855 @@ export const Home: React.FC<HomeProps> = ({
       : t.sleepTimer || 'تایمر خواب';
 
   const topArtist = topArtists[0] || null;
-  const surfaceHoverBg = theme.isDark
-    ? 'rgba(255, 255, 255, 0.09)'
-    : 'rgba(255, 255, 255, 0.88)';
-  const menuBg = theme.isDark
-    ? 'rgba(22, 18, 42, 0.96)'
-    : 'rgba(255, 255, 255, 0.98)';
-  const menuItemHover = theme.isDark
-    ? 'rgba(255, 255, 255, 0.12)'
-    : 'rgba(0, 0, 0, 0.07)';
-
+  const surfaceHoverBg =
+    theme.colors.surfaceHover || withAlpha(theme.colors.surfaceSolid || '#ffffff', 0.9);
+  const menuBg = withAlpha(theme.colors.surfaceSolid || theme.colors.background, 0.97);
+  const menuItemHover = withAlpha(theme.colors.primary, theme.isDark ? 0.16 : 0.1);
+  const onPrimaryColor = theme.colors.onPrimary || '#ffffff';
   const DirectionalChevron = isRTL ? ChevronLeft : ChevronRight;
+  const hairline = theme.isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(60, 60, 67, 0.12)';
+
+  const sectionAnim = (delay = 0) =>
+    reduceMotion
+      ? {}
+      : {
+          initial: { opacity: 0, y: 10 },
+          animate: { opacity: 1, y: 0 },
+          transition: { duration: 0.26, delay, ease: IOS_EASE },
+        };
+
+  // کارت دسترسی سریع (مشترک در هر دو چیدمان)
+  const renderQuickAccessCard = () => (
+    <motion.div
+      {...sectionAnim(0.06)}
+      style={{
+        backgroundColor: theme.colors.surface,
+        backdropFilter: 'blur(24px) saturate(170%)',
+        WebkitBackdropFilter: 'blur(24px) saturate(170%)',
+        borderRadius: theme.radius.xl || '20px',
+        border: `1px solid ${theme.colors.border}`,
+        padding: isMobile ? '14px 14px' : '18px 20px',
+        display: 'flex',
+        flexDirection: 'column',
+        minWidth: 0,
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          marginBottom: '14px',
+        }}
+      >
+        <h2
+          style={{
+            margin: 0,
+            fontSize: '1rem',
+            fontWeight: 700,
+            color: theme.colors.textPrimary,
+          }}
+        >
+          {t.quickAccess || 'دسترسی سریع'}
+        </h2>
+        <button
+          onClick={() => onSelectTab('playlists')}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '4px',
+            background: 'none',
+            border: 'none',
+            color: theme.colors.primary,
+            fontSize: '0.7813rem',
+            fontWeight: 600,
+            cursor: 'pointer',
+            padding: 0,
+          }}
+        >
+          <span>{t.viewAll || 'مشاهده همه'}</span>
+          <DirectionalChevron size={14} />
+        </button>
+      </div>
+
+      {quickAccessItems.length === 0 ? (
+        <div
+          style={{
+            padding: '14px 0',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '12px',
+          }}
+        >
+          <p style={{ margin: 0, fontSize: '0.8125rem', color: theme.colors.textSecondary }}>
+            {t.noQuickAccess || 'هنوز پلی‌لیست یا فولدری ساخته نشده است.'}
+          </p>
+          <div>
+            <button
+              onClick={() => onSelectTab('playlists')}
+              style={{
+                padding: '8px 14px',
+                borderRadius: '10px',
+                border: `1px solid ${theme.colors.border}`,
+                backgroundColor: withAlpha(theme.colors.primary, theme.isDark ? 0.1 : 0.07),
+                color: theme.colors.textPrimary,
+                fontSize: '0.8125rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              {t.createPlaylistOrFolder || 'ساخت پلی‌لیست'}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {quickAccessItems.map((item) => {
+            const keyId = `${item.kind}:${item.id}`;
+            const isHovered = hoveredQuickId === keyId;
+
+            return (
+              <motion.div
+                key={keyId}
+                whileTap={reduceMotion ? undefined : { scale: 0.985 }}
+                transition={{ duration: 0.12 }}
+                onClick={() =>
+                  onNavigateToItem({
+                    tab: item.kind === 'playlist' ? 'playlists' : 'folders',
+                    key: item.id,
+                  })
+                }
+                onMouseEnter={() => setHoveredQuickId(keyId)}
+                onMouseLeave={() => setHoveredQuickId(null)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '12px',
+                  padding: '8px 10px',
+                  borderRadius: '12px',
+                  backgroundColor: isHovered ? menuItemHover : 'transparent',
+                  cursor: 'pointer',
+                  transition: 'background-color 0.16s ease',
+                }}
+              >
+                {item.cover ? (
+                  <CoverImage
+                    src={item.cover}
+                    alt={item.name}
+                    iconSize={16}
+                    style={{
+                      width: 42,
+                      height: 42,
+                      borderRadius: '10px',
+                      objectFit: 'cover',
+                      flexShrink: 0,
+                    }}
+                  />
+                ) : (
+                  <div
+                    style={{
+                      width: 42,
+                      height: 42,
+                      borderRadius: '10px',
+                      backgroundColor:
+                        item.kind === 'folder'
+                          ? 'rgba(10, 132, 255, 0.15)'
+                          : 'rgba(94, 92, 230, 0.15)',
+                      color: item.kind === 'folder' ? '#0a84ff' : '#5e5ce6',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexShrink: 0,
+                    }}
+                  >
+                    {item.kind === 'folder' ? <Folder size={18} /> : <ListMusic size={18} />}
+                  </div>
+                )}
+
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div
+                    style={{
+                      fontSize: '0.875rem',
+                      fontWeight: 600,
+                      color: theme.colors.textPrimary,
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {item.name}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: '0.75rem',
+                      color: theme.colors.textSecondary,
+                      fontVariantNumeric: 'tabular-nums',
+                      marginTop: '2px',
+                    }}
+                  >
+                    {item.kind === 'folder'
+                      ? t.folderLabel || 'فولدر'
+                      : t.playlistLabel || 'پلی‌لیست'}{' '}
+                    · {item.songs.length} {t.tracksCount || 'آهنگ'}
+                  </div>
+                </div>
+
+                {item.songs.length > 0 && (
+                  <motion.button
+                    whileHover={reduceMotion ? undefined : { scale: 1.08 }}
+                    whileTap={reduceMotion ? undefined : { scale: 0.9 }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onPlaySongFromList(item.songs[0], item.songs);
+                    }}
+                    title={t.playAll || 'پخش'}
+                    style={{
+                      width: '30px',
+                      height: '30px',
+                      borderRadius: '50%',
+                      border: 'none',
+                      backgroundColor: theme.colors.primary,
+                      color: onPrimaryColor,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      cursor: 'pointer',
+                      flexShrink: 0,
+                    }}
+                  >
+                    <Play size={13} fill={onPrimaryColor} />
+                  </motion.button>
+                )}
+              </motion.div>
+            );
+          })}
+        </div>
+      )}
+    </motion.div>
+  );
+
+  // کارت آرتیست‌های برتر (مشترک در هر دو چیدمان)
+  const renderTopArtistsCard = () => (
+    <motion.div
+      {...sectionAnim(0.1)}
+      style={{
+        backgroundColor: theme.colors.surface,
+        backdropFilter: 'blur(24px) saturate(170%)',
+        WebkitBackdropFilter: 'blur(24px) saturate(170%)',
+        borderRadius: theme.radius.xl || '20px',
+        border: `1px solid ${theme.colors.border}`,
+        padding: isMobile ? '14px 14px' : '18px 20px',
+        display: 'flex',
+        flexDirection: 'column',
+        minWidth: 0,
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          marginBottom: '14px',
+        }}
+      >
+        <h2
+          style={{
+            margin: 0,
+            fontSize: '1rem',
+            fontWeight: 700,
+            color: theme.colors.textPrimary,
+          }}
+        >
+          {t.topArtists || 'آرتیست‌های برتر'}
+        </h2>
+        <button
+          onClick={() => onSelectTab('artists')}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '4px',
+            background: 'none',
+            border: 'none',
+            color: theme.colors.primary,
+            fontSize: '0.7813rem',
+            fontWeight: 600,
+            cursor: 'pointer',
+            padding: 0,
+          }}
+        >
+          <span>{t.viewAll || 'مشاهده همه'}</span>
+          <DirectionalChevron size={14} />
+        </button>
+      </div>
+
+      {topArtists.length === 0 ? (
+        <p style={{ margin: 0, fontSize: '0.8125rem', color: theme.colors.textSecondary }}>
+          {t.noArtists || 'هنوز آرتیستی در کتابخانه وجود ندارد.'}
+        </p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {topArtists.slice(0, 4).map((artist) => {
+            const isHovered = hoveredArtist === artist.name;
+            return (
+              <motion.div
+                key={artist.name}
+                whileTap={reduceMotion ? undefined : { scale: 0.985 }}
+                transition={{ duration: 0.12 }}
+                onClick={() =>
+                  onNavigateToItem({ tab: 'artists', key: artist.name })
+                }
+                onMouseEnter={() => setHoveredArtist(artist.name)}
+                onMouseLeave={() => setHoveredArtist(null)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '12px',
+                  padding: '8px 10px',
+                  borderRadius: '12px',
+                  backgroundColor: isHovered ? menuItemHover : 'transparent',
+                  cursor: 'pointer',
+                  transition: 'background-color 0.16s ease',
+                }}
+              >
+                <CoverImage
+                  src={artist.cover}
+                  alt={artist.name}
+                  iconSize={16}
+                  style={{
+                    width: 42,
+                    height: 42,
+                    borderRadius: '50%',
+                    objectFit: 'cover',
+                    flexShrink: 0,
+                  }}
+                />
+
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div
+                    style={{
+                      fontSize: '0.875rem',
+                      fontWeight: 600,
+                      color: theme.colors.textPrimary,
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {artist.name}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: '0.75rem',
+                      color: theme.colors.textSecondary,
+                      fontVariantNumeric: 'tabular-nums',
+                      marginTop: '2px',
+                    }}
+                  >
+                    {artist.songs.length} {t.tracksCount || 'آهنگ'} ·{' '}
+                    {artist.totalPlays} {t.plays || 'پخش'}
+                  </div>
+                </div>
+
+                <motion.button
+                  whileHover={reduceMotion ? undefined : { scale: 1.08 }}
+                  whileTap={reduceMotion ? undefined : { scale: 0.9 }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onPlaySongFromList(artist.songs[0], artist.songs);
+                  }}
+                  title={t.playAll || 'پخش'}
+                  style={{
+                    width: '30px',
+                    height: '30px',
+                    borderRadius: '50%',
+                    border: 'none',
+                    backgroundColor: theme.colors.primary,
+                    color: onPrimaryColor,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: 'pointer',
+                    flexShrink: 0,
+                  }}
+                >
+                  <Play size={13} fill={onPrimaryColor} />
+                </motion.button>
+              </motion.div>
+            );
+          })}
+        </div>
+      )}
+    </motion.div>
+  );
+
+  // ردیف انتخاب سریع (Quick Picks)
+  const renderQuickPicksSection = () => (
+    <motion.div {...sectionAnim(0.12)} style={{ marginBottom: isMobile ? '18px' : '26px' }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          marginBottom: '12px',
+          gap: '12px',
+          flexWrap: 'wrap',
+        }}
+      >
+        <h2
+          style={{
+            margin: 0,
+            fontSize: '1.0625rem',
+            fontWeight: 700,
+            color: theme.colors.textPrimary,
+          }}
+        >
+          {t.quickPicks || 'انتخاب سریع'}
+        </h2>
+
+        {songs.length > 1 && (
+          <motion.button
+            whileHover={reduceMotion ? undefined : { scale: 1.03 }}
+            whileTap={reduceMotion ? undefined : { scale: 0.94 }}
+            onClick={() => setPickSeed((s) => s + 1)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              background: 'none',
+              border: `1px solid ${theme.colors.border}`,
+              borderRadius: '10px',
+              padding: '6px 12px',
+              color: theme.colors.textSecondary,
+              fontSize: '0.7813rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+              transition: 'color 0.15s ease, border-color 0.15s ease',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = theme.colors.textPrimary;
+              e.currentTarget.style.borderColor = theme.colors.primary + '88';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = theme.colors.textSecondary;
+              e.currentTarget.style.borderColor = theme.colors.border;
+            }}
+          >
+            <RefreshCw size={13} />
+            <span>{t.refreshPicks || 'تغییر پیشنهادها'}</span>
+          </motion.button>
+        )}
+      </div>
+
+      {quickPicks.length === 0 ? (
+        <p style={{ color: theme.colors.textSecondary, fontSize: '0.875rem' }}>
+          {t.noSongs || 'هنوز آهنگی اضافه نشده است.'}
+        </p>
+      ) : (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: isMobile
+              ? '1fr'
+              : 'repeat(auto-fit, minmax(min(100%, 245px), 1fr))',
+            gap: isMobile ? '8px' : '10px',
+          }}
+        >
+          {quickPicks.map((song) => {
+            const isCurrent = currentSong?.id === song.id;
+            const isHovered = hoveredSongId === song.id;
+
+            return (
+              <motion.div
+                key={song.id}
+                whileTap={reduceMotion ? undefined : { scale: 0.985 }}
+                transition={{ duration: 0.12 }}
+                onClick={() => onPlaySongFromList(song, quickPicks)}
+                onMouseEnter={() => setHoveredSongId(song.id)}
+                onMouseLeave={() => setHoveredSongId(null)}
+                style={{
+                  position: 'relative',
+                  overflow: 'hidden',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '12px',
+                  padding: '10px 12px',
+                  borderRadius: '14px',
+                  border: `1px solid ${
+                    isCurrent
+                      ? theme.colors.primary
+                      : isHovered
+                      ? theme.colors.primary + '66'
+                      : theme.colors.border
+                  }`,
+                  backgroundColor: isHovered ? surfaceHoverBg : theme.colors.surface,
+                  backdropFilter: 'blur(20px) saturate(160%)',
+                  WebkitBackdropFilter: 'blur(20px) saturate(160%)',
+                  cursor: 'pointer',
+                  transition: 'background-color 0.18s ease, border-color 0.18s ease',
+                }}
+              >
+                {glassCardCovers && song.cover && (
+                  <div
+                    aria-hidden="true"
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      backgroundImage: `url(${song.cover})`,
+                      backgroundSize: 'cover',
+                      backgroundPosition: 'center',
+                      filter: 'blur(18px)',
+                      opacity: theme.isDark ? 0.16 : 0.12,
+                      pointerEvents: 'none',
+                    }}
+                  />
+                )}
+
+                <div style={{ position: 'relative', width: 44, height: 44, flexShrink: 0 }}>
+                  <CoverImage
+                    src={song.cover}
+                    alt={song.name}
+                    iconSize={18}
+                    style={{
+                      width: 44,
+                      height: 44,
+                      borderRadius: '10px',
+                      objectFit: 'cover',
+                    }}
+                  />
+                  {(isHovered || isCurrent) && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        inset: 0,
+                        borderRadius: '10px',
+                        backgroundColor: 'rgba(0, 0, 0, 0.45)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <Play size={16} fill="#ffffff" color="#ffffff" />
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ flex: 1, minWidth: 0, position: 'relative', zIndex: 1 }}>
+                  <div
+                    style={{
+                      fontSize: '0.875rem',
+                      fontWeight: 600,
+                      color: isCurrent ? theme.colors.primary : theme.colors.textPrimary,
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {song.name}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: '0.7813rem',
+                      color: theme.colors.textSecondary,
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      marginTop: '2px',
+                    }}
+                  >
+                    {song.artist}
+                  </div>
+                </div>
+
+                <span
+                  style={{
+                    fontSize: '0.75rem',
+                    color: theme.colors.textSecondary,
+                    fontVariantNumeric: 'tabular-nums',
+                    flexShrink: 0,
+                    position: 'relative',
+                    zIndex: 1,
+                  }}
+                >
+                  {formatTrackDuration(song.duration)}
+                </span>
+              </motion.div>
+            );
+          })}
+        </div>
+      )}
+    </motion.div>
+  );
+
+  // دکمه تایمر خواب به همراه منوی پورتال
+  const renderSleepTimerButton = () => (
+    <div style={{ position: 'relative', flex: isMobile ? '1 1 auto' : undefined }}>
+      <motion.button
+        ref={sleepButtonRef}
+        type="button"
+        whileHover={reduceMotion ? undefined : { scale: 1.02 }}
+        whileTap={reduceMotion ? undefined : { scale: 0.95 }}
+        onClick={() => {
+          if (!sleepMenuOpen) updateSleepMenuPos();
+          setSleepMenuOpen((prev) => !prev);
+        }}
+        style={{
+          width: isMobile ? '100%' : 'auto',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '7px',
+          padding: isMobile ? '9px 12px' : '9px 14px',
+          borderRadius: '13px',
+          border: `1px solid ${isSleepActive ? theme.colors.primary : theme.colors.border}`,
+          backgroundColor: isSleepActive
+            ? withAlpha(theme.colors.primary, 0.15)
+            : withAlpha(theme.colors.primary, theme.isDark ? 0.1 : 0.07),
+          color: isSleepActive ? theme.colors.primary : theme.colors.textPrimary,
+          fontSize: '0.8438rem',
+          fontWeight: 600,
+          cursor: 'pointer',
+          fontVariantNumeric: 'tabular-nums',
+          transition: 'background-color 0.15s ease, border-color 0.15s ease',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        <Moon size={15} />
+        <span>{sleepButtonLabel}</span>
+      </motion.button>
+    </div>
+  );
+
+  // لیست عمودی آمار کتابخانه به سبک Grouped List (برای نوع دوم در پایین صفحه)
+  const statRows = [
+    {
+      id: 'duration',
+      label: t.totalDuration || 'مجموع زمان',
+      value: `${formatTotalLibraryTime(totalDurationSeconds, t)} · ${songs.length} ${
+        t.tracksCount || 'آهنگ'
+      }`,
+      icon: <Clock size={16} />,
+      color: theme.colors.primary,
+      gradientTo: theme.colors.accent || '#5E5CE6',
+      onClick: () => onSelectTab('allSongs'),
+    },
+    {
+      id: 'artists',
+      label: t.artists || 'آرتیست‌ها',
+      value: `${artistsCount} ${t.artistsCountLabel || 'آرتیست'}`,
+      icon: <Mic size={16} />,
+      color: '#FF9500',
+      gradientTo: '#FF5E3A',
+      onClick: () => onSelectTab('artists'),
+    },
+    {
+      id: 'albumsFolders',
+      label: `${t.albums || 'آلبوم‌ها'} / ${t.folders || 'فولدرها'}`,
+      value: `${albumsCount} · ${foldersCount}`,
+      icon: <Disc size={16} />,
+      color: '#5E5CE6',
+      gradientTo: '#0A84FF',
+      onClick: () => onSelectTab('albums'),
+    },
+    {
+      id: 'topArtist',
+      label: t.topArtist || 'محبوب‌ترین آرتیست',
+      value: topArtist ? topArtist.name : '—',
+      icon: <Music size={16} />,
+      color: '#FF3B30',
+      gradientTo: '#FF2D55',
+      onClick: () => {
+        if (topArtist) {
+          onNavigateToItem({ tab: 'artists', key: topArtist.name });
+        } else {
+          onSelectTab('artists');
+        }
+      },
+    },
+  ];
+
+  const renderVerticalStatsList = () => (
+    <motion.div {...sectionAnim(0.16)} style={{ marginBottom: '10px' }}>
+      <div
+        style={{
+          fontSize: '0.8125rem',
+          fontWeight: 700,
+          color: theme.colors.textSecondary,
+          padding: '0 8px 10px',
+        }}
+      >
+        {t.libraryInsights || 'آمار کتابخانه'}
+      </div>
+
+      <div
+        style={{
+          backgroundColor: theme.colors.surface,
+          backdropFilter: 'blur(24px) saturate(175%)',
+          WebkitBackdropFilter: 'blur(24px) saturate(175%)',
+          borderRadius: theme.radius.xl || '20px',
+          border: `1px solid ${theme.colors.border}`,
+          overflow: 'hidden',
+          boxShadow: theme.isDark
+            ? '0 8px 26px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.06)'
+            : '0 4px 16px rgba(15, 23, 42, 0.045), inset 0 1px 0 rgba(255, 255, 255, 0.85)',
+        }}
+      >
+        {statRows.map((row, idx) => {
+          const isLast = idx === statRows.length - 1;
+          const isHovered = hoveredStatIdx === idx;
+          return (
+            <div key={row.id}>
+              <motion.button
+                type="button"
+                whileTap={reduceMotion ? undefined : { scale: 0.992 }}
+                transition={{ duration: 0.1 }}
+                onClick={row.onClick}
+                onMouseEnter={() => setHoveredStatIdx(idx)}
+                onMouseLeave={() => setHoveredStatIdx(null)}
+                style={{
+                  width: '100%',
+                  padding: isMobile ? '11px 12px' : '13px 16px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: isMobile ? '8px' : '12px',
+                  border: 'none',
+                  backgroundColor: isHovered ? menuItemHover : 'transparent',
+                  cursor: 'pointer',
+                  textAlign: 'start',
+                  transition: 'background-color 0.15s ease',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '10px' : '12px', minWidth: 0 }}>
+                  <IOSSquircleIcon color={row.color} gradientTo={row.gradientTo} size={30}>
+                    {row.icon}
+                  </IOSSquircleIcon>
+                  <span
+                    style={{
+                      fontSize: '0.9063rem',
+                      fontWeight: 600,
+                      color: theme.colors.textPrimary,
+                    }}
+                  >
+                    {row.label}
+                  </span>
+                </div>
+
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    minWidth: 0,
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: '0.8438rem',
+                      fontWeight: 600,
+                      color: theme.colors.textSecondary,
+                      fontVariantNumeric: 'tabular-nums',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      maxWidth: isMobile ? '44vw' : '240px',
+                    }}
+                  >
+                    {row.value}
+                  </span>
+                  <DirectionalChevron
+                    size={16}
+                    color={
+                      theme.isDark ? 'rgba(235, 235, 245, 0.36)' : 'rgba(60, 60, 67, 0.36)'
+                    }
+                  />
+                </div>
+              </motion.button>
+
+              {!isLast && (
+                <div
+                  style={{
+                    height: '1px',
+                    backgroundColor: hairline,
+                    marginInlineStart: isMobile ? '50px' : '58px',
+                  }}
+                />
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </motion.div>
+  );
+
+  // نوار ۴ ستونه آمار کتابخانه (برای نوع اول: حالت پهن قبلی)
+  const renderWideStatsGrid = () => (
+    <motion.div
+      {...sectionAnim(0.06)}
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 160px), 1fr))',
+        gap: '1px',
+        backgroundColor: theme.colors.border,
+        borderRadius: theme.radius.xl || '20px',
+        border: `1px solid ${theme.colors.border}`,
+        overflow: 'hidden',
+        marginBottom: '26px',
+      }}
+    >
+      <div
+        style={{
+          backgroundColor: theme.colors.surface,
+          backdropFilter: 'blur(22px)',
+          WebkitBackdropFilter: 'blur(22px)',
+          padding: '15px 18px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '12px',
+        }}
+      >
+        <Clock size={19} color={theme.colors.primary} style={{ flexShrink: 0 }} />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: '0.7188rem', color: theme.colors.textSecondary }}>
+            {t.totalDuration || 'مجموع زمان'}
+          </div>
+          <div
+            style={{
+              fontSize: '0.9375rem',
+              fontWeight: 700,
+              color: theme.colors.textPrimary,
+              fontVariantNumeric: 'tabular-nums',
+              marginTop: '3px',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            {formatTotalLibraryTime(totalDurationSeconds, t)} · {songs.length}{' '}
+            {t.tracksCount || 'آهنگ'}
+          </div>
+        </div>
+      </div>
+
+      <button
+        onClick={() => onSelectTab('artists')}
+        style={{
+          backgroundColor: theme.colors.surface,
+          backdropFilter: 'blur(22px)',
+          WebkitBackdropFilter: 'blur(22px)',
+          padding: '15px 18px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '12px',
+          border: 'none',
+          cursor: 'pointer',
+          textAlign: 'start',
+        }}
+      >
+        <Mic size={19} color="#ff9500" style={{ flexShrink: 0 }} />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: '0.7188rem', color: theme.colors.textSecondary }}>
+            {t.artists || 'آرتیست‌ها'}
+          </div>
+          <div
+            style={{
+              fontSize: '0.9375rem',
+              fontWeight: 700,
+              color: theme.colors.textPrimary,
+              fontVariantNumeric: 'tabular-nums',
+              marginTop: '3px',
+            }}
+          >
+            {artistsCount} {t.artistsCountLabel || 'آرتیست'}
+          </div>
+        </div>
+      </button>
+
+      <button
+        onClick={() => onSelectTab('albums')}
+        style={{
+          backgroundColor: theme.colors.surface,
+          backdropFilter: 'blur(22px)',
+          WebkitBackdropFilter: 'blur(22px)',
+          padding: '15px 18px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '12px',
+          border: 'none',
+          cursor: 'pointer',
+          textAlign: 'start',
+        }}
+      >
+        <Disc size={19} color="#5e5ce6" style={{ flexShrink: 0 }} />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: '0.7188rem', color: theme.colors.textSecondary }}>
+            {(t.albums || 'آلبوم‌ها') + ' / ' + (t.folders || 'فولدرها')}
+          </div>
+          <div
+            style={{
+              fontSize: '0.9375rem',
+              fontWeight: 700,
+              color: theme.colors.textPrimary,
+              fontVariantNumeric: 'tabular-nums',
+              marginTop: '3px',
+            }}
+          >
+            {albumsCount} · {foldersCount}
+          </div>
+        </div>
+      </button>
+
+      <button
+        onClick={() => {
+          if (topArtist) {
+            onNavigateToItem({ tab: 'artists', key: topArtist.name });
+          } else {
+            onSelectTab('artists');
+          }
+        }}
+        style={{
+          backgroundColor: theme.colors.surface,
+          backdropFilter: 'blur(22px)',
+          WebkitBackdropFilter: 'blur(22px)',
+          padding: '15px 18px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '12px',
+          border: 'none',
+          cursor: 'pointer',
+          textAlign: 'start',
+        }}
+      >
+        <Music size={19} color="#ff3b30" style={{ flexShrink: 0 }} />
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: '0.7188rem', color: theme.colors.textSecondary }}>
+            {t.topArtist || 'محبوب‌ترین آرتیست'}
+          </div>
+          <div
+            style={{
+              fontSize: '0.9375rem',
+              fontWeight: 700,
+              color: theme.colors.textPrimary,
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              marginTop: '3px',
+            }}
+          >
+            {topArtist ? topArtist.name : '—'}
+          </div>
+        </div>
+      </button>
+    </motion.div>
+  );
 
   return (
     <div
       style={{
         flex: 1,
-        padding: 'clamp(10px, 1.8vw, 18px) clamp(14px, 3.5vw, 36px) 136px',
+        padding: isMobile
+          ? '10px 12px 156px'
+          : 'clamp(10px, 1.8vw, 18px) clamp(14px, 3.5vw, 36px) 136px',
         overflowY: 'auto',
         overflowX: 'hidden',
         boxSizing: 'border-box',
         direction: isRTL ? 'rtl' : 'ltr',
       }}
     >
-      {/* ردیف ۱: کارت اصلی ادامه گوش دادن + کنترل‌های سریع + تایمر خواب */}
-      <div
-        style={{
-          position: 'relative',
-          borderRadius: theme.radius.xl || '24px',
-          border: `1px solid ${theme.colors.border}`,
-          backgroundColor: theme.colors.surface,
-          backdropFilter: 'blur(28px) saturate(180%)',
-          WebkitBackdropFilter: 'blur(28px) saturate(180%)',
-          boxShadow: theme.isDark
-            ? '0 14px 36px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.08)'
-            : '0 10px 28px rgba(0, 0, 0, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.85)',
-          padding: 'clamp(16px, 2.2vw, 24px)',
-          marginBottom: '16px',
-          overflow: 'visible',
-          boxSizing: 'border-box',
-        }}
-      >
-        {/* لایه بلوری کاور پس‌زمینه داخل کارت بدون شکستن border-radius */}
-        {heroSong?.cover && (
-          <div
-            aria-hidden="true"
-            style={{
-              position: 'absolute',
-              inset: 0,
-              borderRadius: theme.radius.xl || '24px',
-              overflow: 'hidden',
-              pointerEvents: 'none',
-              zIndex: 0,
-            }}
+      <AnimatePresence mode="wait" initial={false}>
+        {homeLayout === 'wide' ? (
+          /* ================================================================
+           * نوع ۱: نمای پهن کلاسیک (همون حالت پهن قبلی)
+           * ================================================================ */
+          <motion.div
+            key="home-layout-wide"
+            initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -8 }}
+            transition={{ duration: 0.22, ease: IOS_EASE }}
           >
+            {/* کارت پهن Continue Listening / Now Playing */}
             <div
               style={{
-                position: 'absolute',
-                inset: '-24px',
-                backgroundImage: `url(${heroSong.cover})`,
-                backgroundSize: 'cover',
-                backgroundPosition: 'center',
-                filter: 'blur(34px) saturate(160%)',
-                opacity: theme.isDark ? 0.32 : 0.22,
-                transform: 'scale(1.1)',
-              }}
-            />
-            <div
-              style={{
-                position: 'absolute',
-                inset: 0,
-                background: theme.isDark
-                  ? 'linear-gradient(120deg, rgba(16, 14, 28, 0.84) 0%, rgba(16, 14, 28, 0.62) 100%)'
-                  : 'linear-gradient(120deg, rgba(255, 255, 255, 0.88) 0%, rgba(255, 255, 255, 0.72) 100%)',
-              }}
-            />
-          </div>
-        )}
-
-        <div
-          style={{
-            position: 'relative',
-            zIndex: 1,
-            display: 'flex',
-            flexWrap: 'wrap',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: '16px',
-          }}
-        >
-          {/* اطلاعات آهنگ فعلی یا آخرین آهنگ (کلیک روی کاور یا نام آهنگ => باز شدن حالت تمام‌صفحه) */}
-          <div
-            role={heroSong ? 'button' : undefined}
-            tabIndex={heroSong ? 0 : undefined}
-            onClick={handleHeroOpenFullScreen}
-            onKeyDown={(e) => {
-              if (heroSong && (e.key === 'Enter' || e.key === ' ')) {
-                e.preventDefault();
-                handleHeroOpenFullScreen();
-              }
-            }}
-            onMouseEnter={() => heroSong && setHoveredHeroSong(true)}
-            onMouseLeave={() => setHoveredHeroSong(false)}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '16px',
-              minWidth: 0,
-              maxWidth: '100%',
-              flex: '1 1 220px',
-              cursor: heroSong ? 'pointer' : 'default',
-              outline: 'none',
-            }}
-          >
-            <div
-              style={{
-                flexShrink: 0,
-                transform: hoveredHeroSong ? 'scale(1.03)' : 'scale(1)',
-                transition: 'transform 0.2s ease',
-              }}
-            >
-              <CoverImage
-                src={heroSong?.cover}
-                alt={heroSong?.name || ''}
-                iconSize={32}
-                iconColor={theme.colors.textSecondary}
-                fallbackBg={
-                  theme.isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)'
-                }
-                style={{
-                  width: 'clamp(72px, 8.5vw, 96px)',
-                  height: 'clamp(72px, 8.5vw, 96px)',
-                  borderRadius: '16px',
-                  objectFit: 'cover',
-                  display: 'block',
-                  border: `1px solid ${theme.colors.border}`,
-                  boxShadow: '0 10px 26px rgba(0, 0, 0, 0.28)',
-                }}
-              />
-            </div>
-
-            <div style={{ minWidth: 0, flex: 1 }}>
-              <div
-                style={{
-                  fontSize: '12px',
-                  fontWeight: 700,
-                  color: theme.colors.primary,
-                  marginBottom: '5px',
-                }}
-              >
-                {isHeroPlaying
-                  ? t.nowPlaying || 'در حال پخش'
-                  : t.continueListening || 'ادامه گوش دادن'}
-              </div>
-
-              <h2
-                style={{
-                  margin: 0,
-                  fontSize: 'clamp(17px, 2.1vw, 22px)',
-                  fontWeight: 800,
-                  color: hoveredHeroSong
-                    ? theme.colors.primary
-                    : theme.colors.textPrimary,
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  lineHeight: 1.25,
-                  transition: 'color 0.15s ease',
-                }}
-              >
-                {heroSong ? heroSong.name : t.noSongSelected || 'آهنگی انتخاب نشده'}
-              </h2>
-
-              <p
-                style={{
-                  margin: '4px 0 0 0',
-                  fontSize: '14px',
-                  color: theme.colors.textSecondary,
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                }}
-              >
-                {heroSong
-                  ? heroSong.album?.trim()
-                    ? `${heroSong.artist} · ${heroSong.album}`
-                    : heroSong.artist
-                  : t.noSongs || 'هنوز آهنگی اضافه نشده است.'}
-              </p>
-            </div>
-          </div>
-
-          {/* دکمه‌های اقدام سریع + تایمر خواب */}
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              flexWrap: 'wrap',
-              gap: '10px',
-            }}
-          >
-            <button
-              onClick={handleHeroPrimaryAction}
-              disabled={!heroSong}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                padding: '10px 20px',
-                borderRadius: '14px',
-                border: 'none',
-                backgroundColor: theme.colors.primary,
-                color: '#ffffff',
-                fontSize: '14px',
-                fontWeight: 700,
-                cursor: heroSong ? 'pointer' : 'not-allowed',
-                opacity: heroSong ? 1 : 0.5,
-                boxShadow: `0 6px 18px ${theme.colors.primary}44`,
-                transition: 'filter 0.15s ease, opacity 0.15s ease, scale 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
-                whiteSpace: 'nowrap',
-              }}
-              onMouseEnter={(e) => {
-                if (heroSong) e.currentTarget.style.filter = 'brightness(1.1)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.filter = 'none';
-              }}
-            >
-              {isHeroPlaying ? (
-                <Pause size={16} fill="#ffffff" />
-              ) : (
-                <Play size={16} fill="#ffffff" />
-              )}
-              <span>
-                {isHeroPlaying
-                  ? t.pausePlayback || 'توقف پخش'
-                  : t.resumePlayback || 'ادامه پخش'}
-              </span>
-            </button>
-
-            <button
-              onClick={onShuffleAll}
-              disabled={songs.length === 0}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                padding: '10px 16px',
-                borderRadius: '14px',
+                position: 'relative',
+                borderRadius: theme.radius.xl || '24px',
                 border: `1px solid ${theme.colors.border}`,
-                backgroundColor: theme.isDark
-                  ? 'rgba(255, 255, 255, 0.08)'
-                  : 'rgba(0, 0, 0, 0.05)',
-                color: theme.colors.textPrimary,
-                fontSize: '13.5px',
-                fontWeight: 600,
-                cursor: songs.length > 0 ? 'pointer' : 'not-allowed',
-                opacity: songs.length > 0 ? 1 : 0.5,
-                transition: 'background-color 0.15s ease, border-color 0.15s ease, scale 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
-                whiteSpace: 'nowrap',
-              }}
-              onMouseEnter={(e) => {
-                if (songs.length > 0) {
-                  e.currentTarget.style.backgroundColor = surfaceHoverBg;
-                  e.currentTarget.style.borderColor = theme.colors.primary + '88';
-                }
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.backgroundColor = theme.isDark
-                  ? 'rgba(255, 255, 255, 0.08)'
-                  : 'rgba(0, 0, 0, 0.05)';
-                e.currentTarget.style.borderColor = theme.colors.border;
-              }}
-            >
-              <Shuffle size={15} />
-              <span>{t.shuffleAll || 'پخش تصادفی همه'}</span>
-            </button>
-
-            {/* کنترل تایمر خواب */}
-            <div style={{ position: 'relative' }}>
-              <button
-                ref={sleepButtonRef}
-                onClick={() => {
-                  if (!sleepMenuOpen) updateSleepMenuPos();
-                  setSleepMenuOpen((prev) => !prev);
-                }}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '7px',
-                  padding: '10px 15px',
-                  borderRadius: '14px',
-                  border: `1px solid ${
-                    isSleepActive ? theme.colors.primary : theme.colors.border
-                  }`,
-                  backgroundColor: isSleepActive
-                    ? `${theme.colors.primary}22`
-                    : theme.isDark
-                    ? 'rgba(255, 255, 255, 0.08)'
-                    : 'rgba(0, 0, 0, 0.05)',
-                  color: isSleepActive
-                    ? theme.colors.primary
-                    : theme.colors.textPrimary,
-                  fontSize: '13.5px',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  fontVariantNumeric: 'tabular-nums',
-                  transition: 'background-color 0.15s ease, border-color 0.15s ease, scale 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                <Moon size={15} />
-                <span>{sleepButtonLabel}</span>
-              </button>
-
-              {sleepMenuOpen &&
-                typeof document !== 'undefined' &&
-                createPortal(
-                  <div
-                    ref={sleepPortalRef}
-                    style={{
-                      position: 'fixed',
-                      top: sleepMenuPos.top,
-                      left: sleepMenuPos.left,
-                      width: '195px',
-                      padding: '6px',
-                      borderRadius: theme.radius.md || '14px',
-                      backgroundColor: menuBg,
-                      backdropFilter: 'blur(26px) saturate(180%)',
-                      WebkitBackdropFilter: 'blur(26px) saturate(180%)',
-                      border: `1px solid ${theme.colors.border}`,
-                      boxShadow: '0 18px 42px rgba(0, 0, 0, 0.48)',
-                      zIndex: 999999,
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '2px',
-                      direction: isRTL ? 'rtl' : 'ltr',
-                    }}
-                  >
-                    {[15, 30, 60].map((mins) => {
-                      const isPresetActive =
-                        sleepTimer.mode === 'until' &&
-                        sleepTimer.durationMinutes === mins;
-                      return (
-                        <button
-                          key={mins}
-                          onClick={() => {
-                            onSetSleepTimer({
-                              mode: 'until',
-                              endsAt: Date.now() + mins * 60 * 1000,
-                              durationMinutes: mins,
-                            });
-                            setSleepMenuOpen(false);
-                          }}
-                          style={{
-                            width: '100%',
-                            padding: '8px 12px',
-                            borderRadius: '8px',
-                            border: 'none',
-                            background: 'transparent',
-                            color: isPresetActive
-                              ? theme.colors.primary
-                              : theme.colors.textPrimary,
-                            fontSize: '13px',
-                            fontWeight: isPresetActive ? 700 : 500,
-                            textAlign: 'start',
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            fontVariantNumeric: 'tabular-nums',
-                          }}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.backgroundColor = menuItemHover;
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.backgroundColor = 'transparent';
-                          }}
-                        >
-                          <span>
-                            {mins} {t.sleepMinutes || 'دقیقه'}
-                          </span>
-                          {isPresetActive && <Check size={14} />}
-                        </button>
-                      );
-                    })}
-
-                    <button
-                      onClick={() => {
-                        onSetSleepTimer({ mode: 'songEnd' });
-                        setSleepMenuOpen(false);
-                      }}
-                      style={{
-                        width: '100%',
-                        padding: '8px 12px',
-                        borderRadius: '8px',
-                        border: 'none',
-                        background: 'transparent',
-                        color:
-                          sleepTimer.mode === 'songEnd'
-                            ? theme.colors.primary
-                            : theme.colors.textPrimary,
-                        fontSize: '13px',
-                        fontWeight: sleepTimer.mode === 'songEnd' ? 700 : 500,
-                        textAlign: 'start',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.backgroundColor = menuItemHover;
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.backgroundColor = 'transparent';
-                      }}
-                    >
-                      <span>{t.endOfSong || 'پایان آهنگ فعلی'}</span>
-                      {sleepTimer.mode === 'songEnd' && <Check size={14} />}
-                    </button>
-
-                    {isSleepActive && (
-                      <>
-                        <div
-                          style={{
-                            height: '1px',
-                            backgroundColor: theme.colors.border,
-                            margin: '3px 4px',
-                          }}
-                        />
-                        <button
-                          onClick={() => {
-                            onSetSleepTimer({ mode: 'off' });
-                            setSleepMenuOpen(false);
-                          }}
-                          style={{
-                            width: '100%',
-                            padding: '8px 12px',
-                            borderRadius: '8px',
-                            border: 'none',
-                            background: 'transparent',
-                            color: theme.colors.danger || '#ff453a',
-                            fontSize: '13px',
-                            fontWeight: 600,
-                            textAlign: 'start',
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '8px',
-                          }}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.backgroundColor =
-                              'rgba(255, 69, 58, 0.14)';
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.backgroundColor = 'transparent';
-                          }}
-                        >
-                          <X size={14} />
-                          <span>{t.sleepTimerOff || 'خاموش'}</span>
-                        </button>
-                      </>
-                    )}
-                  </div>,
-                  document.body
-                )}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* ردیف آمار فشرده کتابخانه (Library Insights) بدون کارت تو در تو و بدون پیل */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 140px), 1fr))',
-          gap: '1px',
-          backgroundColor: theme.colors.border,
-          borderRadius: theme.radius.lg || '18px',
-          border: `1px solid ${theme.colors.border}`,
-          overflow: 'hidden',
-          marginBottom: '22px',
-        }}
-      >
-        <div
-          style={{
-            backgroundColor: theme.colors.surface,
-            backdropFilter: 'blur(22px)',
-            WebkitBackdropFilter: 'blur(22px)',
-            padding: '13px 16px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '12px',
-          }}
-        >
-          <Clock size={18} color={theme.colors.primary} style={{ flexShrink: 0 }} />
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: '11.5px', color: theme.colors.textSecondary }}>
-              {t.totalDuration || 'مجموع زمان'}
-            </div>
-            <div
-              style={{
-                fontSize: '14.5px',
-                fontWeight: 700,
-                color: theme.colors.textPrimary,
-                fontVariantNumeric: 'tabular-nums',
-                marginTop: '2px',
-                whiteSpace: 'nowrap',
+                backgroundColor: theme.colors.surface,
+                backdropFilter: 'blur(28px) saturate(180%)',
+                WebkitBackdropFilter: 'blur(28px) saturate(180%)',
+                boxShadow: theme.isDark
+                  ? '0 14px 36px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.08)'
+                  : '0 10px 28px rgba(0, 0, 0, 0.055), inset 0 1px 0 rgba(255, 255, 255, 0.85)',
+                padding: 'clamp(16px, 2.6vw, 24px)',
+                marginBottom: '18px',
                 overflow: 'hidden',
-                textOverflow: 'ellipsis',
               }}
             >
-              {formatTotalLibraryTime(totalDurationSeconds, t)} · {songs.length}{' '}
-              {t.tracksCount || 'آهنگ'}
-            </div>
-          </div>
-        </div>
-
-        <button
-          onClick={() => onSelectTab('artists')}
-          style={{
-            backgroundColor: theme.colors.surface,
-            backdropFilter: 'blur(22px)',
-            WebkitBackdropFilter: 'blur(22px)',
-            padding: '14px 18px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '12px',
-            border: 'none',
-            cursor: 'pointer',
-            textAlign: 'start',
-          }}
-        >
-          <Mic size={18} color="#ff9500" style={{ flexShrink: 0 }} />
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: '11.5px', color: theme.colors.textSecondary }}>
-              {t.artists || 'آرتیست‌ها'}
-            </div>
-            <div
-              style={{
-                fontSize: '15px',
-                fontWeight: 700,
-                color: theme.colors.textPrimary,
-                fontVariantNumeric: 'tabular-nums',
-                marginTop: '2px',
-              }}
-            >
-              {artistsCount} {t.artistsCountLabel || 'آرتیست'}
-            </div>
-          </div>
-        </button>
-
-        <button
-          onClick={() => onSelectTab('albums')}
-          style={{
-            backgroundColor: theme.colors.surface,
-            backdropFilter: 'blur(22px)',
-            WebkitBackdropFilter: 'blur(22px)',
-            padding: '14px 18px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '12px',
-            border: 'none',
-            cursor: 'pointer',
-            textAlign: 'start',
-          }}
-        >
-          <Disc size={18} color="#5e5ce6" style={{ flexShrink: 0 }} />
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: '11.5px', color: theme.colors.textSecondary }}>
-              {(t.albums || 'آلبوم‌ها') + ' / ' + (t.folders || 'فولدرها')}
-            </div>
-            <div
-              style={{
-                fontSize: '15px',
-                fontWeight: 700,
-                color: theme.colors.textPrimary,
-                fontVariantNumeric: 'tabular-nums',
-                marginTop: '2px',
-              }}
-            >
-              {albumsCount} · {foldersCount}
-            </div>
-          </div>
-        </button>
-
-        <button
-          onClick={() => {
-            if (topArtist) {
-              onNavigateToItem({ tab: 'artists', key: topArtist.name });
-            } else {
-              onSelectTab('artists');
-            }
-          }}
-          style={{
-            backgroundColor: theme.colors.surface,
-            backdropFilter: 'blur(22px)',
-            WebkitBackdropFilter: 'blur(22px)',
-            padding: '14px 18px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '12px',
-            border: 'none',
-            cursor: 'pointer',
-            textAlign: 'start',
-          }}
-        >
-          <Music size={18} color="#ff3b30" style={{ flexShrink: 0 }} />
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ fontSize: '11.5px', color: theme.colors.textSecondary }}>
-              {t.topArtist || 'محبوب‌ترین آرتیست'}
-            </div>
-            <div
-              style={{
-                fontSize: '15px',
-                fontWeight: 700,
-                color: theme.colors.textPrimary,
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                marginTop: '2px',
-              }}
-            >
-              {topArtist ? topArtist.name : '—'}
-            </div>
-          </div>
-        </button>
-      </div>
-
-      {/* ردیف ۲: انتخاب سریع (Quick Picks) */}
-      <div style={{ marginBottom: '28px' }}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            marginBottom: '12px',
-            gap: '12px',
-          }}
-        >
-          <h2
-            style={{
-              margin: 0,
-              fontSize: '17px',
-              fontWeight: 700,
-              color: theme.colors.textPrimary,
-            }}
-          >
-            {t.quickPicks || 'انتخاب سریع'}
-          </h2>
-
-          {songs.length > 1 && (
-            <button
-              onClick={() => setPickSeed((s) => s + 1)}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                background: 'none',
-                border: `1px solid ${theme.colors.border}`,
-                borderRadius: '10px',
-                padding: '6px 12px',
-                color: theme.colors.textSecondary,
-                fontSize: '12.5px',
-                fontWeight: 600,
-                cursor: 'pointer',
-                transition: 'color 0.15s ease, border-color 0.15s ease, scale 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.color = theme.colors.textPrimary;
-                e.currentTarget.style.borderColor = theme.colors.primary + '88';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.color = theme.colors.textSecondary;
-                e.currentTarget.style.borderColor = theme.colors.border;
-              }}
-            >
-              <RefreshCw size={13} />
-              <span>{t.refreshPicks || 'تغییر پیشنهادها'}</span>
-            </button>
-          )}
-        </div>
-
-        {quickPicks.length === 0 ? (
-          <p style={{ color: theme.colors.textSecondary, fontSize: '14px' }}>
-            {t.noSongs || 'هنوز آهنگی اضافه نشده است.'}
-          </p>
-        ) : (
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))',
-              gap: '10px',
-            }}
-          >
-            {quickPicks.map((song) => {
-              const isCurrent = currentSong?.id === song.id;
-              const isHovered = hoveredSongId === song.id;
-
-              return (
+              {heroSong?.cover && (
                 <div
-                  key={song.id}
-                  onClick={() => onPlaySongFromList(song, quickPicks)}
-                  onMouseEnter={() => setHoveredSongId(song.id)}
-                  onMouseLeave={() => setHoveredSongId(null)}
+                  aria-hidden="true"
                   style={{
-                    position: 'relative',
-                    overflow: 'hidden',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '12px',
-                    padding: '10px 12px',
-                    borderRadius: '14px',
-                    border: `1px solid ${
-                      isCurrent
-                        ? theme.colors.primary
-                        : isHovered
-                        ? theme.colors.primary + '66'
-                        : theme.colors.border
-                    }`,
-                    backgroundColor: isHovered ? surfaceHoverBg : theme.colors.surface,
-                    backdropFilter: 'blur(20px) saturate(160%)',
-                    WebkitBackdropFilter: 'blur(20px) saturate(160%)',
-                    cursor: 'pointer',
-                    transition: 'background-color 0.18s ease, border-color 0.18s ease',
+                    position: 'absolute',
+                    inset: 0,
+                    pointerEvents: 'none',
+                    zIndex: 0,
                   }}
                 >
-                  {glassCardCovers && song.cover && (
-                    <div
-                      aria-hidden="true"
-                      style={{
-                        position: 'absolute',
-                        inset: 0,
-                        backgroundImage: `url(${song.cover})`,
-                        backgroundSize: 'cover',
-                        backgroundPosition: 'center',
-                        filter: 'blur(18px)',
-                        opacity: theme.isDark ? 0.16 : 0.12,
-                        pointerEvents: 'none',
-                      }}
-                    />
-                  )}
+                  <div
+                    style={{
+                      position: 'absolute',
+                      inset: '-24px',
+                      backgroundImage: `url(${heroSong.cover})`,
+                      backgroundSize: 'cover',
+                      backgroundPosition: 'center',
+                      filter: 'blur(34px) saturate(160%)',
+                      opacity: theme.isDark ? 0.3 : 0.18,
+                      transform: 'scale(1.1)',
+                    }}
+                  />
+                  <div
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      background: theme.isDark
+                        ? `linear-gradient(120deg, ${withAlpha(theme.colors.surfaceSolid, 0.72)} 0%, ${withAlpha(theme.colors.surfaceSolid, 0.92)} 100%)`
+                        : `linear-gradient(120deg, ${withAlpha(theme.colors.surfaceSolid, 0.76)} 0%, ${withAlpha(theme.colors.surfaceSolid, 0.92)} 100%)`,
+                    }}
+                  />
+                </div>
+              )}
 
-                  <div style={{ position: 'relative', width: 44, height: 44, flexShrink: 0 }}>
-                    <CoverImage
-                      src={song.cover}
-                      alt={song.name}
-                      iconSize={18}
-                      style={{
-                        width: 44,
-                        height: 44,
-                        borderRadius: '10px',
-                        objectFit: 'cover',
-                      }}
-                    />
-                    {(isHovered || isCurrent) && (
-                      <div
-                        style={{
-                          position: 'absolute',
-                          inset: 0,
-                          borderRadius: '10px',
-                          backgroundColor: 'rgba(0, 0, 0, 0.45)',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                        }}
-                      >
-                        <Play size={16} fill="#ffffff" color="#ffffff" />
-                      </div>
-                    )}
-                  </div>
+              <div
+                style={{
+                  position: 'relative',
+                  zIndex: 1,
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '18px',
+                }}
+              >
+                <div
+                  role={heroSong ? 'button' : undefined}
+                  tabIndex={heroSong ? 0 : undefined}
+                  onClick={handleHeroOpenFullScreen}
+                  onKeyDown={(e) => {
+                    if (heroSong && (e.key === 'Enter' || e.key === ' ')) {
+                      e.preventDefault();
+                      handleHeroOpenFullScreen();
+                    }
+                  }}
+                  onMouseEnter={() => heroSong && setHoveredHeroSong(true)}
+                  onMouseLeave={() => setHoveredHeroSong(false)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '16px',
+                    flex: '1 1 280px',
+                    minWidth: 0,
+                    cursor: heroSong ? 'pointer' : 'default',
+                    outline: 'none',
+                  }}
+                >
+                  <CoverImage
+                    src={heroSong?.cover}
+                    alt={heroSong?.name || ''}
+                    iconSize={34}
+                    iconColor={theme.colors.textSecondary}
+                    fallbackBg={
+                      theme.isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)'
+                    }
+                    style={{
+                      width: isDesktop ? '98px' : '82px',
+                      height: isDesktop ? '98px' : '82px',
+                      borderRadius: '18px',
+                      objectFit: 'cover',
+                      flexShrink: 0,
+                      border: `1px solid ${theme.colors.border}`,
+                      boxShadow: '0 10px 24px rgba(0, 0, 0, 0.25)',
+                    }}
+                  />
 
-                  <div style={{ flex: 1, minWidth: 0, position: 'relative', zIndex: 1 }}>
+                  <div style={{ minWidth: 0, flex: 1 }}>
                     <div
                       style={{
-                        fontSize: '14px',
-                        fontWeight: 600,
-                        color: isCurrent ? theme.colors.primary : theme.colors.textPrimary,
-                        whiteSpace: 'nowrap',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
+                        fontSize: '0.6875rem',
+                        fontWeight: 700,
+                        letterSpacing: isRTL ? '0' : '1.1px',
+                        textTransform: 'uppercase',
+                        color: theme.colors.primary,
                       }}
                     >
-                      {song.name}
+                      {isHeroPlaying
+                        ? t.nowPlaying || 'در حال پخش'
+                        : t.continueListening || 'ادامه گوش دادن'}
+                    </div>
+                    <div style={{ marginTop: '4px', minWidth: 0 }}>
+                      <MarqueeText
+                        text={heroSong ? heroSong.name : t.noSongSelected || 'آهنگی انتخاب نشده'}
+                        gapPx={28}
+                        speedPxPerSec={30}
+                        style={{
+                          fontSize: 'clamp(1.125rem, 2.2vw, 1.375rem)',
+                          fontWeight: 800,
+                          color: hoveredHeroSong ? theme.colors.primary : theme.colors.textPrimary,
+                          lineHeight: 1.25,
+                          transition: 'color 0.15s ease',
+                        }}
+                      />
                     </div>
                     <div
                       style={{
-                        fontSize: '12.5px',
+                        marginTop: '4px',
+                        fontSize: '0.8438rem',
                         color: theme.colors.textSecondary,
                         whiteSpace: 'nowrap',
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
-                        marginTop: '2px',
                       }}
                     >
-                      {song.artist}
+                      {heroSong
+                        ? heroSong.album?.trim()
+                          ? `${heroSong.artist} · ${heroSong.album}`
+                          : `${heroSong.artist} · ${formatTrackDuration(heroSong.duration)}`
+                        : t.noSongs || 'هنوز آهنگی اضافه نشده است.'}
                     </div>
                   </div>
-
-                  <span
-                    style={{
-                      fontSize: '12px',
-                      color: theme.colors.textSecondary,
-                      fontVariantNumeric: 'tabular-nums',
-                      flexShrink: 0,
-                      position: 'relative',
-                      zIndex: 1,
-                    }}
-                  >
-                    {formatTrackDuration(song.duration)}
-                  </span>
                 </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
 
-      {/* ردیف ۳: دسترسی سریع (پلی‌لیست‌ها و فولدرها) + آرتیست‌های برتر */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 280px), 1fr))',
-          gap: '18px',
-        }}
-      >
-        {/* ستون ۱: دسترسی سریع */}
-        <div
-          style={{
-            backgroundColor: theme.colors.surface,
-            backdropFilter: 'blur(24px) saturate(170%)',
-            WebkitBackdropFilter: 'blur(24px) saturate(170%)',
-            borderRadius: theme.radius.xl || '20px',
-            border: `1px solid ${theme.colors.border}`,
-            padding: '18px 20px',
-          }}
-        >
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              marginBottom: '14px',
-            }}
-          >
-            <h2
-              style={{
-                margin: 0,
-                fontSize: '16px',
-                fontWeight: 700,
-                color: theme.colors.textPrimary,
-              }}
-            >
-              {t.quickAccess || 'دسترسی سریع'}
-            </h2>
-            <button
-              onClick={() => onSelectTab('playlists')}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-                background: 'none',
-                border: 'none',
-                color: theme.colors.primary,
-                fontSize: '12.5px',
-                fontWeight: 600,
-                cursor: 'pointer',
-                padding: 0,
-              }}
-            >
-              <span>{t.viewAll || 'مشاهده همه'}</span>
-              <DirectionalChevron size={14} />
-            </button>
-          </div>
-
-          {quickAccessItems.length === 0 ? (
-            <div style={{ padding: '14px 0', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <p style={{ margin: 0, fontSize: '13px', color: theme.colors.textSecondary }}>
-                {t.noQuickAccess || 'هنوز پلی‌لیست یا فولدری ساخته نشده است.'}
-              </p>
-              <div>
-                <button
-                  onClick={() => onSelectTab('playlists')}
+                {/* دکمه‌های کنترلی افقی */}
+                <div
                   style={{
-                    padding: '8px 14px',
-                    borderRadius: '10px',
-                    border: `1px solid ${theme.colors.border}`,
-                    backgroundColor: theme.isDark
-                      ? 'rgba(255, 255, 255, 0.08)'
-                      : 'rgba(0, 0, 0, 0.05)',
-                    color: theme.colors.textPrimary,
-                    fontSize: '13px',
-                    fontWeight: 600,
-                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    flexWrap: 'wrap',
+                    gap: '10px',
                   }}
                 >
-                  {t.createPlaylistOrFolder || 'ساخت پلی‌لیست'}
-                </button>
+                  <motion.button
+                    type="button"
+                    whileHover={reduceMotion || !heroSong ? undefined : { scale: 1.03 }}
+                    whileTap={reduceMotion || !heroSong ? undefined : { scale: 0.94 }}
+                    transition={{ type: 'spring', stiffness: 460, damping: 28 }}
+                    onClick={handleHeroPrimaryAction}
+                    disabled={!heroSong}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      padding: '10px 18px',
+                      borderRadius: '13px',
+                      border: 'none',
+                      backgroundColor: theme.colors.primary,
+                      color: onPrimaryColor,
+                      fontSize: '0.8438rem',
+                      fontWeight: 700,
+                      cursor: heroSong ? 'pointer' : 'not-allowed',
+                      opacity: heroSong ? 1 : 0.45,
+                      boxShadow: `0 6px 18px ${withAlpha(theme.colors.primary, 0.35)}`,
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    <AnimatePresence mode="wait" initial={false}>
+                      <motion.span
+                        key={isHeroPlaying ? 'wide-pause' : 'wide-play'}
+                        initial={reduceMotion ? false : { opacity: 0, scale: 0.78 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.78 }}
+                        transition={{ duration: 0.14 }}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '7px' }}
+                      >
+                        {isHeroPlaying ? (
+                          <Pause size={15} fill={onPrimaryColor} />
+                        ) : (
+                          <Play size={15} fill={onPrimaryColor} />
+                        )}
+                        <span>
+                          {isHeroPlaying
+                            ? t.pausePlayback || 'توقف پخش'
+                            : t.resumePlayback || 'ادامه پخش'}
+                        </span>
+                      </motion.span>
+                    </AnimatePresence>
+                  </motion.button>
+
+                  <motion.button
+                    type="button"
+                    whileHover={reduceMotion || songs.length === 0 ? undefined : { scale: 1.02 }}
+                    whileTap={reduceMotion || songs.length === 0 ? undefined : { scale: 0.95 }}
+                    onClick={onShuffleAll}
+                    disabled={songs.length === 0}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '7px',
+                      padding: '9px 15px',
+                      borderRadius: '13px',
+                      border: `1px solid ${theme.colors.border}`,
+                      backgroundColor: withAlpha(theme.colors.primary, theme.isDark ? 0.1 : 0.07),
+                      color: theme.colors.textPrimary,
+                      fontSize: '0.8438rem',
+                      fontWeight: 600,
+                      cursor: songs.length > 0 ? 'pointer' : 'not-allowed',
+                      opacity: songs.length > 0 ? 1 : 0.5,
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    <Shuffle size={15} />
+                    <span>{t.shuffleAll || 'پخش تصادفی همه'}</span>
+                  </motion.button>
+
+                  {renderSleepTimerButton()}
+                </div>
               </div>
             </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {quickAccessItems.map((item) => {
-                const keyId = `${item.kind}:${item.id}`;
-                const isHovered = hoveredQuickId === keyId;
 
-                return (
-                  <div
-                    key={keyId}
-                    onClick={() =>
-                      onNavigateToItem({
-                        tab: item.kind === 'playlist' ? 'playlists' : 'folders',
-                        key: item.id,
-                      })
-                    }
-                    onMouseEnter={() => setHoveredQuickId(keyId)}
-                    onMouseLeave={() => setHoveredQuickId(null)}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '12px',
-                      padding: '8px 10px',
-                      borderRadius: '12px',
-                      backgroundColor: isHovered ? menuItemHover : 'transparent',
-                      cursor: 'pointer',
-                      transition: 'background-color 0.15s ease',
-                    }}
-                  >
-                    {item.cover ? (
-                      <CoverImage
-                        src={item.cover}
-                        alt={item.name}
-                        iconSize={16}
-                        style={{
-                          width: 42,
-                          height: 42,
-                          borderRadius: '10px',
-                          objectFit: 'cover',
-                          flexShrink: 0,
-                        }}
-                      />
-                    ) : (
-                      <div
-                        style={{
-                          width: 42,
-                          height: 42,
-                          borderRadius: '10px',
-                          backgroundColor:
-                            item.kind === 'folder'
-                              ? 'rgba(10, 132, 255, 0.15)'
-                              : 'rgba(94, 92, 230, 0.15)',
-                          color: item.kind === 'folder' ? '#0a84ff' : '#5e5ce6',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          flexShrink: 0,
-                        }}
-                      >
-                        {item.kind === 'folder' ? (
-                          <Folder size={18} />
-                        ) : (
-                          <ListMusic size={18} />
-                        )}
-                      </div>
-                    )}
+            {renderWideStatsGrid()}
+            {renderQuickPicksSection()}
 
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div
-                        style={{
-                          fontSize: '14px',
-                          fontWeight: 600,
-                          color: theme.colors.textPrimary,
-                          whiteSpace: 'nowrap',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                        }}
-                      >
-                        {item.name}
-                      </div>
-                      <div
-                        style={{
-                          fontSize: '12px',
-                          color: theme.colors.textSecondary,
-                          fontVariantNumeric: 'tabular-nums',
-                          marginTop: '2px',
-                        }}
-                      >
-                        {item.kind === 'folder'
-                          ? t.folderLabel || 'فولدر'
-                          : t.playlistLabel || 'پلی‌لیست'}{' '}
-                        · {item.songs.length} {t.tracksCount || 'آهنگ'}
-                      </div>
-                    </div>
-
-                    {item.songs.length > 0 && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onPlaySongFromList(item.songs[0], item.songs);
-                        }}
-                        title={t.playAll || 'پخش'}
-                        style={{
-                          width: '30px',
-                          height: '30px',
-                          borderRadius: '50%',
-                          border: 'none',
-                          backgroundColor: theme.colors.primary,
-                          color: '#ffffff',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          cursor: 'pointer',
-                          flexShrink: 0,
-                        }}
-                      >
-                        <Play size={13} fill="#ffffff" />
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 280px), 1fr))',
+                gap: '18px',
+              }}
+            >
+              {renderQuickAccessCard()}
+              {renderTopArtistsCard()}
             </div>
-          )}
-        </div>
-
-        {/* ستون ۲: آرتیست‌های برتر */}
-        <div
-          style={{
-            backgroundColor: theme.colors.surface,
-            backdropFilter: 'blur(24px) saturate(170%)',
-            WebkitBackdropFilter: 'blur(24px) saturate(170%)',
-            borderRadius: theme.radius.xl || '20px',
-            border: `1px solid ${theme.colors.border}`,
-            padding: '18px 20px',
-          }}
-        >
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              marginBottom: '14px',
-            }}
+          </motion.div>
+        ) : (
+          /* ================================================================
+           * نوع ۲: ویجت مدرن Now Playing + دسترسی سریع و آرتیست‌ها در بالا + آمار عمودی در پایین
+           * ================================================================ */
+          <motion.div
+            key="home-layout-widget"
+            initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -8 }}
+            transition={{ duration: 0.22, ease: IOS_EASE }}
           >
-            <h2
+            {/* ردیف ۱: ویجت مدرن در یک سمت + کنترل‌های سریع، دسترسی سریع و آرتیست‌های برتر در سمت دیگر */}
+            <div
               style={{
-                margin: 0,
-                fontSize: '16px',
-                fontWeight: 700,
-                color: theme.colors.textPrimary,
+                display: 'grid',
+                gridTemplateColumns: isDesktop
+                  ? isWideDesktop
+                    ? 'minmax(275px, 315px) 1fr'
+                    : 'minmax(248px, 280px) 1fr'
+                  : '1fr',
+                gap: isMobile ? '12px' : '16px',
+                marginBottom: isMobile ? '18px' : '26px',
+                alignItems: 'stretch',
               }}
             >
-              {t.topArtists || 'آرتیست‌های برتر'}
-            </h2>
-            <button
-              onClick={() => onSelectTab('artists')}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-                background: 'none',
-                border: 'none',
-                color: theme.colors.primary,
-                fontSize: '12.5px',
-                fontWeight: 600,
-                cursor: 'pointer',
-                padding: 0,
-              }}
-            >
-              <span>{t.viewAll || 'مشاهده همه'}</span>
-              <DirectionalChevron size={14} />
-            </button>
-          </div>
-
-          {topArtists.length === 0 ? (
-            <p style={{ margin: 0, fontSize: '13px', color: theme.colors.textSecondary }}>
-              {t.noArtists || 'هنوز آرتیستی در کتابخانه وجود ندارد.'}
-            </p>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {topArtists.slice(0, 5).map((artist) => {
-                const isHovered = hoveredArtist === artist.name;
-                return (
+              {/* ستون ۱: ویجت Now Playing + دکمه پویانمایی‌شده + اکولایزر زنده */}
+              <motion.div
+                {...sectionAnim(0)}
+                style={{
+                  position: 'relative',
+                  minWidth: 0,
+                  borderRadius: theme.radius.xl || '26px',
+                  border: `1px solid ${theme.colors.border}`,
+                  backgroundColor: theme.colors.surface,
+                  backdropFilter: 'blur(30px) saturate(185%)',
+                  WebkitBackdropFilter: 'blur(30px) saturate(185%)',
+                  boxShadow: theme.isDark
+                    ? '0 16px 40px rgba(0, 0, 0, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.09)'
+                    : '0 10px 28px rgba(0, 0, 0, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.9)',
+                  padding: isMobile ? '18px 14px 16px' : '22px 20px 20px',
+                  overflow: 'hidden',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  textAlign: 'center',
+                  boxSizing: 'border-box',
+                }}
+              >
+                {heroSong?.cover && (
                   <div
-                    key={artist.name}
-                    onClick={() =>
-                      onNavigateToItem({ tab: 'artists', key: artist.name })
-                    }
-                    onMouseEnter={() => setHoveredArtist(artist.name)}
-                    onMouseLeave={() => setHoveredArtist(null)}
+                    aria-hidden="true"
                     style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '12px',
-                      padding: '8px 10px',
-                      borderRadius: '12px',
-                      backgroundColor: isHovered ? menuItemHover : 'transparent',
-                      cursor: 'pointer',
-                      transition: 'background-color 0.15s ease',
+                      position: 'absolute',
+                      inset: 0,
+                      pointerEvents: 'none',
+                      zIndex: 0,
                     }}
                   >
-                    <CoverImage
-                      src={artist.cover}
-                      alt={artist.name}
-                      iconSize={16}
+                    <div
                       style={{
-                        width: 42,
-                        height: 42,
-                        borderRadius: '50%',
-                        objectFit: 'cover',
-                        flexShrink: 0,
+                        position: 'absolute',
+                        inset: '-28px',
+                        backgroundImage: `url(${heroSong.cover})`,
+                        backgroundSize: 'cover',
+                        backgroundPosition: 'center',
+                        filter: 'blur(36px) saturate(165%)',
+                        opacity: theme.isDark ? 0.36 : 0.22,
+                        transform: 'scale(1.12)',
                       }}
                     />
+                    <div
+                      style={{
+                        position: 'absolute',
+                        inset: 0,
+                        background: theme.isDark
+                          ? `linear-gradient(180deg, ${withAlpha(theme.colors.surfaceSolid, 0.62)} 0%, ${withAlpha(theme.colors.surfaceSolid, 0.88)} 100%)`
+                          : `linear-gradient(180deg, ${withAlpha(theme.colors.surfaceSolid, 0.72)} 0%, ${withAlpha(theme.colors.surfaceSolid, 0.9)} 100%)`,
+                      }}
+                    />
+                  </div>
+                )}
 
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div
+                <div
+                  style={{
+                    position: 'relative',
+                    zIndex: 1,
+                    width: '100%',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                  }}
+                >
+                  <div
+                    role={heroSong ? 'button' : undefined}
+                    tabIndex={heroSong ? 0 : undefined}
+                    onClick={handleHeroOpenFullScreen}
+                    onKeyDown={(e) => {
+                      if (heroSong && (e.key === 'Enter' || e.key === ' ')) {
+                        e.preventDefault();
+                        handleHeroOpenFullScreen();
+                      }
+                    }}
+                    onMouseEnter={() => heroSong && setHoveredHeroSong(true)}
+                    onMouseLeave={() => setHoveredHeroSong(false)}
+                    style={{
+                      cursor: heroSong ? 'pointer' : 'default',
+                      outline: 'none',
+                      width: '100%',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                    }}
+                  >
+                    <motion.div
+                      animate={
+                        reduceMotion
+                          ? undefined
+                          : { scale: isHeroPlaying ? 1 : 0.96 }
+                      }
+                      transition={{ type: 'spring', stiffness: 320, damping: 26 }}
+                    >
+                      <CoverImage
+                        src={heroSong?.cover}
+                        alt={heroSong?.name || ''}
+                        iconSize={40}
+                        iconColor={theme.colors.textSecondary}
+                        fallbackBg={
+                          theme.isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)'
+                        }
                         style={{
-                          fontSize: '14px',
-                          fontWeight: 600,
-                          color: theme.colors.textPrimary,
-                          whiteSpace: 'nowrap',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
+                          width: isSmallPhone ? '96px' : isDesktop ? '128px' : '112px',
+                          height: isSmallPhone ? '96px' : isDesktop ? '128px' : '112px',
+                          borderRadius: '20px',
+                          objectFit: 'cover',
+                          display: 'block',
+                          border: `1px solid ${theme.colors.border}`,
+                          boxShadow: isHeroPlaying
+                            ? `0 16px 36px ${withAlpha(theme.colors.primary, 0.28)}`
+                            : '0 12px 26px rgba(0, 0, 0, 0.26)',
+                          transition: 'box-shadow 0.28s ease',
                         }}
-                      >
-                        {artist.name}
-                      </div>
-                      <div
-                        style={{
-                          fontSize: '12px',
-                          color: theme.colors.textSecondary,
-                          fontVariantNumeric: 'tabular-nums',
-                          marginTop: '2px',
-                        }}
-                      >
-                        {artist.songs.length} {t.tracksCount || 'آهنگ'} ·{' '}
-                        {artist.totalPlays} {t.plays || 'پخش'}
-                      </div>
+                      />
+                    </motion.div>
+
+                    <div
+                      style={{
+                        marginTop: '14px',
+                        fontSize: '0.6563rem',
+                        fontWeight: 700,
+                        letterSpacing: isRTL ? '0' : '1.4px',
+                        textTransform: 'uppercase',
+                        color: isHeroPlaying ? theme.colors.primary : theme.colors.textSecondary,
+                        transition: 'color 0.2s ease',
+                      }}
+                    >
+                      {isHeroPlaying
+                        ? t.nowPlaying || 'NOW PLAYING'
+                        : t.continueListening || 'CONTINUE LISTENING'}
                     </div>
 
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onPlaySongFromList(artist.songs[0], artist.songs);
-                      }}
-                      title={t.playAll || 'پخش'}
+                    <div
                       style={{
-                        width: '30px',
-                        height: '30px',
-                        borderRadius: '50%',
-                        border: 'none',
-                        backgroundColor: theme.colors.primary,
-                        color: '#ffffff',
+                        marginTop: '4px',
+                        width: '100%',
+                        maxWidth: isMobile ? '100%' : '260px',
+                        minWidth: 0,
+                        overflow: 'hidden',
+                        display: 'flex',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <MarqueeText
+                        text={heroSong ? heroSong.name : t.noSongSelected || 'آهنگی انتخاب نشده'}
+                        gapPx={28}
+                        speedPxPerSec={28}
+                        style={{
+                          fontSize: '1.1563rem',
+                          fontWeight: 800,
+                          color: hoveredHeroSong ? theme.colors.primary : theme.colors.textPrimary,
+                          lineHeight: 1.28,
+                          transition: 'color 0.15s ease',
+                          textAlign: 'center',
+                        }}
+                      />
+                    </div>
+
+                    <div
+                      style={{
+                        marginTop: '3px',
+                        width: '100%',
+                        maxWidth: isMobile ? '100%' : '240px',
+                        minWidth: 0,
+                        overflow: 'hidden',
+                        display: 'flex',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <MarqueeText
+                        text={
+                          heroSong
+                            ? heroSong.artist
+                            : t.noSongs || 'هنوز آهنگی اضافه نشده است.'
+                        }
+                        gapPx={24}
+                        speedPxPerSec={24}
+                        style={{
+                          fontSize: '0.8438rem',
+                          fontWeight: 500,
+                          color: theme.colors.textSecondary,
+                          textAlign: 'center',
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* دکمه کپسولی پخش/توقف با انیمیشن تغییر وضعیت */}
+                  <motion.button
+                    type="button"
+                    onClick={handleHeroPrimaryAction}
+                    disabled={!heroSong}
+                    whileHover={reduceMotion || !heroSong ? undefined : { scale: 1.04 }}
+                    whileTap={reduceMotion || !heroSong ? undefined : { scale: 0.91 }}
+                    transition={{ type: 'spring', stiffness: 460, damping: 26 }}
+                    style={{
+                      marginTop: '14px',
+                      minWidth: '108px',
+                      height: '36px',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: '0 22px',
+                      borderRadius: '999px',
+                      border: `1px solid ${
+                        isHeroPlaying
+                          ? withAlpha(theme.colors.primary, 0.45)
+                          : withAlpha(theme.colors.textPrimary, theme.isDark ? 0.14 : 0.1)
+                      }`,
+                      backgroundColor: isHeroPlaying
+                        ? theme.colors.primary
+                        : theme.isDark
+                        ? 'rgba(255, 255, 255, 0.16)'
+                        : 'rgba(60, 60, 67, 0.1)',
+                      color: isHeroPlaying ? onPrimaryColor : theme.colors.textPrimary,
+                      boxShadow: isHeroPlaying
+                        ? `0 8px 22px ${withAlpha(theme.colors.primary, 0.38)}`
+                        : 'none',
+                      fontSize: '0.8438rem',
+                      fontWeight: 700,
+                      cursor: heroSong ? 'pointer' : 'not-allowed',
+                      opacity: heroSong ? 1 : 0.45,
+                      transition:
+                        'background-color 0.24s cubic-bezier(0.22, 1, 0.36, 1), color 0.2s ease, border-color 0.22s ease, box-shadow 0.24s ease',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                    }}
+                  >
+                    <AnimatePresence mode="wait" initial={false}>
+                      <motion.span
+                        key={isHeroPlaying ? 'widget-pause' : 'widget-play'}
+                        initial={reduceMotion ? false : { opacity: 0, scale: 0.72, y: 4 }}
+                        animate={{ opacity: 1, scale: 1, y: 0 }}
+                        exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.72, y: -4 }}
+                        transition={{ duration: 0.16, ease: IOS_EASE }}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '7px',
+                        }}
+                      >
+                        {isHeroPlaying ? (
+                          <Pause size={14} fill={onPrimaryColor} />
+                        ) : (
+                          <Play size={14} fill={theme.colors.textPrimary} />
+                        )}
+                        <span>
+                          {isHeroPlaying
+                            ? t.pausePlayback || t.pause || (isRTL ? 'توقف' : 'Pause')
+                            : t.resumePlayback || t.play || (isRTL ? 'پخش' : 'Play')}
+                        </span>
+                      </motion.span>
+                    </AnimatePresence>
+                  </motion.button>
+
+                  {/* اکولایزر گرافیکی متقارن زنده (کنترل کامل از طریق rAF بدون تداخل style.transform ری‌اکت) */}
+                  <div
+                    aria-hidden="true"
+                    style={{
+                      marginTop: '14px',
+                      height: '40px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '5px',
+                      opacity: isHeroPlaying ? 1 : 0.55,
+                      transition: 'opacity 0.24s ease',
+                    }}
+                  >
+                    {WAVE_ACTIVE_ENVELOPE.map((_, idx) => (
+                      <div
+                        key={idx}
+                        ref={(el) => {
+                          waveBarsRef.current[idx] = el;
+                        }}
+                        style={{
+                          width: '4.5px',
+                          height: '38px',
+                          borderRadius: '999px',
+                          backgroundColor: isHeroPlaying
+                            ? theme.colors.primary
+                            : theme.colors.textSecondary,
+                          boxShadow: isHeroPlaying
+                            ? `0 0 8px ${withAlpha(theme.colors.primary, 0.32)}`
+                            : 'none',
+                          transformOrigin: 'center',
+                          willChange: 'transform',
+                          transition: isHeroPlaying
+                            ? 'background-color 0.2s ease'
+                            : 'transform 0.28s cubic-bezier(0.22, 1, 0.36, 1), background-color 0.2s ease',
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </motion.div>
+
+              {/* ستون ۲: نوار کنترل‌های سریع + دسترسی سریع و آرتیست‌های برتر در بالا */}
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '14px',
+                  minWidth: 0,
+                }}
+              >
+                {/* نوار کنترل‌های سریع */}
+                <motion.div
+                  {...sectionAnim(0.03)}
+                  style={{
+                    backgroundColor: theme.colors.surface,
+                    backdropFilter: 'blur(26px) saturate(180%)',
+                    WebkitBackdropFilter: 'blur(26px) saturate(180%)',
+                    borderRadius: theme.radius.xl || '22px',
+                    border: `1px solid ${theme.colors.border}`,
+                    padding: isMobile ? '13px 14px' : '15px 18px',
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: isMobile ? '10px' : '12px',
+                    boxShadow: theme.isDark
+                      ? '0 10px 28px rgba(0, 0, 0, 0.24)'
+                      : '0 6px 20px rgba(0, 0, 0, 0.045)',
+                  }}
+                >
+                  <div style={{ minWidth: 0, flex: isMobile ? '1 1 100%' : '1 1 170px' }}>
+                    <div
+                      style={{
+                        fontSize: '0.75rem',
+                        fontWeight: 700,
+                        color: theme.colors.primary,
+                      }}
+                    >
+                      {t.continueListening || 'ادامه گوش دادن'}
+                    </div>
+                    <div
+                      style={{
+                        marginTop: '3px',
+                        fontSize: '0.875rem',
+                        fontWeight: 600,
+                        color: theme.colors.textPrimary,
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                      }}
+                    >
+                      {heroSong
+                        ? heroSong.album?.trim()
+                          ? `${heroSong.album} · ${formatTrackDuration(heroSong.duration)}`
+                          : formatTrackDuration(heroSong.duration)
+                        : t.noSongs || 'هنوز آهنگی اضافه نشده است.'}
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                      gap: '8px',
+                      width: isMobile ? '100%' : 'auto',
+                    }}
+                  >
+                    {heroSong && (
+                      <motion.button
+                        type="button"
+                        whileHover={reduceMotion ? undefined : { scale: 1.03 }}
+                        whileTap={reduceMotion ? undefined : { scale: 0.94 }}
+                        onClick={handleHeroOpenFullScreen}
+                        style={{
+                          flex: isMobile ? '1 1 auto' : undefined,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '7px',
+                          padding: isMobile ? '9px 12px' : '9px 15px',
+                          borderRadius: '13px',
+                          border: 'none',
+                          backgroundColor: theme.colors.primary,
+                          color: onPrimaryColor,
+                          fontSize: '0.8438rem',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          whiteSpace: 'nowrap',
+                          boxShadow: `0 6px 16px ${withAlpha(theme.colors.primary, 0.35)}`,
+                        }}
+                      >
+                        <Maximize2 size={14} />
+                        <span>{t.fullPlayerLabel || (isRTL ? 'پخش تمام‌صفحه' : 'Full Player')}</span>
+                      </motion.button>
+                    )}
+
+                    <motion.button
+                      type="button"
+                      whileHover={reduceMotion || songs.length === 0 ? undefined : { scale: 1.02 }}
+                      whileTap={reduceMotion || songs.length === 0 ? undefined : { scale: 0.95 }}
+                      onClick={onShuffleAll}
+                      disabled={songs.length === 0}
+                      style={{
+                        flex: isMobile ? '1 1 auto' : undefined,
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        cursor: 'pointer',
-                        flexShrink: 0,
+                        gap: '7px',
+                        padding: isMobile ? '9px 12px' : '9px 15px',
+                        borderRadius: '13px',
+                        border: `1px solid ${theme.colors.border}`,
+                        backgroundColor: withAlpha(
+                          theme.colors.primary,
+                          theme.isDark ? 0.1 : 0.07
+                        ),
+                        color: theme.colors.textPrimary,
+                        fontSize: '0.8438rem',
+                        fontWeight: 600,
+                        cursor: songs.length > 0 ? 'pointer' : 'not-allowed',
+                        opacity: songs.length > 0 ? 1 : 0.5,
+                        whiteSpace: 'nowrap',
                       }}
                     >
-                      <Play size={13} fill="#ffffff" />
-                    </button>
+                      <Shuffle size={15} />
+                      <span>{t.shuffleAll || 'پخش تصادفی همه'}</span>
+                    </motion.button>
+
+                    {renderSleepTimerButton()}
                   </div>
-                );
-              })}
+                </motion.div>
+
+                {/* دسترسی سریع به پلی‌لیست‌ها + آرتیست‌های برتر در بالای صفحه در کنار ویجت */}
+                <div
+                  style={{
+                    flex: 1,
+                    display: 'grid',
+                    gridTemplateColumns:
+                      isWideDesktop || isTablet ? 'repeat(2, minmax(0, 1fr))' : '1fr',
+                    gap: isMobile ? '12px' : '14px',
+                    alignItems: 'stretch',
+                  }}
+                >
+                  {renderQuickAccessCard()}
+                  {renderTopArtistsCard()}
+                </div>
+              </div>
             </div>
-          )}
-        </div>
-      </div>
+
+            {/* ردیف ۲: انتخاب سریع (Quick Picks) */}
+            {renderQuickPicksSection()}
+
+            {/* ردیف ۳: آمار کتابخانه به‌صورت لیست عمودی در پایین صفحه */}
+            {renderVerticalStatsList()}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* منوی پورتال تایمر خواب */}
+      {sleepMenuOpen &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            ref={sleepPortalRef}
+            style={{
+              position: 'fixed',
+              top: sleepMenuPos.top,
+              left: sleepMenuPos.left,
+              width: '195px',
+              padding: '6px',
+              borderRadius: theme.radius.md || '14px',
+              backgroundColor: menuBg,
+              backdropFilter: 'blur(26px) saturate(180%)',
+              WebkitBackdropFilter: 'blur(26px) saturate(180%)',
+              border: `1px solid ${theme.colors.border}`,
+              boxShadow: '0 18px 42px rgba(0, 0, 0, 0.48)',
+              zIndex: 999999,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '2px',
+              direction: isRTL ? 'rtl' : 'ltr',
+            }}
+          >
+            {[15, 30, 60].map((mins) => {
+              const isPresetActive =
+                sleepTimer.mode === 'until' && sleepTimer.durationMinutes === mins;
+              return (
+                <button
+                  key={mins}
+                  onClick={() => {
+                    onSetSleepTimer({
+                      mode: 'until',
+                      endsAt: Date.now() + mins * 60 * 1000,
+                      durationMinutes: mins,
+                    });
+                    setSleepMenuOpen(false);
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    borderRadius: '8px',
+                    border: 'none',
+                    background: 'transparent',
+                    color: isPresetActive ? theme.colors.primary : theme.colors.textPrimary,
+                    fontSize: '0.8125rem',
+                    fontWeight: isPresetActive ? 700 : 500,
+                    textAlign: 'start',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    fontVariantNumeric: 'tabular-nums',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = menuItemHover;
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = 'transparent';
+                  }}
+                >
+                  <span>
+                    {mins} {t.sleepMinutes || 'دقیقه'}
+                  </span>
+                  {isPresetActive && <Check size={14} />}
+                </button>
+              );
+            })}
+
+            <button
+              onClick={() => {
+                onSetSleepTimer({ mode: 'songEnd' });
+                setSleepMenuOpen(false);
+              }}
+              style={{
+                width: '100%',
+                padding: '8px 12px',
+                borderRadius: '8px',
+                border: 'none',
+                background: 'transparent',
+                color:
+                  sleepTimer.mode === 'songEnd'
+                    ? theme.colors.primary
+                    : theme.colors.textPrimary,
+                fontSize: '0.8125rem',
+                fontWeight: sleepTimer.mode === 'songEnd' ? 700 : 500,
+                textAlign: 'start',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = menuItemHover;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = 'transparent';
+              }}
+            >
+              <span>{t.endOfSong || 'پایان آهنگ فعلی'}</span>
+              {sleepTimer.mode === 'songEnd' && <Check size={14} />}
+            </button>
+
+            {isSleepActive && (
+              <>
+                <div
+                  style={{
+                    height: '1px',
+                    backgroundColor: theme.colors.border,
+                    margin: '3px 4px',
+                  }}
+                />
+                <button
+                  onClick={() => {
+                    onSetSleepTimer({ mode: 'off' });
+                    setSleepMenuOpen(false);
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    borderRadius: '8px',
+                    border: 'none',
+                    background: 'transparent',
+                    color: theme.colors.danger || '#ff453a',
+                    fontSize: '0.8125rem',
+                    fontWeight: 600,
+                    textAlign: 'start',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = 'rgba(255, 69, 58, 0.14)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = 'transparent';
+                  }}
+                >
+                  <X size={14} />
+                  <span>{t.sleepTimerOff || 'خاموش'}</span>
+                </button>
+              </>
+            )}
+          </div>,
+          document.body
+        )}
     </div>
   );
 };

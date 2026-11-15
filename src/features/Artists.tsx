@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
   Mic,
   Play,
@@ -18,6 +19,7 @@ interface ArtistsProps {
   onPlaySongFromList: (song: Song, list: Song[]) => void;
   onCreatePlaylist: (name: string, selectedSongs: Song[]) => void;
   addToQueue: (song: Song) => void;
+  onPlayNext?: (songs: Song | Song[]) => void;
   onDeleteSong: (id: string) => void;
   onUpdateSong: (updatedSong: Song) => void;
   onAddSongToPlaylist: (playlistId: string, song: Song) => void;
@@ -27,6 +29,8 @@ interface ArtistsProps {
   language: 'fa' | 'en';
   glassCardCovers?: boolean;
   initialArtist?: { name: string; token: number } | null;
+  onBulkDeleteSongs?: (ids: string[]) => void;
+  confirmBeforeDelete?: boolean;
 }
 
 interface ArtistGroup {
@@ -47,6 +51,7 @@ export const Artists: React.FC<ArtistsProps> = ({
   onPlaySongFromList,
   onCreatePlaylist,
   addToQueue,
+  onPlayNext,
   onDeleteSong,
   onUpdateSong,
   onAddSongToPlaylist,
@@ -56,6 +61,8 @@ export const Artists: React.FC<ArtistsProps> = ({
   language,
   glassCardCovers = true,
   initialArtist = null,
+  onBulkDeleteSongs,
+  confirmBeforeDelete = true,
 }) => {
   const [selectedArtist, setSelectedArtist] = useState<string | null>(() =>
     initialArtist ? initialArtist.name : null
@@ -111,45 +118,62 @@ export const Artists: React.FC<ArtistsProps> = ({
     [selectedArtist, groups]
   );
 
-  // اگر آرتیست انتخاب شده هنوز آهنگ دارد، نمای تفصیلی آهنگ‌های همان آرتیست را نمایش بده
-  if (selectedArtist && activeGroup) {
-    return (
-      <AllSongs
-        songs={activeGroup.songs}
-        playlists={playlists}
-        currentSong={currentSong}
-        isPlaying={isPlaying}
-        onPlaySongFromList={onPlaySongFromList}
-        onCreatePlaylist={onCreatePlaylist}
-        addToQueue={addToQueue}
-        onDeleteSong={onDeleteSong}
-        onUpdateSong={onUpdateSong}
-        onAddSongToPlaylist={onAddSongToPlaylist}
-        onToggleFavorite={onToggleFavorite}
-        t={t}
-        theme={theme}
-        title={activeGroup.name}
-        onBack={() => setSelectedArtist(null)}
-        emptyMessage={t.noSongs}
-        glassCardCovers={glassCardCovers}
-      />
-    );
-  }
-
   const isRTL = language === 'fa';
   const hoverBg = theme.colors.surfaceHover || 'rgba(255, 255, 255, 0.08)';
 
   return (
-    <div
-      style={{
-        flex: 1,
-        padding: 'clamp(16px, 3vw, 36px) clamp(16px, 4vw, 40px) 130px',
-        overflowY: 'auto',
-        overflowX: 'hidden',
-        direction: isRTL ? 'rtl' : 'ltr',
-        boxSizing: 'border-box',
-      }}
-    >
+    <div style={{ width: '100%', flex: 1, overflowX: 'clip' }}>
+      <AnimatePresence mode="wait" initial={false}>
+        {selectedArtist && activeGroup ? (
+          <motion.div
+            key={`artist-detail-${activeGroup.name}`}
+            initial={{ opacity: 0, x: isRTL ? -24 : 24 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: isRTL ? -20 : 20 }}
+            transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+            style={{ width: '100%', display: 'flex', flexDirection: 'column' }}
+          >
+            <AllSongs
+              songs={activeGroup.songs}
+              playlists={playlists}
+              currentSong={currentSong}
+              isPlaying={isPlaying}
+              onPlaySongFromList={onPlaySongFromList}
+              onCreatePlaylist={onCreatePlaylist}
+              addToQueue={addToQueue}
+              onPlayNext={onPlayNext}
+              onDeleteSong={onDeleteSong}
+              onUpdateSong={onUpdateSong}
+              onAddSongToPlaylist={onAddSongToPlaylist}
+              onToggleFavorite={onToggleFavorite}
+              t={t}
+              theme={theme}
+              title={activeGroup.name}
+              onBack={() => setSelectedArtist(null)}
+              backLabel={t.artistsTitle || t.artists || 'آرتیست‌ها'}
+              emptyMessage={t.noSongs}
+              glassCardCovers={glassCardCovers}
+              onBulkDeleteSongs={onBulkDeleteSongs}
+              confirmBeforeDelete={confirmBeforeDelete}
+            />
+          </motion.div>
+        ) : (
+          <motion.div
+            key="artists-main"
+            initial={{ opacity: 0, x: isRTL ? 20 : -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: isRTL ? 20 : -20 }}
+            transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+            style={{
+              flex: 1,
+              width: '100%',
+              padding: 'clamp(16px, 3vw, 36px) clamp(16px, 4vw, 40px) 130px',
+              overflowY: 'auto',
+              overflowX: 'hidden',
+              direction: isRTL ? 'rtl' : 'ltr',
+              boxSizing: 'border-box',
+            }}
+          >
       {/* هدر صفحه آرتیست‌ها */}
       <div
         style={{
@@ -164,7 +188,7 @@ export const Artists: React.FC<ArtistsProps> = ({
         <div>
           <h1
             style={{
-              fontSize: 'clamp(24px, 3.5vw, 32px)',
+              fontSize: 'clamp(1.5rem, 3.5vw, 2rem)',
               fontWeight: '800',
               color: theme.colors.textPrimary,
               margin: 0,
@@ -176,7 +200,7 @@ export const Artists: React.FC<ArtistsProps> = ({
           <div
             style={{
               marginTop: '4px',
-              fontSize: '13px',
+              fontSize: '0.8125rem',
               color: theme.colors.textSecondary,
               fontVariantNumeric: 'tabular-nums',
             }}
@@ -207,7 +231,7 @@ export const Artists: React.FC<ArtistsProps> = ({
               backgroundColor: theme.colors.surface,
               color: theme.colors.textPrimary,
               cursor: 'pointer',
-              fontSize: '13px',
+              fontSize: '0.8125rem',
               fontWeight: 600,
               whiteSpace: 'nowrap',
             }}
@@ -283,7 +307,7 @@ export const Artists: React.FC<ArtistsProps> = ({
           }}
         >
           <Mic size={36} style={{ opacity: 0.4 }} />
-          <p style={{ margin: 0, fontSize: '15px', fontWeight: 500 }}>
+          <p style={{ margin: 0, fontSize: '0.9375rem', fontWeight: 500 }}>
             {t.noArtists || 'هنوز آرتیستی در کتابخانه وجود ندارد.'}
           </p>
         </div>
@@ -305,9 +329,7 @@ export const Artists: React.FC<ArtistsProps> = ({
                 onMouseEnter={() => setHoveredId(artist.name)}
                 onMouseLeave={() => setHoveredId(null)}
                 style={{
-                  backgroundColor: isHovered
-                    ? (theme.isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(255, 255, 255, 0.88)')
-                    : theme.colors.surface,
+                  backgroundColor: isHovered ? hoverBg : theme.colors.surface,
                   backdropFilter: 'blur(26px) saturate(180%)',
                   WebkitBackdropFilter: 'blur(26px) saturate(180%)',
                   borderRadius: theme.radius.xl || '22px',
@@ -325,8 +347,7 @@ export const Artists: React.FC<ArtistsProps> = ({
                     : (theme.isDark
                         ? '0 8px 24px rgba(0, 0, 0, 0.22)'
                         : '0 4px 14px rgba(0, 0, 0, 0.05)'),
-                  transition: 'transform 0.22s cubic-bezier(0.2, 0, 0, 1), background-color 0.2s, border-color 0.2s',
-                  transform: isHovered ? 'translateY(-3px)' : 'translateY(0)',
+                  transition: 'background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease',
                   display: 'flex',
                   flexDirection: 'column',
                   alignItems: 'center',
@@ -341,7 +362,7 @@ export const Artists: React.FC<ArtistsProps> = ({
                     height: '108px',
                     borderRadius: '50%',
                     overflow: 'hidden',
-                    border: `2px solid ${isActiveArtist ? theme.colors.primary : 'rgba(255, 255, 255, 0.18)'}`,
+                    border: `2px solid ${isActiveArtist ? theme.colors.primary : theme.colors.border}`,
                     boxShadow: '0 8px 20px rgba(0, 0, 0, 0.3)',
                     flexShrink: 0,
                   }}
@@ -371,7 +392,7 @@ export const Artists: React.FC<ArtistsProps> = ({
                       borderRadius: '50%',
                       border: 'none',
                       backgroundColor: theme.colors.primary,
-                      color: '#ffffff',
+                      color: theme.colors.onPrimary || '#ffffff',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
@@ -382,14 +403,14 @@ export const Artists: React.FC<ArtistsProps> = ({
                       boxShadow: `0 4px 12px ${theme.colors.primary}66`,
                     }}
                   >
-                    <Play size={16} fill="#ffffff" />
+                    <Play size={16} fill={theme.colors.onPrimary || '#ffffff'} />
                   </button>
                 </div>
 
                 <h3
                   style={{
                     margin: '14px 0 4px 0',
-                    fontSize: '15.5px',
+                    fontSize: '0.9688rem',
                     fontWeight: 700,
                     color: isActiveArtist ? theme.colors.primary : theme.colors.textPrimary,
                     width: '100%',
@@ -403,7 +424,7 @@ export const Artists: React.FC<ArtistsProps> = ({
 
                 <div
                   style={{
-                    fontSize: '12.5px',
+                    fontSize: '0.7813rem',
                     color: theme.colors.textSecondary,
                     fontVariantNumeric: 'tabular-nums',
                   }}
@@ -450,13 +471,13 @@ export const Artists: React.FC<ArtistsProps> = ({
                     borderRadius: '50%',
                     objectFit: 'cover',
                     flexShrink: 0,
-                    border: '1px solid rgba(255,255,255,0.18)',
+                    border: `1px solid ${theme.colors.border}`,
                   }}
                 />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div
                     style={{
-                      fontSize: '15px',
+                      fontSize: '0.9375rem',
                       fontWeight: 700,
                       color: isActiveArtist ? theme.colors.primary : theme.colors.textPrimary,
                       whiteSpace: 'nowrap',
@@ -468,7 +489,7 @@ export const Artists: React.FC<ArtistsProps> = ({
                   </div>
                   <div
                     style={{
-                      fontSize: '12.5px',
+                      fontSize: '0.7813rem',
                       color: theme.colors.textSecondary,
                       marginTop: '2px',
                       fontVariantNumeric: 'tabular-nums',
@@ -493,7 +514,7 @@ export const Artists: React.FC<ArtistsProps> = ({
                     borderRadius: '50%',
                     border: 'none',
                     backgroundColor: theme.colors.primary,
-                    color: '#ffffff',
+                    color: theme.colors.onPrimary || '#ffffff',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
@@ -501,13 +522,16 @@ export const Artists: React.FC<ArtistsProps> = ({
                     flexShrink: 0,
                   }}
                 >
-                  <Play size={16} fill="#ffffff" />
+                  <Play size={16} fill={theme.colors.onPrimary || '#ffffff'} />
                 </button>
               </div>
             );
           })}
         </div>
       )}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

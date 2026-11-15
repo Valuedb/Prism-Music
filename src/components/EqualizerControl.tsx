@@ -7,6 +7,8 @@ import {
   EQ10_BAND_LABELS,
   EQ10_PRESETS,
 } from '../player/audioEffects';
+import { IOSSegmentedControl, IOSSwitch } from './IOSSettingsPrimitives';
+import { withAlpha } from '../utils/color';
 
 interface EqualizerControlProps {
   settings: EqualizerSettings;
@@ -123,7 +125,7 @@ export const EqualizerControl: React.FC<EqualizerControlProps> = ({
           <div>
             <div
               style={{
-                fontSize: '16px',
+                fontSize: '1rem',
                 fontWeight: '600',
                 color: theme.colors.textPrimary,
               }}
@@ -132,7 +134,7 @@ export const EqualizerControl: React.FC<EqualizerControlProps> = ({
             </div>
             <div
               style={{
-                fontSize: '12px',
+                fontSize: '0.75rem',
                 color: theme.colors.textSecondary,
                 marginTop: '2px',
               }}
@@ -144,80 +146,25 @@ export const EqualizerControl: React.FC<EqualizerControlProps> = ({
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
           {enabled && onChangeEqMode && (
-            <div
-              style={{
-                display: 'inline-flex',
-                padding: '3px',
-                borderRadius: '10px',
-                backgroundColor: theme.colors.background,
-                border: `1px solid ${theme.colors.border}`,
-                gap: '2px',
-              }}
-            >
-              {(['5band', '10band'] as EqBandMode[]).map((mode) => {
-                const isActive = eqMode === mode;
-                return (
-                  <button
-                    key={mode}
-                    type="button"
-                    onClick={() => onChangeEqMode(mode)}
-                    style={{
-                      padding: '4px 10px',
-                      borderRadius: '7px',
-                      border: 'none',
-                      backgroundColor: isActive ? theme.colors.primary : 'transparent',
-                      color: isActive ? '#ffffff' : theme.colors.textSecondary,
-                      fontSize: '12px',
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      whiteSpace: 'nowrap',
-                      transition: 'all 0.15s ease',
-                    }}
-                  >
-                    {mode === '5band'
-                      ? t.eqMode5Band || '۵ بانده'
-                      : t.eqMode10Band || '۱۰ بانده'}
-                  </button>
-                );
-              })}
-            </div>
+            <IOSSegmentedControl<EqBandMode>
+              groupId="eq-band-mode"
+              compact
+              theme={theme}
+              value={eqMode}
+              onChange={onChangeEqMode}
+              options={[
+                { value: '5band', label: t.eqMode5Band || '۵ بانده' },
+                { value: '10band', label: t.eqMode10Band || '۱۰ بانده' },
+              ]}
+            />
           )}
 
-          {/* سوییچ روشن/خاموش iOS-style */}
-          <button
-            type="button"
-            role="switch"
-            aria-checked={enabled}
-            onClick={handleToggleEnabled}
-            style={{
-              position: 'relative',
-              direction: 'ltr',
-              width: '48px',
-              height: '28px',
-              borderRadius: '14px',
-              backgroundColor: enabled ? theme.colors.primary : theme.colors.border,
-              border: 'none',
-              cursor: 'pointer',
-              transition: 'background-color 0.25s, scale 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
-              padding: 0,
-              outline: 'none',
-              flexShrink: 0,
-            }}
-          >
-            <span
-              style={{
-                position: 'absolute',
-                top: '3px',
-                left: enabled ? '23px' : '3px',
-                width: '22px',
-                height: '22px',
-                borderRadius: '50%',
-                backgroundColor: '#ffffff',
-                boxShadow: '0 2px 5px rgba(0,0,0,0.25)',
-                transition: 'left 0.25s',
-              }}
-            />
-          </button>
+          <IOSSwitch
+            checked={enabled}
+            onChange={() => handleToggleEnabled()}
+            theme={theme}
+            ariaLabel={t.enableEqualizer || t.equalizer || 'Equalizer'}
+          />
         </div>
       </div>
 
@@ -235,7 +182,7 @@ export const EqualizerControl: React.FC<EqualizerControlProps> = ({
           <div>
             <div
               style={{
-                fontSize: '13px',
+                fontSize: '0.8125rem',
                 fontWeight: '600',
                 color: theme.colors.textSecondary,
                 marginBottom: '10px',
@@ -262,8 +209,8 @@ export const EqualizerControl: React.FC<EqualizerControlProps> = ({
                       borderRadius: theme.radius.sm,
                       border: `1px solid ${isActive ? theme.colors.primary : theme.colors.border}`,
                       backgroundColor: isActive ? theme.colors.primary : theme.colors.background,
-                      color: isActive ? '#ffffff' : theme.colors.textPrimary,
-                      fontSize: '13px',
+                      color: isActive ? (theme.colors.onPrimary || '#ffffff') : theme.colors.textPrimary,
+                      fontSize: '0.8125rem',
                       fontWeight: isActive ? '600' : 'normal',
                       cursor: 'pointer',
                       transition: 'all 0.2s',
@@ -282,7 +229,7 @@ export const EqualizerControl: React.FC<EqualizerControlProps> = ({
                     backgroundColor: theme.colors.surface,
                     border: `1px solid ${theme.colors.primary}`,
                     color: theme.colors.primary,
-                    fontSize: '13px',
+                    fontSize: '0.8125rem',
                     fontWeight: '600',
                   }}
                 >
@@ -313,7 +260,7 @@ export const EqualizerControl: React.FC<EqualizerControlProps> = ({
                 <Sparkles size={16} color={theme.colors.primary} />
                 <span
                   style={{
-                    fontSize: '14px',
+                    fontSize: '0.875rem',
                     fontWeight: '600',
                     color: theme.colors.textPrimary,
                   }}
@@ -323,7 +270,7 @@ export const EqualizerControl: React.FC<EqualizerControlProps> = ({
               </div>
               <span
                 style={{
-                  fontSize: '13px',
+                  fontSize: '0.8125rem',
                   fontWeight: '700',
                   color: bassBoost > 0 ? theme.colors.primary : theme.colors.textSecondary,
                   fontVariantNumeric: 'tabular-nums',
@@ -340,7 +287,7 @@ export const EqualizerControl: React.FC<EqualizerControlProps> = ({
                   left: 0,
                   right: 0,
                   height: '6px',
-                  backgroundColor: theme.colors.surface,
+                  backgroundColor: theme.isDark ? 'rgba(255,255,255,0.14)' : 'rgba(60,60,67,0.16)',
                   borderRadius: '3px',
                   overflow: 'hidden',
                 }}
@@ -387,7 +334,7 @@ export const EqualizerControl: React.FC<EqualizerControlProps> = ({
               <Volume2 size={16} color={theme.colors.primary} />
               <span
                 style={{
-                  fontSize: '13px',
+                  fontSize: '0.8125rem',
                   fontWeight: '600',
                   color: theme.colors.textSecondary,
                 }}
@@ -430,7 +377,7 @@ export const EqualizerControl: React.FC<EqualizerControlProps> = ({
                     {/* برچسب دسی‌بل بالای ستون */}
                     <span
                       style={{
-                        fontSize: '11px',
+                        fontSize: '0.6875rem',
                         fontWeight: '700',
                         color: gain !== 0 ? theme.colors.primary : theme.colors.textSecondary,
                         fontVariantNumeric: 'tabular-nums',
@@ -458,7 +405,7 @@ export const EqualizerControl: React.FC<EqualizerControlProps> = ({
                           left: '4px',
                           right: '4px',
                           height: '1px',
-                          backgroundColor: 'rgba(255,255,255,0.15)',
+                          backgroundColor: withAlpha(theme.colors.textSecondary, 0.28),
                           zIndex: 1,
                         }}
                       />
@@ -470,7 +417,7 @@ export const EqualizerControl: React.FC<EqualizerControlProps> = ({
                           top: '10px',
                           bottom: '10px',
                           width: '6px',
-                          backgroundColor: theme.colors.surface,
+                          backgroundColor: theme.isDark ? 'rgba(255,255,255,0.14)' : 'rgba(60,60,67,0.15)',
                           borderRadius: '3px',
                           overflow: 'hidden',
                         }}
@@ -492,12 +439,13 @@ export const EqualizerControl: React.FC<EqualizerControlProps> = ({
                       <div
                         style={{
                           position: 'absolute',
-                          bottom: `calc(${percent}% * 0.8 + 6px)`,
+                          bottom: `${(1 + percent * 0.9).toFixed(2)}px`,
                           width: '18px',
                           height: '18px',
                           borderRadius: '50%',
                           backgroundColor: '#ffffff',
-                          boxShadow: '0 2px 6px rgba(0,0,0,0.35)',
+                          border: theme.isDark ? 'none' : '1px solid rgba(0,0,0,0.12)',
+                          boxShadow: '0 2px 6px rgba(0,0,0,0.28)',
                           pointerEvents: 'none',
                           zIndex: 3,
                         }}
@@ -527,7 +475,7 @@ export const EqualizerControl: React.FC<EqualizerControlProps> = ({
                     {/* برچسب فرکانس زیر ستون */}
                     <span
                       style={{
-                        fontSize: '11px',
+                        fontSize: '0.6875rem',
                         color: theme.colors.textSecondary,
                         fontWeight: '500',
                         textAlign: 'center',

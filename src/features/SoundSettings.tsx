@@ -15,7 +15,6 @@ import {
   Sparkles,
   Disc3,
 } from 'lucide-react';
-import { motion } from 'framer-motion';
 import type {
   AudioOutputProfile,
   EqualizerSettings,
@@ -29,6 +28,14 @@ import {
   DEFAULT_SOUND_SETTINGS,
   audioEffects,
 } from '../player/audioEffects';
+import {
+  IOSGroupedSection,
+  IOSRow,
+  IOSSegmentedControl,
+  IOSSlider,
+  IOSSquircleIcon,
+  IOSSwitch,
+} from '../components/IOSSettingsPrimitives';
 
 interface SoundSettingsProps {
   soundSettings: SoundSettingsType;
@@ -40,170 +47,6 @@ interface SoundSettingsProps {
   t: any;
   language: string;
 }
-
-const ToggleSwitch = ({
-  checked,
-  onChange,
-  theme,
-  ariaLabel,
-}: {
-  checked: boolean;
-  onChange: (next: boolean) => void;
-  theme: any;
-  ariaLabel: string;
-}) => (
-  <button
-    type="button"
-    role="switch"
-    aria-checked={checked}
-    aria-label={ariaLabel}
-    onClick={() => onChange(!checked)}
-    style={{
-      position: 'relative',
-      direction: 'ltr',
-      width: '48px',
-      height: '28px',
-      borderRadius: '14px',
-      backgroundColor: checked ? theme.colors.primary : theme.colors.border,
-      border: 'none',
-      cursor: 'pointer',
-      transition: 'background-color 0.22s ease, scale 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
-      padding: 0,
-      outline: 'none',
-      flexShrink: 0,
-    }}
-  >
-    <motion.span
-      initial={false}
-      animate={{ left: checked ? 23 : 3 }}
-      transition={{ type: 'spring', stiffness: 500, damping: 32 }}
-      style={{
-        position: 'absolute',
-        top: '3px',
-        width: '22px',
-        height: '22px',
-        borderRadius: '50%',
-        backgroundColor: '#ffffff',
-        boxShadow: '0 2px 5px rgba(0,0,0,0.28)',
-      }}
-    />
-  </button>
-);
-
-const RangeSlider = ({
-  value,
-  min,
-  max,
-  step,
-  onChange,
-  theme,
-  centeredZero = false,
-}: {
-  value: number;
-  min: number;
-  max: number;
-  step: number;
-  onChange: (val: number) => void;
-  theme: any;
-  centeredZero?: boolean;
-}) => {
-  const span = max - min || 1;
-  const percent = Math.max(0, Math.min(100, ((value - min) / span) * 100));
-
-  return (
-    <div
-      style={{
-        position: 'relative',
-        width: '100%',
-        height: '26px',
-        display: 'flex',
-        alignItems: 'center',
-        direction: 'ltr',
-      }}
-    >
-      <div
-        style={{
-          position: 'absolute',
-          left: 0,
-          right: 0,
-          height: '6px',
-          borderRadius: '3px',
-          backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.09)',
-          overflow: 'hidden',
-        }}
-      >
-        {centeredZero ? (
-          <div
-            style={{
-              position: 'absolute',
-              top: 0,
-              bottom: 0,
-              left: value >= 0 ? '50%' : `${percent}%`,
-              width: `${Math.abs(percent - 50)}%`,
-              backgroundColor: theme.colors.primary,
-              borderRadius: '3px',
-            }}
-          />
-        ) : (
-          <div
-            style={{
-              width: `${percent}%`,
-              height: '100%',
-              backgroundColor: theme.colors.primary,
-              borderRadius: '3px',
-            }}
-          />
-        )}
-      </div>
-      {centeredZero && (
-        <div
-          style={{
-            position: 'absolute',
-            left: '50%',
-            width: '2px',
-            height: '12px',
-            transform: 'translateX(-50%)',
-            backgroundColor: theme.colors.textSecondary,
-            opacity: 0.45,
-            borderRadius: '1px',
-            pointerEvents: 'none',
-          }}
-        />
-      )}
-      <div
-        style={{
-          position: 'absolute',
-          left: `calc(${percent}% - 8px)`,
-          width: '16px',
-          height: '16px',
-          borderRadius: '50%',
-          backgroundColor: '#ffffff',
-          border: `2px solid ${theme.colors.primary}`,
-          boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
-          pointerEvents: 'none',
-        }}
-      />
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        style={{
-          position: 'absolute',
-          inset: 0,
-          width: '100%',
-          height: '100%',
-          opacity: 0,
-          cursor: 'pointer',
-          margin: 0,
-          zIndex: 2,
-        }}
-      />
-    </div>
-  );
-};
 
 /** نوار طیف‌سنج زنده صدا با Web Audio AnalyserNode */
 const LiveSpectrumPreview = ({
@@ -301,7 +144,6 @@ export const SoundSettings: React.FC<SoundSettingsProps> = ({
     setSoundSettings((prev) => ({ ...prev, [key]: value }));
   };
 
-  /** جابه‌جایی بین پروفایل‌های خروجی صدا (پیش‌فرض، هدفون، اسپیکر) با ذخیره خودکار تنظیمات فعلی */
   const handleSelectProfile = (targetProfile: AudioOutputProfile) => {
     if (targetProfile === soundSettings.outputProfile) return;
 
@@ -391,37 +233,11 @@ export const SoundSettings: React.FC<SoundSettingsProps> = ({
       ? `${t.balanceLeft || 'چپ'} ${Math.round(Math.abs(soundSettings.stereoBalance) * 100)}%`
       : `${t.balanceRight || 'راست'} ${Math.round(soundSettings.stereoBalance * 100)}%`;
 
-  const rowStyle: React.CSSProperties = {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: '16px',
-    padding: '18px 24px',
-    borderBottom: `1px solid ${theme.colors.border}`,
-  };
-
-  const sliderBlockStyle: React.CSSProperties = {
-    padding: '18px 24px',
-    borderBottom: `1px solid ${theme.colors.border}`,
-  };
-
-  const sectionHeadingStyle: React.CSSProperties = {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '10px',
-    padding: '18px 24px 12px',
-    fontSize: '13.5px',
-    fontWeight: 700,
-    color: theme.colors.primary,
-    borderBottom: `1px solid ${theme.colors.border}`,
-    backgroundColor: theme.isDark ? 'rgba(255,255,255,0.025)' : 'rgba(0,0,0,0.02)',
-  };
-
   return (
     <div
       style={{
         flex: 1,
-        padding: 'clamp(16px, 3.5vw, 40px)',
+        padding: 'clamp(14px, 3vw, 32px)',
         paddingBottom: '140px',
         overflowY: 'auto',
         display: 'flex',
@@ -430,206 +246,150 @@ export const SoundSettings: React.FC<SoundSettingsProps> = ({
         boxSizing: 'border-box',
       }}
     >
-      {/* نوار بالای صفحه صدا */}
-      <div
-        style={{
-          width: '100%',
-          maxWidth: '1000px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: '12px',
-          marginBottom: '22px',
-          flexWrap: 'wrap',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+      <div style={{ width: '100%', maxWidth: '820px' }}>
+        {/* نوار ناوبری iOS */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+            marginBottom: '20px',
+            flexWrap: 'wrap',
+          }}
+        >
           <button
             type="button"
             onClick={onBack}
             style={{
-              display: 'flex',
+              display: 'inline-flex',
               alignItems: 'center',
-              gap: '6px',
-              padding: '8px 14px',
-              borderRadius: theme.radius.md || '12px',
-              border: `1px solid ${theme.colors.border}`,
-              backgroundColor: theme.colors.surface,
-              color: theme.colors.textPrimary,
+              gap: '4px',
+              background: 'none',
+              border: 'none',
+              padding: '6px 4px',
+              color: theme.colors.primary,
               cursor: 'pointer',
-              fontSize: '13.5px',
+              fontSize: '0.9375rem',
               fontWeight: 600,
-              whiteSpace: 'nowrap',
             }}
           >
-            {isRTL ? <ArrowRight size={16} /> : <ArrowLeft size={16} />}
-            <span>{t.back || 'بازگشت'}</span>
+            {isRTL ? <ArrowRight size={19} /> : <ArrowLeft size={19} />}
+            <span>{t.settings || 'تنظیمات'}</span>
           </button>
 
           <h1
             style={{
-              fontSize: 'clamp(22px, 3vw, 30px)',
+              fontSize: 'clamp(1.25rem, 2.6vw, 1.625rem)',
               fontWeight: 800,
               margin: 0,
               color: theme.colors.textPrimary,
+              letterSpacing: '-0.02em',
             }}
           >
             {t.soundPageTitle || 'تنظیمات صدا'}
           </h1>
+
+          <button
+            type="button"
+            onClick={handleResetAllAudio}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '7px 12px',
+              borderRadius: '999px',
+              border: `1px solid ${theme.colors.border}`,
+              backgroundColor: theme.colors.surface,
+              color: theme.colors.textSecondary,
+              cursor: 'pointer',
+              fontSize: '0.7813rem',
+              fontWeight: 600,
+            }}
+          >
+            <RotateCcw size={14} />
+            <span>{t.resetSoundSettings || 'بازنشانی صدا'}</span>
+          </button>
         </div>
 
-        <button
-          type="button"
-          onClick={handleResetAllAudio}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            padding: '8px 14px',
-            borderRadius: theme.radius.md || '12px',
-            border: `1px solid ${theme.colors.border}`,
-            backgroundColor: theme.colors.surface,
-            color: theme.colors.textSecondary,
-            cursor: 'pointer',
-            fontSize: '13px',
-            fontWeight: 600,
-            whiteSpace: 'nowrap',
-          }}
-        >
-          <RotateCcw size={15} />
-          <span>{t.resetSoundSettings || 'بازنشانی صدا'}</span>
-        </button>
-      </div>
-
-      {/* کارت اصلی تنظیمات صدا */}
-      <div
-        style={{
-          ...theme.glass?.card,
-          borderRadius: theme.radius.xl || '24px',
-          width: '100%',
-          maxWidth: '1000px',
-          overflow: 'hidden',
-          border: `1px solid ${theme.colors.border}`,
-        }}
-      >
-        {/* پیش‌نمایش طیف زنده صدا در بالای تنظیمات صدا */}
-        <div
-          style={{
-            padding: '16px 24px',
-            borderBottom: `1px solid ${theme.colors.border}`,
-          }}
-        >
-          <LiveSpectrumPreview enabled={soundSettings.liveVisualizer} theme={theme} />
-        </div>
+        {/* طیف زنده صدا */}
+        <IOSGroupedSection theme={theme}>
+          <div style={{ padding: '14px 18px' }}>
+            <LiveSpectrumPreview enabled={soundSettings.liveVisualizer} theme={theme} />
+          </div>
+        </IOSGroupedSection>
 
         {/* بخش ۱: انتقال و پخش پیوسته */}
-        <div style={sectionHeadingStyle}>
-          <Disc3 size={17} />
-          <span>{t.soundSectionTransitions || 'انتقال و پخش پیوسته'}</span>
-        </div>
-
-        <div style={sliderBlockStyle}>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: '12px',
-              marginBottom: '10px',
-            }}
-          >
-            <div>
-              <div style={{ fontSize: '15.5px', fontWeight: 600, color: theme.colors.textPrimary }}>
-                {t.crossfadeLabel || 'محو شدن بین آهنگ‌ها (Crossfade)'}
-              </div>
-              <div style={{ fontSize: '12.5px', color: theme.colors.textSecondary, marginTop: '2px' }}>
-                {t.crossfadeDesc || 'هم‌پوشانی نرم پایان یک آهنگ با شروع آهنگ بعدی'}
-              </div>
-            </div>
-            <span
-              style={{
-                fontSize: '14px',
-                fontWeight: 700,
-                color: soundSettings.crossfadeSeconds > 0 ? theme.colors.primary : theme.colors.textSecondary,
-                fontVariantNumeric: 'tabular-nums',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {soundSettings.crossfadeSeconds === 0
+        <IOSGroupedSection header={t.soundSectionTransitions || 'انتقال و پخش پیوسته'} theme={theme}>
+          <IOSRow
+            theme={theme}
+            icon={
+              <IOSSquircleIcon color="#FF2D55" gradientTo="#FF375F">
+                <Disc3 size={16} />
+              </IOSSquircleIcon>
+            }
+            title={t.crossfadeLabel || 'محو شدن بین آهنگ‌ها (Crossfade)'}
+            subtitle={t.crossfadeDesc}
+            valueText={
+              soundSettings.crossfadeSeconds === 0
                 ? t.off || 'خاموش'
-                : `${soundSettings.crossfadeSeconds} ${t.secondsShort || 'ثانیه'}`}
-            </span>
-          </div>
-          <RangeSlider
-            value={soundSettings.crossfadeSeconds}
-            min={0}
-            max={12}
-            step={1}
-            onChange={(val) => updateSound('crossfadeSeconds', val)}
-            theme={theme}
-          />
-        </div>
+                : `${soundSettings.crossfadeSeconds} ${t.secondsShort || 'ثانیه'}`
+            }
+          >
+            <IOSSlider
+              value={soundSettings.crossfadeSeconds}
+              min={0}
+              max={12}
+              step={1}
+              onChange={(val) => updateSound('crossfadeSeconds', val)}
+              theme={theme}
+            />
+          </IOSRow>
 
-        <div style={rowStyle}>
-          <div>
-            <div style={{ fontSize: '15.5px', fontWeight: 600, color: theme.colors.textPrimary }}>
-              {t.fadePlayPauseLabel || 'نرم‌شدن شروع و توقف'}
-            </div>
-            <div style={{ fontSize: '12.5px', color: theme.colors.textSecondary, marginTop: '2px' }}>
-              {t.fadePlayPauseDesc || 'افزایش و کاهش تدریجی صدا هنگام Play و Pause'}
-            </div>
-          </div>
-          <ToggleSwitch
-            checked={soundSettings.fadeOnPlayPause}
-            onChange={(next) => updateSound('fadeOnPlayPause', next)}
+          <IOSRow
             theme={theme}
-            ariaLabel={t.fadePlayPauseLabel || 'Fade on Play Pause'}
+            title={t.fadePlayPauseLabel || 'نرم‌شدن شروع و توقف'}
+            subtitle={t.fadePlayPauseDesc}
+            trailing={
+              <IOSSwitch
+                checked={soundSettings.fadeOnPlayPause}
+                onChange={(next) => updateSound('fadeOnPlayPause', next)}
+                theme={theme}
+                ariaLabel={t.fadePlayPauseLabel || 'Fade on Play Pause'}
+              />
+            }
           />
-        </div>
 
-        <div style={rowStyle}>
-          <div>
-            <div style={{ fontSize: '15.5px', fontWeight: 600, color: theme.colors.textPrimary }}>
-              {t.gaplessLabel || 'پخش بدون وقفه (Gapless)'}
-            </div>
-            <div style={{ fontSize: '12.5px', color: theme.colors.textSecondary, marginTop: '2px' }}>
-              {t.gaplessDesc || 'حذف مکث و آماده‌سازی خودکار آهنگ بعدی پیش از پایان'}
-            </div>
-          </div>
-          <ToggleSwitch
-            checked={soundSettings.gaplessPlayback}
-            onChange={(next) => updateSound('gaplessPlayback', next)}
+          <IOSRow
             theme={theme}
-            ariaLabel={t.gaplessLabel || 'Gapless Playback'}
+            isLast
+            title={t.gaplessLabel || 'پخش بدون وقفه (Gapless)'}
+            subtitle={t.gaplessDesc}
+            trailing={
+              <IOSSwitch
+                checked={soundSettings.gaplessPlayback}
+                onChange={(next) => updateSound('gaplessPlayback', next)}
+                theme={theme}
+                ariaLabel={t.gaplessLabel || 'Gapless Playback'}
+              />
+            }
           />
-        </div>
+        </IOSGroupedSection>
 
         {/* بخش ۲: سرعت و فضای صدا */}
-        <div style={sectionHeadingStyle}>
-          <Gauge size={17} />
-          <span>{t.soundSectionAtmosphere || 'سرعت و فضای صدا'}</span>
-        </div>
-
-        <div style={sliderBlockStyle}>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: '12px',
-              marginBottom: '10px',
-              flexWrap: 'wrap',
-            }}
+        <IOSGroupedSection header={t.soundSectionAtmosphere || 'سرعت و فضای صدا'} theme={theme}>
+          <IOSRow
+            theme={theme}
+            icon={
+              <IOSSquircleIcon color="#FF9500" gradientTo="#FFCC00">
+                <Gauge size={16} />
+              </IOSSquircleIcon>
+            }
+            title={t.playbackSpeedLabel || 'سرعت پخش'}
+            subtitle={t.playbackSpeedDesc}
+            valueText={`${soundSettings.playbackSpeed.toFixed(2)}x`}
           >
-            <div>
-              <div style={{ fontSize: '15.5px', fontWeight: 600, color: theme.colors.textPrimary }}>
-                {t.playbackSpeedLabel || 'سرعت پخش'}
-              </div>
-              <div style={{ fontSize: '12.5px', color: theme.colors.textSecondary, marginTop: '2px' }}>
-                {t.playbackSpeedDesc || 'تنظیم سرعت اجرا (مناسب برای Slowed یا Nightcore)'}
-              </div>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '2px' }}>
               {[
                 { id: 'slowed' as const, label: t.presetSlowedReverb || 'Slowed + Reverb' },
                 { id: 'normal' as const, label: t.presetNormalSpeed || 'عادی 1.0x' },
@@ -640,463 +400,296 @@ export const SoundSettings: React.FC<SoundSettingsProps> = ({
                   type="button"
                   onClick={() => applySpeedMood(presetBtn.id)}
                   style={{
-                    padding: '5px 10px',
-                    borderRadius: theme.radius.sm || '8px',
+                    padding: '5px 11px',
+                    borderRadius: '999px',
                     border: `1px solid ${theme.colors.border}`,
                     backgroundColor: theme.colors.background,
                     color: theme.colors.textPrimary,
-                    fontSize: '12px',
+                    fontSize: '0.75rem',
                     fontWeight: 600,
                     cursor: 'pointer',
-                    whiteSpace: 'nowrap',
                   }}
                 >
                   {presetBtn.label}
                 </button>
               ))}
-              <span
-                style={{
-                  fontSize: '14px',
-                  fontWeight: 700,
-                  color: soundSettings.playbackSpeed !== 1 ? theme.colors.primary : theme.colors.textSecondary,
-                  fontVariantNumeric: 'tabular-nums',
-                  minWidth: '48px',
-                  textAlign: 'end',
-                }}
-              >
-                {soundSettings.playbackSpeed.toFixed(2)}x
-              </span>
             </div>
-          </div>
-          <RangeSlider
-            value={soundSettings.playbackSpeed}
-            min={0.5}
-            max={2.0}
-            step={0.05}
-            onChange={(val) => updateSound('playbackSpeed', Number(val.toFixed(2)))}
+            <IOSSlider
+              value={soundSettings.playbackSpeed}
+              min={0.5}
+              max={2.0}
+              step={0.05}
+              onChange={(val) => updateSound('playbackSpeed', Number(val.toFixed(2)))}
+              theme={theme}
+            />
+          </IOSRow>
+
+          <IOSRow
             theme={theme}
-          />
-        </div>
-
-        <div style={rowStyle}>
-          <div>
-            <div style={{ fontSize: '15.5px', fontWeight: 600, color: theme.colors.textPrimary }}>
-              {t.preservePitchLabel || 'حفظ زیر و بمی صدا'}
-            </div>
-            <div style={{ fontSize: '12.5px', color: theme.colors.textSecondary, marginTop: '2px' }}>
-              {t.preservePitchDesc || 'با غیرفعال کردن، تغییر سرعت زیر و بمی صدا را نیز تغییر می‌دهد'}
-            </div>
-          </div>
-          <ToggleSwitch
-            checked={soundSettings.preservePitch}
-            onChange={(next) => updateSound('preservePitch', next)}
-            theme={theme}
-            ariaLabel={t.preservePitchLabel || 'Preserve Pitch'}
-          />
-        </div>
-
-        <div style={sliderBlockStyle}>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: '12px',
-              flexWrap: 'wrap',
-              marginBottom: soundSettings.reverbRoom !== 'off' ? '14px' : '0',
-            }}
-          >
-            <div>
-              <div style={{ fontSize: '15.5px', fontWeight: 600, color: theme.colors.textPrimary }}>
-                {t.reverbRoomLabel || 'افکت فضا و ریورب'}
-              </div>
-              <div style={{ fontSize: '12.5px', color: theme.colors.textSecondary, marginTop: '2px' }}>
-                {t.reverbRoomDesc || 'شبیه‌سازی آکوستیک محیط (استودیو، سالن یا کلیسا)'}
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-              {(
-                [
-                  { id: 'off', label: t.reverbOff || 'خاموش' },
-                  { id: 'studio', label: t.reverbStudio || 'استودیو' },
-                  { id: 'hall', label: t.reverbHall || 'سالن کنسرت' },
-                  { id: 'cathedral', label: t.reverbCathedral || 'کلیسا / عمیق' },
-                ] as { id: ReverbRoom; label: string }[]
-              ).map((room) => {
-                const isActive = soundSettings.reverbRoom === room.id;
-                return (
-                  <button
-                    key={room.id}
-                    type="button"
-                    onClick={() => updateSound('reverbRoom', room.id)}
-                    style={{
-                      padding: '6px 12px',
-                      borderRadius: theme.radius.sm || '8px',
-                      border: `1px solid ${isActive ? theme.colors.primary : theme.colors.border}`,
-                      backgroundColor: isActive ? theme.colors.primary : theme.colors.background,
-                      color: isActive ? '#ffffff' : theme.colors.textPrimary,
-                      fontSize: '12.5px',
-                      fontWeight: isActive ? 600 : 500,
-                      cursor: 'pointer',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {room.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {soundSettings.reverbRoom !== 'off' && (
-            <div style={{ marginTop: '8px' }}>
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  fontSize: '12.5px',
-                  color: theme.colors.textSecondary,
-                  marginBottom: '6px',
-                }}
-              >
-                <span>{t.reverbMixLabel || 'شدت ریورب'}</span>
-                <span style={{ fontWeight: 700, color: theme.colors.primary, fontVariantNumeric: 'tabular-nums' }}>
-                  {Math.round(soundSettings.reverbMix * 100)}%
-                </span>
-              </div>
-              <RangeSlider
-                value={Math.round(soundSettings.reverbMix * 100)}
-                min={0}
-                max={100}
-                step={2}
-                onChange={(val) => updateSound('reverbMix', val / 100)}
+            title={t.preservePitchLabel || 'حفظ زیر و بمی صدا'}
+            subtitle={t.preservePitchDesc}
+            trailing={
+              <IOSSwitch
+                checked={soundSettings.preservePitch}
+                onChange={(next) => updateSound('preservePitch', next)}
                 theme={theme}
+                ariaLabel={t.preservePitchLabel || 'Preserve Pitch'}
               />
-            </div>
-          )}
-        </div>
-
-        <div style={sliderBlockStyle}>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: '12px',
-              marginBottom: '10px',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <Sparkles size={18} color={theme.colors.primary} />
-              <div>
-                <div style={{ fontSize: '15.5px', fontWeight: 600, color: theme.colors.textPrimary }}>
-                  {t.spatialSurroundLabel || 'صدای سه‌بعدی (Surround)'}
-                </div>
-                <div style={{ fontSize: '12.5px', color: theme.colors.textSecondary, marginTop: '2px' }}>
-                  {t.spatialSurroundDesc || 'گسترش صحنه استریو برای حس فراگیرتر در هدفون'}
-                </div>
-              </div>
-            </div>
-            <span
-              style={{
-                fontSize: '14px',
-                fontWeight: 700,
-                color: soundSettings.spatialSurround > 0 ? theme.colors.primary : theme.colors.textSecondary,
-                fontVariantNumeric: 'tabular-nums',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {soundSettings.spatialSurround}%
-            </span>
-          </div>
-          <RangeSlider
-            value={soundSettings.spatialSurround}
-            min={0}
-            max={100}
-            step={5}
-            onChange={(val) => updateSound('spatialSurround', val)}
-            theme={theme}
+            }
           />
-        </div>
+
+          <IOSRow
+            theme={theme}
+            icon={
+              <IOSSquircleIcon color="#AF52DE" gradientTo="#5856D6">
+                <Waves size={16} />
+              </IOSSquircleIcon>
+            }
+            title={t.reverbRoomLabel || 'افکت فضا و ریورب'}
+            subtitle={t.reverbRoomDesc}
+          >
+            <IOSSegmentedControl<ReverbRoom>
+              groupId="sound-reverb-room"
+              fullWidth
+              theme={theme}
+              value={soundSettings.reverbRoom}
+              onChange={(val) => updateSound('reverbRoom', val)}
+              options={[
+                { value: 'off', label: t.reverbOff || 'خاموش' },
+                { value: 'studio', label: t.reverbStudio || 'استودیو' },
+                { value: 'hall', label: t.reverbHall || 'سالن' },
+                { value: 'cathedral', label: t.reverbCathedral || 'کلیسا' },
+              ]}
+            />
+            {soundSettings.reverbRoom !== 'off' && (
+              <div style={{ marginTop: '4px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: theme.colors.textSecondary, marginBottom: '6px' }}>
+                  <span>{t.reverbMixLabel || 'شدت ریورب'}</span>
+                  <span style={{ fontWeight: 700, color: theme.colors.primary, fontVariantNumeric: 'tabular-nums' }}>
+                    {Math.round(soundSettings.reverbMix * 100)}%
+                  </span>
+                </div>
+                <IOSSlider
+                  value={Math.round(soundSettings.reverbMix * 100)}
+                  min={0}
+                  max={100}
+                  step={2}
+                  onChange={(val) => updateSound('reverbMix', val / 100)}
+                  theme={theme}
+                />
+              </div>
+            )}
+          </IOSRow>
+
+          <IOSRow
+            theme={theme}
+            isLast
+            icon={
+              <IOSSquircleIcon color="#007AFF" gradientTo="#32ADE6">
+                <Sparkles size={16} />
+              </IOSSquircleIcon>
+            }
+            title={t.spatialSurroundLabel || 'صدای سه‌بعدی (Surround)'}
+            subtitle={t.spatialSurroundDesc}
+            valueText={`${soundSettings.spatialSurround}%`}
+          >
+            <IOSSlider
+              value={soundSettings.spatialSurround}
+              min={0}
+              max={100}
+              step={5}
+              onChange={(val) => updateSound('spatialSurround', val)}
+              theme={theme}
+            />
+          </IOSRow>
+        </IOSGroupedSection>
 
         {/* بخش ۳: تعادل و کیفیت خروجی */}
-        <div style={sectionHeadingStyle}>
-          <Waves size={17} />
-          <span>{t.soundSectionDynamics || 'تعادل و کیفیت خروجی'}</span>
-        </div>
-
-        <div style={rowStyle}>
-          <div>
-            <div style={{ fontSize: '15.5px', fontWeight: 600, color: theme.colors.textPrimary }}>
-              {t.volumeNormLabel || 'نرمال‌سازی بلندی صدا'}
-            </div>
-            <div style={{ fontSize: '12.5px', color: theme.colors.textSecondary, marginTop: '2px' }}>
-              {t.volumeNormDesc || 'یکدست‌سازی حجم صدا بین آهنگ‌های ضعیف و پرصدا با لیمیتر هوشمند'}
-            </div>
-          </div>
-          <ToggleSwitch
-            checked={soundSettings.volumeNormalization}
-            onChange={(next) => updateSound('volumeNormalization', next)}
+        <IOSGroupedSection header={t.soundSectionDynamics || 'تعادل و کیفیت خروجی'} theme={theme}>
+          <IOSRow
             theme={theme}
-            ariaLabel={t.volumeNormLabel || 'Volume Normalization'}
+            title={t.volumeNormLabel || 'نرمال‌سازی بلندی صدا'}
+            subtitle={t.volumeNormDesc}
+            trailing={
+              <IOSSwitch
+                checked={soundSettings.volumeNormalization}
+                onChange={(next) => updateSound('volumeNormalization', next)}
+                theme={theme}
+                ariaLabel={t.volumeNormLabel || 'Volume Normalization'}
+              />
+            }
           />
-        </div>
 
-        <div style={sliderBlockStyle}>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: '12px',
-              marginBottom: '10px',
-            }}
+          <IOSRow
+            theme={theme}
+            icon={
+              <IOSSquircleIcon color="#34C759" gradientTo="#30D158">
+                <Volume2 size={16} />
+              </IOSSquircleIcon>
+            }
+            title={t.preampLabel || 'تقویت ورودی (Pre-Amp)'}
+            subtitle={t.preampDesc}
+            trailing={
+              <button
+                type="button"
+                onClick={() => updateSound('preampDb', 0)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  padding: 0,
+                  cursor: 'pointer',
+                  fontSize: '0.8438rem',
+                  fontWeight: 700,
+                  color: soundSettings.preampDb !== 0 ? theme.colors.primary : theme.colors.textSecondary,
+                  fontVariantNumeric: 'tabular-nums',
+                }}
+              >
+                {soundSettings.preampDb > 0 ? `+${soundSettings.preampDb}` : soundSettings.preampDb} {t.db || 'dB'}
+              </button>
+            }
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <Volume2 size={18} color={theme.colors.primary} />
-              <div>
-                <div style={{ fontSize: '15.5px', fontWeight: 600, color: theme.colors.textPrimary }}>
-                  {t.preampLabel || 'تقویت ورودی (Pre-Amp)'}
-                </div>
-                <div style={{ fontSize: '12.5px', color: theme.colors.textSecondary, marginTop: '2px' }}>
-                  {t.preampDesc || 'تنظیم سطح پایه خروجی پیش از اعمال اکولایزر'}
-                </div>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => updateSound('preampDb', 0)}
-              title="0 dB"
-              style={{
-                background: 'none',
-                border: 'none',
-                padding: 0,
-                cursor: 'pointer',
-                fontSize: '14px',
-                fontWeight: 700,
-                color: soundSettings.preampDb !== 0 ? theme.colors.primary : theme.colors.textSecondary,
-                fontVariantNumeric: 'tabular-nums',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {soundSettings.preampDb > 0 ? `+${soundSettings.preampDb}` : soundSettings.preampDb}{' '}
-              {t.db || 'dB'}
-            </button>
-          </div>
-          <RangeSlider
-            value={soundSettings.preampDb}
-            min={-12}
-            max={12}
-            step={1}
-            centeredZero
-            onChange={(val) => updateSound('preampDb', val)}
-            theme={theme}
-          />
-        </div>
+            <IOSSlider
+              value={soundSettings.preampDb}
+              min={-12}
+              max={12}
+              step={1}
+              centeredZero
+              onChange={(val) => updateSound('preampDb', val)}
+              theme={theme}
+            />
+          </IOSRow>
 
-        <div style={sliderBlockStyle}>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: '12px',
-              marginBottom: '10px',
-            }}
+          <IOSRow
+            theme={theme}
+            title={t.stereoBalanceLabel || 'بالانس چپ و راست'}
+            subtitle={t.stereoBalanceDesc}
+            trailing={
+              <button
+                type="button"
+                onClick={() => updateSound('stereoBalance', 0)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  padding: 0,
+                  cursor: 'pointer',
+                  fontSize: '0.8125rem',
+                  fontWeight: 700,
+                  color: Math.abs(soundSettings.stereoBalance) >= 0.04 ? theme.colors.primary : theme.colors.textSecondary,
+                  fontVariantNumeric: 'tabular-nums',
+                }}
+              >
+                {balanceLabel}
+              </button>
+            }
           >
-            <div>
-              <div style={{ fontSize: '15.5px', fontWeight: 600, color: theme.colors.textPrimary }}>
-                {t.stereoBalanceLabel || 'بالانس چپ و راست'}
-              </div>
-              <div style={{ fontSize: '12.5px', color: theme.colors.textSecondary, marginTop: '2px' }}>
-                {t.stereoBalanceDesc || 'تنظیم تعادل صدا بین کانال چپ و راست'}
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => updateSound('stereoBalance', 0)}
-              style={{
-                background: 'none',
-                border: 'none',
-                padding: 0,
-                cursor: 'pointer',
-                fontSize: '13.5px',
-                fontWeight: 700,
-                color: Math.abs(soundSettings.stereoBalance) >= 0.04 ? theme.colors.primary : theme.colors.textSecondary,
-                fontVariantNumeric: 'tabular-nums',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {balanceLabel}
-            </button>
-          </div>
-          <RangeSlider
-            value={Math.round(soundSettings.stereoBalance * 100)}
-            min={-100}
-            max={100}
-            step={5}
-            centeredZero
-            onChange={(val) => updateSound('stereoBalance', val / 100)}
-            theme={theme}
-          />
-        </div>
+            <IOSSlider
+              value={Math.round(soundSettings.stereoBalance * 100)}
+              min={-100}
+              max={100}
+              step={5}
+              centeredZero
+              onChange={(val) => updateSound('stereoBalance', val / 100)}
+              theme={theme}
+            />
+          </IOSRow>
 
-        <div style={rowStyle}>
-          <div>
-            <div style={{ fontSize: '15.5px', fontWeight: 600, color: theme.colors.textPrimary }}>
-              {t.monoAudioLabel || 'حالت مونو (Mono)'}
-            </div>
-            <div style={{ fontSize: '12.5px', color: theme.colors.textSecondary, marginTop: '2px' }}>
-              {t.monoAudioDesc || 'ترکیب دو کانال در یک خروجی یکسان (مناسب تک‌گوشی)'}
-            </div>
-          </div>
-          <ToggleSwitch
-            checked={soundSettings.monoAudio}
-            onChange={(next) => updateSound('monoAudio', next)}
+          <IOSRow
             theme={theme}
-            ariaLabel={t.monoAudioLabel || 'Mono Audio'}
+            title={t.monoAudioLabel || 'حالت مونو (Mono)'}
+            subtitle={t.monoAudioDesc}
+            trailing={
+              <IOSSwitch
+                checked={soundSettings.monoAudio}
+                onChange={(next) => updateSound('monoAudio', next)}
+                theme={theme}
+                ariaLabel={t.monoAudioLabel || 'Mono Audio'}
+              />
+            }
           />
-        </div>
 
-        <div style={sliderBlockStyle}>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: '12px',
-              marginBottom: '10px',
-            }}
+          <IOSRow
+            theme={theme}
+            isLast
+            icon={
+              <IOSSquircleIcon color="#30B0C7" gradientTo="#32ADE6">
+                <ShieldCheck size={16} />
+              </IOSSquircleIcon>
+            }
+            title={t.maxVolumeLimitLabel || 'سقف ایمن ولوم'}
+            subtitle={t.maxVolumeLimitDesc}
+            valueText={`${soundSettings.maxVolumeLimit}%`}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <ShieldCheck size={18} color={theme.colors.primary} />
-              <div>
-                <div style={{ fontSize: '15.5px', fontWeight: 600, color: theme.colors.textPrimary }}>
-                  {t.maxVolumeLimitLabel || 'سقف ایمن ولوم'}
-                </div>
-                <div style={{ fontSize: '12.5px', color: theme.colors.textSecondary, marginTop: '2px' }}>
-                  {t.maxVolumeLimitDesc || 'محدود کردن حداکثر بلندی صدا برای محافظت از شنوایی'}
-                </div>
-              </div>
-            </div>
-            <span
-              style={{
-                fontSize: '14px',
-                fontWeight: 700,
-                color: soundSettings.maxVolumeLimit < 100 ? theme.colors.primary : theme.colors.textSecondary,
-                fontVariantNumeric: 'tabular-nums',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {soundSettings.maxVolumeLimit}%
-            </span>
-          </div>
-          <RangeSlider
-            value={soundSettings.maxVolumeLimit}
-            min={20}
-            max={100}
-            step={5}
-            onChange={(val) => updateSound('maxVolumeLimit', val)}
-            theme={theme}
-          />
-        </div>
+            <IOSSlider
+              value={soundSettings.maxVolumeLimit}
+              min={20}
+              max={100}
+              step={5}
+              onChange={(val) => updateSound('maxVolumeLimit', val)}
+              theme={theme}
+            />
+          </IOSRow>
+        </IOSGroupedSection>
 
         {/* بخش ۴: پروفایل خروجی و اکولایزر پیشرفته */}
-        <div style={sectionHeadingStyle}>
-          <Sliders size={17} />
-          <span>{t.soundSectionEqualizer || 'اکولایزر و پروفایل خروجی'}</span>
-        </div>
-
-        <div style={sliderBlockStyle}>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: '12px',
-              flexWrap: 'wrap',
-              marginBottom: '18px',
-            }}
+        <IOSGroupedSection header={t.soundSectionEqualizer || 'اکولایزر و پروفایل خروجی'} theme={theme}>
+          <IOSRow
+            theme={theme}
+            icon={
+              <IOSSquircleIcon color="#5856D6" gradientTo="#007AFF">
+                <Sliders size={16} />
+              </IOSSquircleIcon>
+            }
+            title={t.outputProfileLabel || 'پروفایل خروجی صدا'}
+            subtitle={t.outputProfileDesc}
           >
-            <div>
-              <div style={{ fontSize: '15.5px', fontWeight: 600, color: theme.colors.textPrimary }}>
-                {t.outputProfileLabel || 'پروفایل خروجی صدا'}
-              </div>
-              <div style={{ fontSize: '12.5px', color: theme.colors.textSecondary, marginTop: '2px' }}>
-                {t.outputProfileDesc || 'ذخیره تنظیمات مجزا برای هر دستگاه پخش'}
-              </div>
-            </div>
+            <IOSSegmentedControl<AudioOutputProfile>
+              groupId="sound-output-profile"
+              fullWidth
+              theme={theme}
+              value={soundSettings.outputProfile}
+              onChange={handleSelectProfile}
+              options={[
+                { value: 'default', label: <><Laptop size={13} /><span>{t.profileDefault || 'پیش‌فرض'}</span></> },
+                { value: 'headphones', label: <><Headphones size={13} /><span>{t.profileHeadphones || 'هدفون'}</span></> },
+                { value: 'speaker', label: <><Speaker size={13} /><span>{t.profileSpeaker || 'اسپیکر'}</span></> },
+              ]}
+            />
+          </IOSRow>
 
-            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-              {(
-                [
-                  { id: 'default', label: t.profileDefault || 'پیش‌فرض', icon: <Laptop size={14} /> },
-                  { id: 'headphones', label: t.profileHeadphones || 'هدفون', icon: <Headphones size={14} /> },
-                  { id: 'speaker', label: t.profileSpeaker || 'اسپیکر', icon: <Speaker size={14} /> },
-                ] as { id: AudioOutputProfile; label: string; icon: React.ReactNode }[]
-              ).map((prof) => {
-                const isActive = soundSettings.outputProfile === prof.id;
-                return (
-                  <button
-                    key={prof.id}
-                    type="button"
-                    onClick={() => handleSelectProfile(prof.id)}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      padding: '7px 12px',
-                      borderRadius: theme.radius.sm || '8px',
-                      border: `1px solid ${isActive ? theme.colors.primary : theme.colors.border}`,
-                      backgroundColor: isActive ? theme.colors.primary : theme.colors.background,
-                      color: isActive ? '#ffffff' : theme.colors.textPrimary,
-                      fontSize: '12.5px',
-                      fontWeight: isActive ? 600 : 500,
-                      cursor: 'pointer',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {prof.icon}
-                    <span>{prof.label}</span>
-                  </button>
-                );
-              })}
-            </div>
+          <div style={{ padding: '14px 18px', borderBottom: `1px solid ${theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(60,60,67,0.12)'}` }}>
+            <EqualizerControl
+              settings={equalizerSettings}
+              onChange={setEqualizerSettings}
+              eqMode={soundSettings.eqMode}
+              bands10={soundSettings.bands10}
+              onChangeEqMode={(mode) => updateSound('eqMode', mode)}
+              onChangeBands10={(bands) => updateSound('bands10', bands)}
+              theme={theme}
+              t={t}
+              embedded
+            />
           </div>
 
-          <EqualizerControl
-            settings={equalizerSettings}
-            onChange={setEqualizerSettings}
-            eqMode={soundSettings.eqMode}
-            bands10={soundSettings.bands10}
-            onChangeEqMode={(mode) => updateSound('eqMode', mode)}
-            onChangeBands10={(bands) => updateSound('bands10', bands)}
+          <IOSRow
             theme={theme}
-            t={t}
-            embedded
+            isLast
+            icon={
+              <IOSSquircleIcon color="#FF2D55" gradientTo="#AF52DE">
+                <Activity size={16} />
+              </IOSSquircleIcon>
+            }
+            title={t.liveVisualizerLabel || 'واکنش‌گرای زنده صدا (Visualizer)'}
+            subtitle={t.liveVisualizerDesc}
+            trailing={
+              <IOSSwitch
+                checked={soundSettings.liveVisualizer}
+                onChange={(next) => updateSound('liveVisualizer', next)}
+                theme={theme}
+                ariaLabel={t.liveVisualizerLabel || 'Live Visualizer'}
+              />
+            }
           />
-        </div>
-
-        <div style={{ ...rowStyle, borderBottom: 'none' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <Activity size={18} color={theme.colors.primary} />
-            <div>
-              <div style={{ fontSize: '15.5px', fontWeight: 600, color: theme.colors.textPrimary }}>
-                {t.liveVisualizerLabel || 'واکنش‌گرای زنده صدا (Visualizer)'}
-              </div>
-              <div style={{ fontSize: '12.5px', color: theme.colors.textSecondary, marginTop: '2px' }}>
-                {t.liveVisualizerDesc || 'نمایش طیف فرکانسی زنده در تنظیمات صدا و پلیر تمام‌صفحه'}
-              </div>
-            </div>
-          </div>
-          <ToggleSwitch
-            checked={soundSettings.liveVisualizer}
-            onChange={(next) => updateSound('liveVisualizer', next)}
-            theme={theme}
-            ariaLabel={t.liveVisualizerLabel || 'Live Audio Visualizer'}
-          />
-        </div>
+        </IOSGroupedSection>
       </div>
     </div>
   );
