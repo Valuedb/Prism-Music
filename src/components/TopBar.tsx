@@ -70,9 +70,9 @@ export const TopBar = ({
       { id: 'home', label: t.home },
       { id: 'allSongs', label: t.allSongs },
       { id: 'playlists', label: t.playlists },
-      { id: 'artists', label: t.artists || 'آرتیست‌ها' },
+      { id: 'artists', label: t.artists || 'خواننده‌ها' },
       { id: 'albums', label: t.albums || 'آلبوم‌ها' },
-      { id: 'folders', label: t.folders || 'فولدربندی‌ها' },
+      { id: 'folders', label: t.folders || 'پوشه‌بندی' },
     ],
     [t.home, t.allSongs, t.playlists, t.artists, t.albums, t.folders]
   );
@@ -134,8 +134,8 @@ export const TopBar = ({
         position: 'sticky',
         top: 0,
         zIndex: 50,
-        paddingTop: '18px',
-        paddingBottom: '8px',
+        paddingTop: '10px',
+        paddingBottom: '6px',
         backgroundColor: topBarBg,
         backdropFilter: 'blur(28px) saturate(180%)',
         WebkitBackdropFilter: 'blur(28px) saturate(180%)',
@@ -144,14 +144,14 @@ export const TopBar = ({
         overflow: 'hidden',
       }}
     >
-      {/* هدر بالایی با عنوان اپل موزیک و دکمه‌های جستجو و تنظیمات */}
+      {/* هدر بالایی با عنوان Prism Music و دکمه‌های جستجو و تنظیمات */}
       <div
         style={{
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
           padding: '0 24px',
-          marginBottom: '10px',
+          marginBottom: '2px',
           width: '100%',
           boxSizing: 'border-box',
         }}
@@ -165,7 +165,7 @@ export const TopBar = ({
             margin: 0,
           }}
         >
-          Apple Music
+          Prism Music
         </h1>
 
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
@@ -224,7 +224,7 @@ export const TopBar = ({
           justifyContent: 'center',
           alignItems: 'center',
           boxSizing: 'border-box',
-          minHeight: '48px',
+          minHeight: '38px',
         }}
       >
         <motion.div
@@ -262,7 +262,7 @@ export const TopBar = ({
                   flexDirection: 'column',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  padding: '6px 10px 4px 10px',
+                  padding: '4px 10px 2px 10px',
                   fontSize: 'clamp(0.875rem, 1.45vw, 0.9688rem)',
                   fontWeight: 700,
                   color: isActive ? theme.colors.primary : theme.colors.textSecondary,
@@ -281,7 +281,7 @@ export const TopBar = ({
                 <div
                   style={{
                     height: '4px',
-                    marginTop: '6px',
+                    marginTop: '4px',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',

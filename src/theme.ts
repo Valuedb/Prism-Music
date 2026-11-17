@@ -611,6 +611,7 @@ export const DEFAULT_DISPLAY_SETTINGS: import('./types').DisplaySettings = {
   artworkStyle: 'classic',
   visualizerStyle: 'bars',
   homeLayout: 'widget',
+  navigationLayout: 'top',
   reduceMotion: false,
 };
 

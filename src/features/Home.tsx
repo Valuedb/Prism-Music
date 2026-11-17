@@ -25,6 +25,7 @@ import { CoverImage } from '../components/CoverImage';
 import { MarqueeText } from '../components/MarqueeText';
 import { IOSSquircleIcon } from '../components/IOSSettingsPrimitives';
 import { audioEffects } from '../player/audioEffects';
+import { getBidiTruncateStyle } from '../utils/bidi';
 import { withAlpha } from '../utils/color';
 
 interface HomeProps {
@@ -111,14 +112,15 @@ export const Home: React.FC<HomeProps> = ({
   reduceMotion = false,
 }) => {
   const isRTL = language === 'fa';
-  const [viewportWidth, setViewportWidth] = useState(() =>
+  const rootContainerRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth : 1280
   );
-  const isSmallPhone = viewportWidth < 480;
-  const isMobile = viewportWidth < 640;
-  const isTablet = viewportWidth >= 640 && viewportWidth < 960;
-  const isDesktop = viewportWidth >= 960;
-  const isWideDesktop = viewportWidth >= 1160;
+  const isSmallPhone = containerWidth < 460;
+  const isMobile = containerWidth < 620;
+  const isTablet = containerWidth >= 620 && containerWidth < 880;
+  const isDesktop = containerWidth >= 880;
+  const isWideDesktop = containerWidth >= 1060;
   const [pickSeed, setPickSeed] = useState(0);
   const [sleepMenuOpen, setSleepMenuOpen] = useState(false);
   const [nowTs, setNowTs] = useState(() => Date.now());
@@ -136,9 +138,29 @@ export const Home: React.FC<HomeProps> = ({
   });
 
   useEffect(() => {
-    const onResize = () => setViewportWidth(window.innerWidth);
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
+    const el = rootContainerRef.current;
+    const syncWindowWidth = () => {
+      const next = el?.clientWidth || window.innerWidth;
+      if (next > 0) setContainerWidth(next);
+    };
+    syncWindowWidth();
+
+    let observer: ResizeObserver | null = null;
+    if (el && typeof ResizeObserver !== 'undefined') {
+      observer = new ResizeObserver((entries) => {
+        const w = entries[0]?.contentRect?.width;
+        if (w && w > 0) {
+          setContainerWidth(Math.round(w));
+        }
+      });
+      observer.observe(el);
+    }
+
+    window.addEventListener('resize', syncWindowWidth);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', syncWindowWidth);
+    };
   }, []);
 
   // به‌روزرسانی شمارنده تایمر خواب فقط وقتی تایمر زمان‌دار فعال است
@@ -208,7 +230,7 @@ export const Home: React.FC<HomeProps> = ({
     isPlaying && currentSong && heroSong && currentSong.id === heroSong.id
   );
 
-  // انیمیشن اکولایزر گرافیکی زنده با کنترل داینامیک گین خودکار (AGC) بدون قفل شدن در سقف
+  // انیمیشن اکولایزر گرافیکی زنده با تشخیص ضربه بیس (Bass Punch)، AGC سریع و واکنش لحظه‌ای
   useEffect(() => {
     if (homeLayout !== 'widget') return;
 
@@ -222,34 +244,45 @@ export const Home: React.FC<HomeProps> = ({
     }
 
     let rafId = 0;
-    const bins = new Uint8Array(audioEffects.getFrequencyBinCount() || 64);
+    const bins = new Uint8Array(audioEffects.getFrequencyBinCount() || 256);
     const smoothed = new Float32Array(WAVE_ACTIVE_ENVELOPE.length);
     for (let i = 0; i < smoothed.length; i++) {
       smoothed[i] = WAVE_REST_PROFILE[i];
     }
-    let runningPeak = 95;
+    let runningPeak = 76;
     let prevAvg = 0;
+    let prevBass = 0;
 
     const tick = (now: number) => {
       const ok = audioEffects.getFrequencyData(bins);
-      const limit = Math.min(bins.length - 1, 48);
+      const limit = Math.min(bins.length - 1, 108);
       let framePeak = 0;
       let frameSum = 0;
+      let bassSum = 0;
+      const bassSpan = Math.min(6, Math.max(1, limit));
+
       if (ok && limit > 0) {
         for (let i = 1; i <= limit; i++) {
           const val = bins[i];
           if (val > framePeak) framePeak = val;
           frameSum += val;
+          if (i <= bassSpan) {
+            bassSum += val;
+          }
         }
       }
 
       const hasAudio = ok && framePeak > 2;
       if (hasAudio) {
-        runningPeak = Math.max(42, runningPeak * 0.982, framePeak * 1.04);
+        runningPeak = Math.max(34, runningPeak * 0.976, framePeak * 1.02);
       }
+
       const frameAvg = hasAudio ? frameSum / limit / runningPeak : 0;
-      const flux = Math.max(0, frameAvg - prevAvg) * 1.8;
-      prevAvg = prevAvg * 0.72 + frameAvg * 0.28;
+      const bassNorm = hasAudio ? Math.min(1.3, bassSum / (bassSpan * runningPeak)) : 0;
+      const bassPunch = Math.max(0, bassNorm - prevBass) * 2.5;
+      const flux = Math.max(0, frameAvg - prevAvg) * 2.2;
+      prevAvg = prevAvg * 0.65 + frameAvg * 0.35;
+      prevBass = prevBass * 0.6 + bassNorm * 0.4;
 
       const centerIdx = (WAVE_ACTIVE_ENVELOPE.length - 1) / 2;
 
@@ -257,37 +290,38 @@ export const Home: React.FC<HomeProps> = ({
         const bar = waveBarsRef.current[i];
         if (!bar) continue;
         const distFromCenter = Math.abs(i - centerIdx);
+        const normDist = distFromCenter / centerIdx;
         const envelope = WAVE_ACTIVE_ENVELOPE[i];
 
-        // موج ارگانیک نرم برای زنده نگه‌داشتن حرکت بین فریم‌ها و ایجاد تنوع بین چپ و راست
         const organicWave =
           0.5 +
           0.5 *
-            Math.sin(now * 0.0085 - distFromCenter * 0.95 + (i - centerIdx) * 0.28) *
-            Math.cos(now * 0.0041 + i * 0.65);
+            Math.sin(now * 0.0095 - distFromCenter * 0.95 + (i - centerIdx) * 0.32) *
+            Math.cos(now * 0.0046 + i * 0.68);
 
         let energy: number;
         if (!hasAudio) {
-          energy = 0.22 + organicWave * 0.74;
+          energy = 0.2 + organicWave * 0.78;
         } else {
-          // نگاشت باندهای فرکانسی به فاصله از مرکز: مرکز=بیس و پانچ، اطراف=وکال و زیر
-          const bandStart = Math.max(1, Math.floor((distFromCenter / centerIdx) * 18) + 1);
-          const bandEnd = Math.min(limit, bandStart + 5);
+          // نگاشت لگاریتمی فرکانس‌ها: مرکز=ساب‌بیس، میانی=وکال و ریتم، اطراف=تیز و های‌هت
+          const bandStart = Math.max(1, Math.floor(Math.pow(normDist, 1.45) * Math.max(12, limit - 8)) + 1);
+          const bandEnd = Math.min(limit, bandStart + 6);
           let bandSum = 0;
           for (let b = bandStart; b <= bandEnd; b++) {
             bandSum += bins[b];
           }
           const bandNorm = bandSum / ((bandEnd - bandStart + 1) * runningPeak);
-          const dynamicContrast = Math.pow(Math.min(1, bandNorm * 1.15), 1.25);
+          const dynamicContrast = Math.pow(Math.min(1, bandNorm * 1.45), 1.35);
+          const centerPunch = bassPunch * (1 - normDist * 0.55);
           energy = Math.min(
             1,
-            0.16 + dynamicContrast * 0.64 + flux * 0.35 + organicWave * 0.22
+            0.1 + dynamicContrast * 0.68 + centerPunch * 0.46 + flux * 0.36 + organicWave * 0.14
           );
         }
 
-        const target = Math.max(0.18, Math.min(1.06, envelope * (0.24 + energy * 0.82)));
+        const target = Math.max(0.14, Math.min(1.12, envelope * (0.14 + energy * 0.98)));
         const prev = smoothed[i];
-        const next = prev + (target - prev) * (target > prev ? 0.56 : 0.28);
+        const next = prev + (target - prev) * (target > prev ? 0.68 : 0.26);
         smoothed[i] = next;
         bar.style.transform = `scaleY(${next.toFixed(3)})`;
       }
@@ -522,7 +556,7 @@ export const Home: React.FC<HomeProps> = ({
           }}
         >
           <p style={{ margin: 0, fontSize: '0.8125rem', color: theme.colors.textSecondary }}>
-            {t.noQuickAccess || 'هنوز پلی‌لیست یا فولدری ساخته نشده است.'}
+            {t.noQuickAccess || 'هنوز پلی‌لیست یا پوشه‌ای ساخته نشده است.'}
           </p>
           <div>
             <button
@@ -612,9 +646,7 @@ export const Home: React.FC<HomeProps> = ({
                       fontSize: '0.875rem',
                       fontWeight: 600,
                       color: theme.colors.textPrimary,
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
+                      ...getBidiTruncateStyle(item.name, isRTL),
                     }}
                   >
                     {item.name}
@@ -628,7 +660,7 @@ export const Home: React.FC<HomeProps> = ({
                     }}
                   >
                     {item.kind === 'folder'
-                      ? t.folderLabel || 'فولدر'
+                      ? t.folderLabel || 'پوشه'
                       : t.playlistLabel || 'پلی‌لیست'}{' '}
                     · {item.songs.length} {t.tracksCount || 'آهنگ'}
                   </div>
@@ -700,7 +732,7 @@ export const Home: React.FC<HomeProps> = ({
             color: theme.colors.textPrimary,
           }}
         >
-          {t.topArtists || 'آرتیست‌های برتر'}
+          {t.topArtists || 'خواننده‌های برتر'}
         </h2>
         <button
           onClick={() => onSelectTab('artists')}
@@ -724,7 +756,7 @@ export const Home: React.FC<HomeProps> = ({
 
       {topArtists.length === 0 ? (
         <p style={{ margin: 0, fontSize: '0.8125rem', color: theme.colors.textSecondary }}>
-          {t.noArtists || 'هنوز آرتیستی در کتابخانه وجود ندارد.'}
+          {t.noArtists || 'هنوز خواننده‌ای در کتابخانه وجود ندارد.'}
         </p>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -770,9 +802,7 @@ export const Home: React.FC<HomeProps> = ({
                       fontSize: '0.875rem',
                       fontWeight: 600,
                       color: theme.colors.textPrimary,
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
+                      ...getBidiTruncateStyle(artist.name, isRTL),
                     }}
                   >
                     {artist.name}
@@ -979,9 +1009,7 @@ export const Home: React.FC<HomeProps> = ({
                       fontSize: '0.875rem',
                       fontWeight: 600,
                       color: isCurrent ? theme.colors.primary : theme.colors.textPrimary,
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
+                      ...getBidiTruncateStyle(song.name, isRTL),
                     }}
                   >
                     {song.name}
@@ -990,10 +1018,8 @@ export const Home: React.FC<HomeProps> = ({
                     style={{
                       fontSize: '0.7813rem',
                       color: theme.colors.textSecondary,
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
                       marginTop: '2px',
+                      ...getBidiTruncateStyle(song.artist || '', isRTL),
                     }}
                   >
                     {song.artist}
@@ -1074,8 +1100,8 @@ export const Home: React.FC<HomeProps> = ({
     },
     {
       id: 'artists',
-      label: t.artists || 'آرتیست‌ها',
-      value: `${artistsCount} ${t.artistsCountLabel || 'آرتیست'}`,
+      label: t.artists || 'خواننده‌ها',
+      value: `${artistsCount} ${t.artistsCountLabel || 'خواننده'}`,
       icon: <Mic size={16} />,
       color: '#FF9500',
       gradientTo: '#FF5E3A',
@@ -1083,7 +1109,7 @@ export const Home: React.FC<HomeProps> = ({
     },
     {
       id: 'albumsFolders',
-      label: `${t.albums || 'آلبوم‌ها'} / ${t.folders || 'فولدرها'}`,
+      label: `${t.albums || 'آلبوم‌ها'} / ${t.folders || 'پوشه‌بندی'}`,
       value: `${albumsCount} · ${foldersCount}`,
       icon: <Disc size={16} />,
       color: '#5E5CE6',
@@ -1092,7 +1118,7 @@ export const Home: React.FC<HomeProps> = ({
     },
     {
       id: 'topArtist',
-      label: t.topArtist || 'محبوب‌ترین آرتیست',
+      label: t.topArtist || 'محبوب‌ترین خواننده',
       value: topArtist ? topArtist.name : '—',
       icon: <Music size={16} />,
       color: '#FF3B30',
@@ -1188,10 +1214,8 @@ export const Home: React.FC<HomeProps> = ({
                       fontWeight: 600,
                       color: theme.colors.textSecondary,
                       fontVariantNumeric: 'tabular-nums',
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
                       maxWidth: isMobile ? '44vw' : '240px',
+                      ...getBidiTruncateStyle(String(row.value || ''), isRTL, isRTL ? 'left' : 'right'),
                     }}
                   >
                     {row.value}
@@ -1288,7 +1312,7 @@ export const Home: React.FC<HomeProps> = ({
         <Mic size={19} color="#ff9500" style={{ flexShrink: 0 }} />
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: '0.7188rem', color: theme.colors.textSecondary }}>
-            {t.artists || 'آرتیست‌ها'}
+            {t.artists || 'خواننده‌ها'}
           </div>
           <div
             style={{
@@ -1299,7 +1323,7 @@ export const Home: React.FC<HomeProps> = ({
               marginTop: '3px',
             }}
           >
-            {artistsCount} {t.artistsCountLabel || 'آرتیست'}
+            {artistsCount} {t.artistsCountLabel || 'خواننده'}
           </div>
         </div>
       </button>
@@ -1322,7 +1346,7 @@ export const Home: React.FC<HomeProps> = ({
         <Disc size={19} color="#5e5ce6" style={{ flexShrink: 0 }} />
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: '0.7188rem', color: theme.colors.textSecondary }}>
-            {(t.albums || 'آلبوم‌ها') + ' / ' + (t.folders || 'فولدرها')}
+            {(t.albums || 'آلبوم‌ها') + ' / ' + (t.folders || 'پوشه‌بندی')}
           </div>
           <div
             style={{
@@ -1362,17 +1386,15 @@ export const Home: React.FC<HomeProps> = ({
         <Music size={19} color="#ff3b30" style={{ flexShrink: 0 }} />
         <div style={{ minWidth: 0, flex: 1 }}>
           <div style={{ fontSize: '0.7188rem', color: theme.colors.textSecondary }}>
-            {t.topArtist || 'محبوب‌ترین آرتیست'}
+            {t.topArtist || 'محبوب‌ترین خواننده'}
           </div>
           <div
             style={{
               fontSize: '0.9375rem',
               fontWeight: 700,
               color: theme.colors.textPrimary,
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
               marginTop: '3px',
+              ...getBidiTruncateStyle(topArtist ? topArtist.name : '—', isRTL),
             }}
           >
             {topArtist ? topArtist.name : '—'}
@@ -1384,11 +1406,12 @@ export const Home: React.FC<HomeProps> = ({
 
   return (
     <div
+      ref={rootContainerRef}
       style={{
         flex: 1,
         padding: isMobile
           ? '10px 12px 156px'
-          : 'clamp(10px, 1.8vw, 18px) clamp(14px, 3.5vw, 36px) 136px',
+          : 'clamp(10px, 1.8vw, 18px) clamp(14px, 3.2vw, 34px) 136px',
         overflowY: 'auto',
         overflowX: 'hidden',
         boxSizing: 'border-box',
@@ -1543,9 +1566,14 @@ export const Home: React.FC<HomeProps> = ({
                         marginTop: '4px',
                         fontSize: '0.8438rem',
                         color: theme.colors.textSecondary,
-                        whiteSpace: 'nowrap',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
+                        ...getBidiTruncateStyle(
+                          heroSong
+                            ? heroSong.album?.trim()
+                              ? `${heroSong.artist} · ${heroSong.album}`
+                              : `${heroSong.artist} · ${formatTrackDuration(heroSong.duration)}`
+                            : t.noSongs || 'هنوز آهنگی اضافه نشده است.',
+                          isRTL
+                        ),
                       }}
                     >
                       {heroSong
@@ -2030,9 +2058,14 @@ export const Home: React.FC<HomeProps> = ({
                         fontSize: '0.875rem',
                         fontWeight: 600,
                         color: theme.colors.textPrimary,
-                        whiteSpace: 'nowrap',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
+                        ...getBidiTruncateStyle(
+                          heroSong
+                            ? heroSong.album?.trim()
+                              ? `${heroSong.album} · ${formatTrackDuration(heroSong.duration)}`
+                              : formatTrackDuration(heroSong.duration)
+                            : t.noSongs || 'هنوز آهنگی اضافه نشده است.',
+                          isRTL
+                        ),
                       }}
                     >
                       {heroSong

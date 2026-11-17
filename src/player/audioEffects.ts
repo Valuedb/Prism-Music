@@ -193,8 +193,10 @@ class AudioEffectsManager {
     this.normMakeupGain = ctx.createGain();
     this.balancePanner = ctx.createStereoPanner();
     this.analyser = ctx.createAnalyser();
-    this.analyser.fftSize = 256;
-    this.analyser.smoothingTimeConstant = 0.65;
+    this.analyser.fftSize = 512;
+    this.analyser.minDecibels = -86;
+    this.analyser.maxDecibels = -18;
+    this.analyser.smoothingTimeConstant = 0.36;
 
     // اتصال زنجیره: masterBus -> monoRouter -> preampNode -> bassFilter -> EQ5 -> EQ10
     let lastNode: AudioNode = this.masterBus;
@@ -305,7 +307,13 @@ class AudioEffectsManager {
     deck.deckGain.gain.cancelScheduledValues(now);
   }
 
-  /** تنظیم یا رمپ نرم گین یک دک (برای Crossfade و Fade on Play/Pause) */
+  /** دریافت گین فعلی یک دک */
+  public getDeckGainValue(audio: HTMLAudioElement): number {
+    const deck = this.decks.get(audio);
+    return deck ? deck.deckGain.gain.value : 1;
+  }
+
+  /** تنظیم یا رمپ نرم گین یک دک (برای Crossfade و جلوگیری کامل از تیک هنگام توقف/شروع) */
   public setDeckGain(audio: HTMLAudioElement, targetGain: number, rampSeconds: number = 0) {
     const deck = this.decks.get(audio);
     if (!deck || !this.audioCtx) return;
@@ -313,10 +321,11 @@ class AudioEffectsManager {
     const clamped = Math.max(0, Math.min(1, targetGain));
     const param = deck.deckGain.gain;
     param.cancelScheduledValues(now);
-    if (rampSeconds <= 0.005) {
+    const current = Math.max(0, Math.min(1, param.value));
+    if (rampSeconds <= 0.004) {
       param.setValueAtTime(clamped, now);
     } else {
-      param.setValueAtTime(param.value, now);
+      param.setValueAtTime(current, now);
       param.linearRampToValueAtTime(clamped, now + rampSeconds);
     }
   }
@@ -440,7 +449,7 @@ class AudioEffectsManager {
 
   /** دریافت تعداد باین‌های آنالایزر */
   public getFrequencyBinCount(): number {
-    return this.analyser ? this.analyser.frequencyBinCount : 128;
+    return this.analyser ? this.analyser.frequencyBinCount : 256;
   }
 
   public getSettings(): EqualizerSettings {

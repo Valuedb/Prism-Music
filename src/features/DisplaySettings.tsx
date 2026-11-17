@@ -12,6 +12,8 @@ import {
   Monitor,
   Moon,
   Palette,
+  PanelLeft,
+  PanelTop,
   RefreshCw,
   RotateCcw,
   Sliders,
@@ -28,6 +30,7 @@ import type {
   FontChoice,
   HomeLayoutStyle,
   ListDensity,
+  NavigationLayoutStyle,
   PlayerBarStyle,
   VisualizerStyle,
 } from '../types';
@@ -93,7 +96,7 @@ const makeMeshWallpaper = (c1: string, c2: string, c3: string, c4: string): stri
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 };
 
-/** والپیپرهای آفلاین و بومی سبک Apple Mesh */
+/** والپیپرهای آفلاین و بومی با گرادیان مش رنگی */
 const WALLPAPER_PRESETS = [
   { id: 'midnight', labelFa: 'شفق نیلی', labelEn: 'Midnight Indigo', url: makeMeshWallpaper('#090D1F', '#1D4ED8', '#7C3AED', '#0EA5E9') },
   { id: 'aurora', labelFa: 'شفق قطبی', labelEn: 'Aurora Borealis', url: makeMeshWallpaper('#061A1E', '#10B981', '#06B6D4', '#3B82F6') },
@@ -686,6 +689,45 @@ export const DisplaySettings: React.FC<DisplaySettingsProps> = ({
                     <>
                       <LayoutGrid size={13} />
                       <span>{t.homeLayoutWidget || 'نوع ۲: ویجت مدرن'}</span>
+                    </>
+                  ),
+                },
+              ]}
+            />
+          </IOSRow>
+
+          <IOSRow
+            theme={theme}
+            icon={
+              <IOSSquircleIcon color="#5856D6" gradientTo="#007AFF">
+                <PanelLeft size={16} />
+              </IOSSquircleIcon>
+            }
+            title={t.navigationLayoutLabel || 'محل قرارگیری منوی تب‌ها'}
+            subtitle={t.navigationLayoutDesc || 'جابه‌جایی تب‌های اصلی بین نوار بالای صفحه و سایدبار سمت چپ'}
+          >
+            <IOSSegmentedControl<NavigationLayoutStyle>
+              groupId="display-navigation-layout"
+              fullWidth
+              theme={theme}
+              value={displaySettings.navigationLayout || 'top'}
+              onChange={(val) => updateDisplay('navigationLayout', val)}
+              options={[
+                {
+                  value: 'top',
+                  label: (
+                    <>
+                      <PanelTop size={13} />
+                      <span>{t.navLayoutTop || 'نوار بالای صفحه'}</span>
+                    </>
+                  ),
+                },
+                {
+                  value: 'sidebar',
+                  label: (
+                    <>
+                      <PanelLeft size={13} />
+                      <span>{t.navLayoutSidebar || 'سایدبار سمت چپ'}</span>
                     </>
                   ),
                 },

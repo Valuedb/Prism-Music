@@ -17,4 +17,6 @@ export const STORAGE_KEYS = {
   soundSettings: 'soundSettings',
   displaySettings: 'displaySettings',
   playbackPrefs: 'playbackPreferences',
+  linkedFolders: 'linkedFolders',
+  sidebarCollapsed: 'appSidebarCollapsed',
 } as const;

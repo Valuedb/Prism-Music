@@ -68,21 +68,49 @@ const LiveSpectrumPreview = ({
     }
 
     let rafId = 0;
-    const bins = new Uint8Array(audioEffects.getFrequencyBinCount() || 64);
+    const bins = new Uint8Array(audioEffects.getFrequencyBinCount() || 256);
+    const smoothed = new Float32Array(barCount);
+    let runningPeak = 84;
+    let prevBass = 0;
 
     const tick = () => {
       const ok = audioEffects.getFrequencyData(bins);
+      const limit = Math.min(bins.length - 1, 108);
+      let framePeak = 0;
+      let bassSum = 0;
+      const bassSpan = Math.min(6, limit);
+      if (ok) {
+        for (let b = 1; b <= limit; b++) {
+          if (bins[b] > framePeak) framePeak = bins[b];
+          if (b <= bassSpan) bassSum += bins[b];
+        }
+      }
+      const hasAudio = ok && framePeak > 2;
+      if (hasAudio) {
+        runningPeak = Math.max(36, runningPeak * 0.978, framePeak * 1.02);
+      }
+      const bassNorm = hasAudio && bassSpan > 0 ? bassSum / (bassSpan * runningPeak) : 0;
+      const bassPunch = Math.max(0, bassNorm - prevBass) * 2.2;
+      prevBass = prevBass * 0.64 + bassNorm * 0.36;
+
       for (let i = 0; i < barCount; i++) {
         const bar = barRefs.current[i];
         if (!bar) continue;
-        if (!ok) {
-          bar.style.transform = 'scaleY(0.14)';
-          continue;
+        let target = 0.1;
+        if (hasAudio) {
+          const linear = i / Math.max(1, barCount - 1);
+          const curved = Math.pow(linear, 1.5);
+          const binIdx = Math.min(limit, Math.max(1, Math.floor(curved * limit)));
+          const nextBin = Math.min(limit, binIdx + 1);
+          const norm = (bins[binIdx] * 0.68 + bins[nextBin] * 0.32) / runningPeak;
+          const punchBoost = (1 - linear * 0.5) * bassPunch * 0.45;
+          target = Math.max(0.1, Math.min(1.04, Math.pow(Math.min(1, norm * 1.15), 0.78) + punchBoost));
         }
-        const binIdx = Math.min(bins.length - 1, Math.floor((i / barCount) * (bins.length * 0.72)));
-        const norm = (bins[binIdx] || 0) / 255;
-        const scale = Math.max(0.14, Math.min(1, norm));
-        bar.style.transform = `scaleY(${scale.toFixed(3)})`;
+        const prev = smoothed[i] || 0.1;
+        const rate = target > prev ? 0.66 : 0.25;
+        const nextVal = prev + (target - prev) * rate;
+        smoothed[i] = nextVal;
+        bar.style.transform = `scaleY(${nextVal.toFixed(3)})`;
       }
       rafId = window.requestAnimationFrame(tick);
     };

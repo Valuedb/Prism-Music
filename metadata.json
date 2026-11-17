@@ -1,6 +1,6 @@
 {
-  "name": "Music Player",
-  "description": "Modern music player web app with playlist management, local audio file loading, metadata extraction, Persian and English localization, and customizable themes.",
+  "name": "Prism Music",
+  "description": "Prism Music — Standalone desktop music player with live folder sync, Web Audio DSP equalizer, playlist management, metadata extraction, Persian and English localization, and customizable themes.",
   "permissions": [],
   "capabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

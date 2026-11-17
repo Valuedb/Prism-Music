@@ -84,7 +84,7 @@ const formatLrcTimestamp = (ms: number): string => {
   return `${mins < 10 ? '0' : ''}${mins}:${secs < 10 ? '0' : ''}${secs.toFixed(2)}`;
 };
 
-const extractLyricsFromCommon = (rawLyrics: unknown): string | undefined => {
+export const extractLyricsFromCommon = (rawLyrics: unknown): string | undefined => {
   if (!rawLyrics) return undefined;
   if (typeof rawLyrics === 'string') {
     const trimmed = rawLyrics.trim();
@@ -160,8 +160,20 @@ export const extractSongFromFile = async (
       });
     }
 
+    const desktopApi = typeof window !== 'undefined' ? window.desktopRuntime : undefined;
+    const diskPath = desktopApi?.isDesktop
+      ? desktopApi.getPathForFile?.(file) ||
+        ((file as File & { path?: string }).path ?? '')
+      : '';
+
     const id = crypto.randomUUID();
-    await saveAudioBlob(id, file);
+    let finalFileUrl = '';
+    if (diskPath) {
+      finalFileUrl = `media://local?path=${encodeURIComponent(diskPath)}`;
+    } else {
+      await saveAudioBlob(id, file);
+      finalFileUrl = URL.createObjectURL(file);
+    }
 
     const detectedFolder = extractFolderFromFile(file) || fallbackFolder?.trim() || undefined;
     const lyrics = extractLyricsFromCommon(metadata.common.lyrics);
@@ -175,7 +187,9 @@ export const extractSongFromFile = async (
       folder: detectedFolder,
       lyrics,
       cover: coverUrl,
-      fileUrl: URL.createObjectURL(file),
+      fileUrl: finalFileUrl,
+      sourcePath: diskPath || undefined,
+      fileMissing: false,
       playCount: 0,
       addedAt: Date.now(),
       duration,

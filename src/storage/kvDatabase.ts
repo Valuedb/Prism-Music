@@ -3,7 +3,7 @@
  * کتابخانه، پلی‌لیست‌ها، فولدرها، کاورها، متن ترانه و تنظیمات برنامه (مخصوص اجرای مستقل دسکتاپ و PWA).
  */
 
-const APP_DB_NAME = 'apple-music-local-db';
+const APP_DB_NAME = 'prism-music-local-db';
 const APP_DB_VERSION = 1;
 const STORE_LIBRARY = 'library';
 const STORE_PLAYLISTS = 'playlists';

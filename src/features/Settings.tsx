@@ -1,13 +1,16 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import type {
+  DesktopFolderScanResult,
   DisplaySettings as DisplaySettingsType,
   EqualizerSettings,
+  LinkedFolder,
   PlaybackPreferences,
   Playlist,
   SeekStepSeconds,
   SleepTimerState,
   Song,
   SoundSettings as SoundSettingsType,
+  StartupTab,
 } from '../types';
 import {
   Globe,
@@ -28,7 +31,6 @@ import {
   FileDown,
   FileUp,
   RotateCcw,
-  Info,
   CheckCircle2,
   ArrowLeft,
   ArrowRight,
@@ -37,7 +39,15 @@ import {
   Copy,
   Upload,
   Database,
-  Code2,
+  Folder,
+  FolderOpen,
+  RefreshCw,
+  Unlink,
+  Compass,
+  Home,
+  ListMusic,
+  Mic,
+  Disc,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { DEFAULT_DISPLAY_SETTINGS, type PaletteType, type ThemeMode } from '../theme';
@@ -51,6 +61,12 @@ import {
   findDuplicateSongIds,
   partitionDuplicateSongs,
 } from '../utils/audioMetadata';
+import {
+  extractDiskSongsBatched,
+  isDesktopRuntime,
+  normalizeDiskPath,
+  syncDesktopFolderResult,
+} from '../utils/desktopBridge';
 import {
   cleanupOrphanAudioBlobs,
   deleteAudioBlob,
@@ -75,6 +91,8 @@ interface SettingsProps {
   setPlaylists?: React.Dispatch<React.SetStateAction<Playlist[]>>;
   customFolders?: string[];
   setCustomFolders?: React.Dispatch<React.SetStateAction<string[]>>;
+  linkedFolders?: LinkedFolder[];
+  setLinkedFolders?: React.Dispatch<React.SetStateAction<LinkedFolder[]>>;
   t: any;
   language: string;
   setLanguage: (lang: 'fa' | 'en') => void;
@@ -103,6 +121,10 @@ interface SettingsProps {
   onSetSleepTimer?: (timer: SleepTimerState) => void;
   onPlayImported?: (song: Song, list: Song[]) => void;
   onDeleteSongsBatch?: (ids: string[]) => void;
+  onSyncDesktopFolderScan?: (
+    scan: DesktopFolderScanResult,
+    options?: { allowAutoPlay?: boolean }
+  ) => Promise<{ addedCount: number; removedCount: number; firstAdded?: Song }>;
   onCloseSettings?: () => void;
   initialSubPage?: { page: SettingsSubPage; token: number } | null;
 }
@@ -145,6 +167,8 @@ export const Settings = ({
   setPlaylists,
   customFolders = [],
   setCustomFolders,
+  linkedFolders = [],
+  setLinkedFolders,
   t,
   language,
   setLanguage,
@@ -173,6 +197,7 @@ export const Settings = ({
   onSetSleepTimer,
   onPlayImported,
   onDeleteSongsBatch,
+  onSyncDesktopFolderScan,
   onCloseSettings,
   initialSubPage,
 }: SettingsProps) => {
@@ -184,19 +209,57 @@ export const Settings = ({
   const [quotaUsed, setQuotaUsed] = useState<number | null>(null);
   const [feedbackBanner, setFeedbackBanner] = useState<string | null>(null);
   const [confirmAction, setConfirmAction] = useState<'resetStats' | 'resetAll' | null>(null);
-  const [copiedContact, setCopiedContact] = useState<'telegram' | 'github' | null>(null);
+  const [defaultMusicFolder, setDefaultMusicFolder] = useState<{ path: string; name: string } | null>(null);
+  const [copiedContactKey, setCopiedContactKey] = useState<'telegram' | 'github' | null>(null);
+  const copyTimerRef = useRef<number | null>(null);
 
-  const isRTL = language === 'fa';
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current) {
+        window.clearTimeout(copyTimerRef.current);
+      }
+    };
+  }, []);
 
-  const handleCopyContact = useCallback((key: 'telegram' | 'github', value: string) => {
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(value).catch(() => {});
+  const handleCopyContactLink = useCallback((key: 'telegram' | 'github', url: string) => {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      void navigator.clipboard.writeText(url).catch(() => {});
     }
-    setCopiedContact(key);
-    window.setTimeout(() => {
-      setCopiedContact((prev) => (prev === key ? null : prev));
+    setCopiedContactKey(key);
+    if (copyTimerRef.current) {
+      window.clearTimeout(copyTimerRef.current);
+    }
+    copyTimerRef.current = window.setTimeout(() => {
+      setCopiedContactKey(null);
+      copyTimerRef.current = null;
     }, 1800);
   }, []);
+
+  const rootRef = useRef<HTMLDivElement>(null);
+  const isRTL = language === 'fa';
+
+  const resetScrollToTop = useCallback(() => {
+    let node: HTMLElement | null = rootRef.current?.parentElement ?? null;
+    while (node) {
+      const style = window.getComputedStyle(node);
+      if (
+        (style.overflowY === 'auto' || style.overflowY === 'scroll') &&
+        node.scrollTop > 0
+      ) {
+        node.scrollTop = 0;
+      }
+      node = node.parentElement;
+    }
+    if (rootRef.current) {
+      rootRef.current.scrollTop = 0;
+    }
+  }, []);
+
+  useEffect(() => {
+    resetScrollToTop();
+    const rafId = requestAnimationFrame(resetScrollToTop);
+    return () => cancelAnimationFrame(rafId);
+  }, [subPage, initialSubPage?.token, resetScrollToTop]);
 
   useEffect(() => {
     if (initialSubPage?.page) {
@@ -228,6 +291,12 @@ export const Settings = ({
   useEffect(() => {
     if (subPage === 'library') {
       refreshStorageStats();
+      if (isDesktopRuntime() && window.desktopRuntime?.getDefaultMusicFolder) {
+        window.desktopRuntime
+          .getDefaultMusicFolder()
+          .then((info) => setDefaultMusicFolder(info))
+          .catch(() => {});
+      }
     }
   }, [subPage, songs.length, refreshStorageStats]);
 
@@ -317,6 +386,230 @@ export const Settings = ({
     }
   };
 
+  const isDesktopApp = isDesktopRuntime();
+  const directLinkedCount = songs.filter((s) => Boolean(s.sourcePath)).length;
+
+  const commitImportedSongs = (imported: Song[]) => {
+    if (imported.length === 0) return;
+    let toAdd = imported;
+    let skippedCount = 0;
+    if (playbackPrefs.skipDuplicatesOnImport) {
+      const partitioned = partitionDuplicateSongs(imported, songs);
+      toAdd = partitioned.unique;
+      skippedCount = partitioned.duplicates.length;
+      partitioned.duplicates.forEach((dup) => {
+        if (dup.fileUrl?.startsWith('blob:')) URL.revokeObjectURL(dup.fileUrl);
+        if (!dup.sourcePath) {
+          deleteAudioBlob(dup.id).catch(() => {});
+        }
+      });
+    }
+
+    if (toAdd.length > 0) {
+      const nextList = [...songs, ...toAdd];
+      setSongs(nextList);
+      if (playbackPrefs.autoPlayOnImport && onPlayImported) {
+        onPlayImported(toAdd[0], nextList);
+      }
+    }
+
+    const addedText = `${toAdd.length} ${t.importCompleteMsg || 'فایل صوتی اضافه شد.'}`;
+    const skipText = skippedCount > 0 ? ` (${skippedCount} ${t.duplicatesSkippedMsg || 'تکراری رد شد.'})` : '';
+    showNotice(`${addedText}${skipText}`);
+    refreshStorageStats();
+  };
+
+  const handleDesktopPickFiles = async () => {
+    const api = window.desktopRuntime;
+    if (!api?.pickAudioFiles) return;
+    setIsLoading(true);
+    try {
+      const picked = await api.pickAudioFiles();
+      if (!picked || picked.length === 0) return;
+      const existingPaths = new Set(
+        songs.map((s) => (s.sourcePath ? normalizeDiskPath(s.sourcePath) : '')).filter(Boolean)
+      );
+      const freshFiles = picked.filter((f) => !existingPaths.has(normalizeDiskPath(f.path)));
+      if (freshFiles.length === 0) {
+        showNotice(`0 ${t.importCompleteMsg || 'فایل صوتی اضافه شد.'}`);
+        return;
+      }
+      const imported = await extractDiskSongsBatched(freshFiles);
+      commitImportedSongs(imported);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const linkAndSyncFolderScan = async (scan: DesktopFolderScanResult) => {
+    const folderRecord: LinkedFolder = {
+      id: scan.folderPath,
+      path: scan.folderPath,
+      name: scan.folderName,
+      addedAt: Date.now(),
+      lastSyncedAt: Date.now(),
+      fileCount: scan.files.length,
+    };
+    setLinkedFolders?.((prev) => [
+      ...prev.filter(
+        (item) => normalizeDiskPath(item.path) !== normalizeDiskPath(folderRecord.path)
+      ),
+      folderRecord,
+    ]);
+
+    if (onSyncDesktopFolderScan) {
+      const outcome = await onSyncDesktopFolderScan(scan, { allowAutoPlay: true });
+      showNotice(`${outcome.addedCount} ${t.importCompleteMsg || 'فایل صوتی اضافه شد.'}`);
+      refreshStorageStats();
+      return;
+    }
+
+    const { newSongs } = await syncDesktopFolderResult(scan, songs);
+    commitImportedSongs(newSongs);
+  };
+
+  const handleDesktopLinkFolder = async () => {
+    const api = window.desktopRuntime;
+    if (!api?.pickMusicFolder) return;
+    setIsLoading(true);
+    try {
+      const scan = await api.pickMusicFolder();
+      if (!scan) return;
+      await linkAndSyncFolderScan(scan);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleLinkDefaultMusicFolder = async () => {
+    const api = window.desktopRuntime;
+    if (!api?.scanFolder || !defaultMusicFolder) return;
+    setIsLoading(true);
+    try {
+      const scan = await api.scanFolder(defaultMusicFolder.path);
+      if (!scan) return;
+      await linkAndSyncFolderScan(scan);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSyncSingleFolder = async (folder: LinkedFolder) => {
+    const api = window.desktopRuntime;
+    if (!api?.scanFolder) return;
+    setIsLoading(true);
+    try {
+      const scan = await api.scanFolder(folder.path);
+      if (!scan) {
+        if (onSyncDesktopFolderScan) {
+          await onSyncDesktopFolderScan({
+            folderPath: folder.path,
+            folderName: folder.name,
+            files: [],
+            missing: true,
+          });
+        }
+        showNotice(t.fileMissingMsg || 'پوشه در مسیر قبلی پیدا نشد.');
+        return;
+      }
+
+      if (onSyncDesktopFolderScan) {
+        const outcome = await onSyncDesktopFolderScan(scan, { allowAutoPlay: false });
+        if (outcome.addedCount > 0) {
+          showNotice(`${outcome.addedCount} ${t.importCompleteMsg || 'فایل صوتی اضافه شد.'}`);
+        } else {
+          showNotice(t.linkedFolderSyncedMsg || 'همگام‌سازی پوشه‌ها انجام شد.');
+        }
+        refreshStorageStats();
+        return;
+      }
+
+      const { newSongs, linkedFolder } = await syncDesktopFolderResult(scan, songs, folder.name);
+      setLinkedFolders?.((prev) =>
+        prev.map((item) =>
+          normalizeDiskPath(item.path) === normalizeDiskPath(folder.path)
+            ? { ...item, lastSyncedAt: linkedFolder.lastSyncedAt, fileCount: linkedFolder.fileCount }
+            : item
+        )
+      );
+      if (newSongs.length > 0) {
+        commitImportedSongs(newSongs);
+      } else {
+        showNotice(t.linkedFolderSyncedMsg || 'همگام‌سازی پوشه‌ها انجام شد.');
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSyncAllFolders = async () => {
+    const api = window.desktopRuntime;
+    if (!api?.scanFolder || linkedFolders.length === 0) return;
+    setIsLoading(true);
+    try {
+      if (onSyncDesktopFolderScan) {
+        let totalAdded = 0;
+        for (const folder of linkedFolders) {
+          const scan = await api.scanFolder(folder.path);
+          const outcome = await onSyncDesktopFolderScan(
+            scan ?? {
+              folderPath: folder.path,
+              folderName: folder.name,
+              files: [],
+              missing: true,
+            },
+            { allowAutoPlay: false }
+          );
+          totalAdded += outcome.addedCount;
+        }
+        if (totalAdded > 0) {
+          showNotice(`${totalAdded} ${t.importCompleteMsg || 'فایل صوتی اضافه شد.'}`);
+        } else {
+          showNotice(t.linkedFolderSyncedMsg || 'همگام‌سازی پوشه‌ها انجام شد.');
+        }
+        refreshStorageStats();
+        return;
+      }
+
+      let runningSongs = songs;
+      const allAdded: Song[] = [];
+      const countsByPath = new Map<string, number>();
+
+      for (const folder of linkedFolders) {
+        const scan = await api.scanFolder(folder.path);
+        if (!scan) continue;
+        const { newSongs } = await syncDesktopFolderResult(scan, runningSongs, folder.name);
+        countsByPath.set(folder.path, scan.files.length);
+        if (newSongs.length > 0) {
+          allAdded.push(...newSongs);
+          runningSongs = [...runningSongs, ...newSongs];
+        }
+      }
+
+      const syncedAt = Date.now();
+      setLinkedFolders?.((prev) =>
+        prev.map((item) => ({
+          ...item,
+          lastSyncedAt: syncedAt,
+          fileCount: countsByPath.get(item.path) ?? item.fileCount,
+        }))
+      );
+
+      if (allAdded.length > 0) {
+        commitImportedSongs(allAdded);
+      } else {
+        showNotice(t.linkedFolderSyncedMsg || 'همگام‌سازی پوشه‌ها انجام شد.');
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleUnlinkFolder = (folderPath: string) => {
+    const key = normalizeDiskPath(folderPath);
+    setLinkedFolders?.((prev) => prev.filter((item) => normalizeDiskPath(item.path) !== key));
+  };
+
   const folderUploadProps = {
     webkitdirectory: '',
     directory: '',
@@ -395,7 +688,7 @@ export const Settings = ({
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `apple-music-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `prism-music-backup-${new Date().toISOString().slice(0, 10)}.json`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -482,6 +775,7 @@ export const Settings = ({
         profilePresets: {},
       });
       setPlaybackPrefs?.({ ...DEFAULT_PLAYBACK_PREFERENCES });
+      setLinkedFolders?.([]);
       showNotice(t.resetAllDoneMsg || 'تمام تنظیمات به حالت پیش‌فرض بازگردانده شد.');
     }
     setConfirmAction(null);
@@ -518,9 +812,21 @@ export const Settings = ({
 
   const duplicateCount = findDuplicateSongIds(songs).length;
 
+  const defaultTabOptions: { id: StartupTab; label: string; icon: React.ReactNode }[] = [
+    { id: 'home', label: t.home || 'خانه', icon: <Home size={13} /> },
+    { id: 'allSongs', label: t.allSongs || 'همه آهنگ‌ها', icon: <Music size={13} /> },
+    { id: 'playlists', label: t.playlists || 'پلی‌لیست‌ها', icon: <ListMusic size={13} /> },
+    { id: 'artists', label: t.artists || 'خواننده‌ها', icon: <Mic size={13} /> },
+    { id: 'albums', label: t.albums || 'آلبوم‌ها', icon: <Disc size={13} /> },
+    { id: 'folders', label: t.folders || 'پوشه‌بندی', icon: <Folder size={13} /> },
+  ];
+  const activeDefaultTab: StartupTab = playbackPrefs.defaultTab ?? 'home';
+  const activeDefaultTabLabel =
+    defaultTabOptions.find((o) => o.id === activeDefaultTab)?.label || (t.home || 'خانه');
+
   return (
-    <div style={{ width: '100%', overflowX: 'clip' }}>
-      <AnimatePresence mode="wait" initial={false}>
+    <div ref={rootRef} style={{ width: '100%', overflowX: 'clip' }}>
+      <AnimatePresence mode="wait" initial={false} onExitComplete={resetScrollToTop}>
         {subPage === 'sound' && setSoundSettings ? (
           <motion.div
             key="settings-sub-sound"
@@ -645,8 +951,14 @@ export const Settings = ({
                 />
                 <IOSRow
                   theme={theme}
+                  icon={<IOSSquircleIcon color="#34C759" gradientTo="#30D158"><Folder size={16} /></IOSSquircleIcon>}
+                  title={t.directLinkedTracks || 'آهنگ‌های متصل مستقیم به هارد (بدون کپی)'}
+                  valueText={`${directLinkedCount}`}
+                />
+                <IOSRow
+                  theme={theme}
                   icon={<IOSSquircleIcon color="#007AFF" gradientTo="#5AC8FA"><HardDrive size={16} /></IOSSquircleIcon>}
-                  title={t.offlineStoredAudio || 'فایل‌های صوتی ذخیره‌شده در حافظه'}
+                  title={t.offlineStoredAudio || 'فایل‌های کپی‌شده در حافظه داخلی'}
                   valueText={`${storageStats.count} (${formatBytes(storageStats.totalBytes)})`}
                 />
                 <IOSRow
@@ -661,33 +973,230 @@ export const Settings = ({
                     theme={theme}
                     isLast
                     icon={<IOSSquircleIcon color="#5856D6" gradientTo="#AF52DE"><HardDrive size={16} /></IOSSquircleIcon>}
-                    title={t.browserQuotaUsed || 'فضای اشغال‌شده مرورگر'}
+                    title={t.browserQuotaUsed || 'فضای اشغال‌شده'}
                     valueText={formatBytes(quotaUsed)}
                   />
                 )}
               </IOSGroupedSection>
+
+              {(isDesktopApp || linkedFolders.length > 0) && (
+                <IOSGroupedSection header={t.linkedFoldersSection || 'پوشه‌های متصل موسیقی (پایش لحظه‌ای و بدون کپی)'} theme={theme}>
+                  {isDesktopApp && (
+                    <IOSRow
+                      theme={theme}
+                      isLast={linkedFolders.length === 0}
+                      icon={<IOSSquircleIcon color="#0A84FF" gradientTo="#5AC8FA"><FolderUp size={16} /></IOSSquircleIcon>}
+                      title={t.linkFolderBtn || 'اتصال پوشه جدید'}
+                      subtitle={
+                        linkedFolders.length === 0
+                          ? (t.linkedFoldersEmpty || '')
+                          : (t.liveWatchActiveDesc || '')
+                      }
+                      trailing={
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                          {defaultMusicFolder &&
+                            !linkedFolders.some(
+                              (f) => normalizeDiskPath(f.path) === normalizeDiskPath(defaultMusicFolder.path)
+                            ) && (
+                              <button
+                                type="button"
+                                disabled={isLoading}
+                                onClick={handleLinkDefaultMusicFolder}
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '5px',
+                                  padding: '7px 12px',
+                                  borderRadius: '999px',
+                                  backgroundColor: theme.colors.background,
+                                  border: `1px solid ${theme.colors.border}`,
+                                  color: theme.colors.primary,
+                                  fontSize: '0.7813rem',
+                                  fontWeight: 600,
+                                  cursor: isLoading ? 'not-allowed' : 'pointer',
+                                  opacity: isLoading ? 0.6 : 1,
+                                }}
+                              >
+                                <Music size={13} />
+                                <span>{t.linkSystemMusicBtn || 'اتصال پوشه Music سیستم'}</span>
+                              </button>
+                            )}
+                          {linkedFolders.length > 0 && (
+                            <button
+                              type="button"
+                              disabled={isLoading}
+                              onClick={handleSyncAllFolders}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '5px',
+                                padding: '7px 12px',
+                                borderRadius: '999px',
+                                backgroundColor: theme.colors.background,
+                                border: `1px solid ${theme.colors.border}`,
+                                color: theme.colors.textPrimary,
+                                fontSize: '0.7813rem',
+                                fontWeight: 600,
+                                cursor: isLoading ? 'not-allowed' : 'pointer',
+                                opacity: isLoading ? 0.6 : 1,
+                              }}
+                            >
+                              <RefreshCw size={13} />
+                              <span>{t.syncFoldersBtn || 'همگام‌سازی پوشه‌ها'}</span>
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            disabled={isLoading}
+                            onClick={handleDesktopLinkFolder}
+                            style={{
+                              padding: '7px 14px',
+                              borderRadius: '999px',
+                              border: 'none',
+                              backgroundColor: theme.colors.primary,
+                              color: theme.colors.onPrimary || '#fff',
+                              fontSize: '0.7813rem',
+                              fontWeight: 700,
+                              cursor: isLoading ? 'not-allowed' : 'pointer',
+                              opacity: isLoading ? 0.6 : 1,
+                            }}
+                          >
+                            {t.linkFolderBtn || 'اتصال پوشه جدید'}
+                          </button>
+                        </div>
+                      }
+                    />
+                  )}
+                  {linkedFolders.map((folder, idx) => (
+                    <IOSRow
+                      key={folder.id}
+                      theme={theme}
+                      isLast={idx === linkedFolders.length - 1}
+                      icon={<IOSSquircleIcon color="#30B0C7" gradientTo="#34C759"><Folder size={16} /></IOSSquircleIcon>}
+                      title={folder.name}
+                      subtitle={
+                        <span dir="ltr" style={{ display: 'inline-block', unicodeBidi: 'plaintext' }}>
+                          {folder.path}
+                          {typeof folder.fileCount === 'number'
+                            ? ` · ${folder.fileCount} ${t.tracksUnit || 'آهنگ'}`
+                            : ''}
+                        </span>
+                      }
+                      trailing={
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          {isDesktopApp && window.desktopRuntime?.openFolder && (
+                            <button
+                              type="button"
+                              onClick={() => void window.desktopRuntime?.openFolder?.(folder.path)}
+                              title={t.openFolderTooltip || 'باز کردن پوشه'}
+                              aria-label={t.openFolderTooltip || 'باز کردن پوشه'}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                width: '30px',
+                                height: '30px',
+                                borderRadius: '50%',
+                                backgroundColor: theme.colors.background,
+                                border: `1px solid ${theme.colors.border}`,
+                                color: theme.colors.textSecondary,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              <FolderOpen size={14} />
+                            </button>
+                          )}
+                          {isDesktopApp && (
+                            <button
+                              type="button"
+                              disabled={isLoading}
+                              onClick={() => handleSyncSingleFolder(folder)}
+                              title={t.syncFolderOneBtn || 'همگام‌سازی'}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                width: '30px',
+                                height: '30px',
+                                borderRadius: '50%',
+                                backgroundColor: theme.colors.background,
+                                border: `1px solid ${theme.colors.border}`,
+                                color: theme.colors.primary,
+                                cursor: isLoading ? 'not-allowed' : 'pointer',
+                              }}
+                            >
+                              <RefreshCw size={14} />
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleUnlinkFolder(folder.path)}
+                            title={t.unlinkFolderBtn || 'قطع اتصال'}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              width: '30px',
+                              height: '30px',
+                              borderRadius: '50%',
+                              backgroundColor: theme.colors.background,
+                              border: `1px solid ${theme.colors.border}`,
+                              color: '#ff453a',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            <Unlink size={14} />
+                          </button>
+                        </div>
+                      }
+                    />
+                  ))}
+                </IOSGroupedSection>
+              )}
 
               <IOSGroupedSection header={t.importSectionTitle || 'افزودن موسیقی'} theme={theme}>
                 <IOSRow
                   theme={theme}
                   icon={<IOSSquircleIcon color="#34C759" gradientTo="#30D158"><Upload size={16} /></IOSSquircleIcon>}
                   title={t.selectFiles || 'انتخاب فایل‌های موسیقی'}
+                  subtitle={isDesktopApp ? (t.directDiskBadge || 'اتصال مستقیم هارد') : undefined}
                   trailing={
-                    <label
-                      style={{
-                        padding: '7px 14px',
-                        borderRadius: '999px',
-                        backgroundColor: theme.colors.primary,
-                        color: theme.colors.onPrimary || '#fff',
-                        fontSize: '0.7813rem',
-                        fontWeight: 700,
-                        cursor: isLoading ? 'not-allowed' : 'pointer',
-                        opacity: isLoading ? 0.6 : 1,
-                      }}
-                    >
-                      {isLoading ? t.loading : t.add || 'افزودن'}
-                      <input type="file" accept="audio/*" multiple disabled={isLoading} onChange={handleFileUpload} style={{ display: 'none' }} />
-                    </label>
+                    isDesktopApp ? (
+                      <button
+                        type="button"
+                        disabled={isLoading}
+                        onClick={handleDesktopPickFiles}
+                        style={{
+                          padding: '7px 14px',
+                          borderRadius: '999px',
+                          border: 'none',
+                          backgroundColor: theme.colors.primary,
+                          color: theme.colors.onPrimary || '#fff',
+                          fontSize: '0.7813rem',
+                          fontWeight: 700,
+                          cursor: isLoading ? 'not-allowed' : 'pointer',
+                          opacity: isLoading ? 0.6 : 1,
+                        }}
+                      >
+                        {isLoading ? t.loading : t.add || 'افزودن'}
+                      </button>
+                    ) : (
+                      <label
+                        style={{
+                          padding: '7px 14px',
+                          borderRadius: '999px',
+                          backgroundColor: theme.colors.primary,
+                          color: theme.colors.onPrimary || '#fff',
+                          fontSize: '0.7813rem',
+                          fontWeight: 700,
+                          cursor: isLoading ? 'not-allowed' : 'pointer',
+                          opacity: isLoading ? 0.6 : 1,
+                        }}
+                      >
+                        {isLoading ? t.loading : t.add || 'افزودن'}
+                        <input type="file" accept="audio/*" multiple disabled={isLoading} onChange={handleFileUpload} style={{ display: 'none' }} />
+                      </label>
+                    )
                   }
                 />
                 <IOSRow
@@ -695,23 +1204,45 @@ export const Settings = ({
                   isLast
                   icon={<IOSSquircleIcon color="#30B0C7" gradientTo="#0A84FF"><FolderUp size={16} /></IOSSquircleIcon>}
                   title={t.importFolderBtn || 'انتخاب پوشه کامل'}
+                  subtitle={isDesktopApp ? (t.directDiskBadge || 'اتصال مستقیم هارد') : undefined}
                   trailing={
-                    <label
-                      style={{
-                        padding: '7px 14px',
-                        borderRadius: '999px',
-                        backgroundColor: theme.colors.background,
-                        border: `1px solid ${theme.colors.border}`,
-                        color: theme.colors.textPrimary,
-                        fontSize: '0.7813rem',
-                        fontWeight: 600,
-                        cursor: isLoading ? 'not-allowed' : 'pointer',
-                        opacity: isLoading ? 0.6 : 1,
-                      }}
-                    >
-                      {t.importFolder || 'وارد کردن پوشه'}
-                      <input type="file" accept="audio/*" multiple disabled={isLoading} {...folderUploadProps} onChange={handleFileUpload} style={{ display: 'none' }} />
-                    </label>
+                    isDesktopApp ? (
+                      <button
+                        type="button"
+                        disabled={isLoading}
+                        onClick={handleDesktopLinkFolder}
+                        style={{
+                          padding: '7px 14px',
+                          borderRadius: '999px',
+                          backgroundColor: theme.colors.background,
+                          border: `1px solid ${theme.colors.border}`,
+                          color: theme.colors.textPrimary,
+                          fontSize: '0.7813rem',
+                          fontWeight: 600,
+                          cursor: isLoading ? 'not-allowed' : 'pointer',
+                          opacity: isLoading ? 0.6 : 1,
+                        }}
+                      >
+                        {t.importFolder || 'وارد کردن پوشه'}
+                      </button>
+                    ) : (
+                      <label
+                        style={{
+                          padding: '7px 14px',
+                          borderRadius: '999px',
+                          backgroundColor: theme.colors.background,
+                          border: `1px solid ${theme.colors.border}`,
+                          color: theme.colors.textPrimary,
+                          fontSize: '0.7813rem',
+                          fontWeight: 600,
+                          cursor: isLoading ? 'not-allowed' : 'pointer',
+                          opacity: isLoading ? 0.6 : 1,
+                        }}
+                      >
+                        {t.importFolder || 'وارد کردن پوشه'}
+                        <input type="file" accept="audio/*" multiple disabled={isLoading} {...folderUploadProps} onChange={handleFileUpload} style={{ display: 'none' }} />
+                      </label>
+                    )
                   }
                 />
               </IOSGroupedSection>
@@ -935,6 +1466,47 @@ export const Settings = ({
                     />
                   }
                 />
+
+                <IOSRow
+                  theme={theme}
+                  icon={
+                    <IOSSquircleIcon color="#007AFF" gradientTo="#32ADE6">
+                      <Compass size={16} />
+                    </IOSSquircleIcon>
+                  }
+                  title={t.defaultTabLabel || 'تب پیش‌فرض برنامه'}
+                  subtitle={t.defaultTabDesc}
+                  valueText={activeDefaultTabLabel}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '7px', flexWrap: 'wrap' }}>
+                    {defaultTabOptions.map((opt) => {
+                      const isSelected = activeDefaultTab === opt.id;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => updatePref('defaultTab', opt.id)}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            padding: '6px 12px',
+                            borderRadius: '999px',
+                            border: `1px solid ${isSelected ? theme.colors.primary : theme.colors.border}`,
+                            backgroundColor: isSelected ? `${theme.colors.primary}22` : theme.colors.background,
+                            color: isSelected ? theme.colors.primary : theme.colors.textPrimary,
+                            fontSize: '0.7813rem',
+                            fontWeight: isSelected ? 700 : 500,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {opt.icon}
+                          <span>{opt.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </IOSRow>
 
                 <IOSRow
                   theme={theme}
@@ -1171,326 +1743,162 @@ export const Settings = ({
                 />
               </IOSGroupedSection>
 
-              {/* بخش ۴: ارتباط با من (تلگرام و گیت‌هاب) */}
-              <IOSGroupedSection
-                header={t.contactSectionTitle || 'ارتباط با من'}
-                footer={
-                  t.contactSectionFooter ||
-                  'توسعه‌یافته توسط @Valuedb — برای ارتباط مستقیم یا مشاهده سورس، روی لینک‌ها بزنید.'
-                }
-                theme={theme}
-              >
-                <div
-                  style={{
-                    padding: '14px 16px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: '12px',
-                    borderBottom: `1px solid ${
-                      theme.isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(60, 60, 67, 0.12)'
-                    }`,
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
-                    <div
-                      style={{
-                        width: '40px',
-                        height: '40px',
-                        borderRadius: '12px',
-                        background: `linear-gradient(135deg, ${theme.colors.primary}, ${
-                          theme.colors.accent || '#5E5CE6'
-                        })`,
-                        color: '#ffffff',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        flexShrink: 0,
-                        boxShadow: `0 6px 16px ${theme.colors.primary}44`,
-                      }}
-                    >
-                      <Code2 size={19} />
-                    </div>
-                    <div style={{ minWidth: 0 }}>
-                      <div
-                        dir="ltr"
-                        style={{
-                          fontSize: '0.9375rem',
-                          fontWeight: 800,
-                          color: theme.colors.textPrimary,
-                          letterSpacing: '-0.01em',
-                        }}
-                      >
-                        @Valuedb
-                      </div>
-                      <div
-                        style={{
-                          fontSize: '0.75rem',
-                          color: theme.colors.textSecondary,
-                          marginTop: '1px',
-                        }}
-                      >
-                        {t.contactCreatorRole || 'طراح و توسعه‌دهنده'}
-                      </div>
-                    </div>
-                  </div>
-                  <span
-                    style={{
-                      fontSize: '0.6875rem',
-                      fontWeight: 700,
-                      padding: '4px 10px',
-                      borderRadius: '999px',
-                      backgroundColor: `${theme.colors.primary}18`,
-                      color: theme.colors.primary,
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    Web Audio · React
-                  </span>
-                </div>
-
-                {/* لینک تلگرام */}
-                <a
-                  href="https://t.me/Valuedb"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: '12px',
-                    padding: '13px 16px',
-                    textDecoration: 'none',
-                    color: 'inherit',
-                    transition: 'background-color 0.15s ease',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor = theme.isDark
-                      ? 'rgba(255, 255, 255, 0.045)'
-                      : 'rgba(0, 0, 0, 0.025)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.backgroundColor = 'transparent';
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
-                    <IOSSquircleIcon color="#2AABEE" gradientTo="#229ED9">
-                      <svg
-                        width="16"
-                        height="16"
-                        viewBox="0 0 24 24"
-                        fill="currentColor"
-                        aria-hidden="true"
-                      >
-                        <path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z" />
-                      </svg>
-                    </IOSSquircleIcon>
-                    <div style={{ minWidth: 0 }}>
-                      <div
-                        style={{
-                          fontSize: '0.9063rem',
-                          fontWeight: 600,
-                          color: theme.colors.textPrimary,
-                        }}
-                      >
-                        {t.telegramLabel || 'تلگرام'}
-                      </div>
-                      <div
-                        dir="ltr"
-                        style={{
-                          fontSize: '0.75rem',
-                          color: theme.colors.textSecondary,
-                          marginTop: '1px',
-                          textAlign: isRTL ? 'right' : 'left',
-                        }}
-                      >
-                        t.me/Valuedb
-                      </div>
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        handleCopyContact('telegram', 'https://t.me/Valuedb');
-                      }}
-                      title="@Valuedb"
-                      style={{
-                        width: '30px',
-                        height: '30px',
-                        borderRadius: '9px',
-                        border: `1px solid ${theme.colors.border}`,
-                        backgroundColor: theme.isDark
-                          ? 'rgba(255,255,255,0.06)'
-                          : 'rgba(60,60,67,0.06)',
-                        color:
-                          copiedContact === 'telegram'
-                            ? '#34C759'
-                            : theme.colors.textSecondary,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      {copiedContact === 'telegram' ? <Check size={14} /> : <Copy size={13} />}
-                    </button>
-
-                    <span
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '4px',
-                        padding: '6px 12px',
-                        borderRadius: '999px',
-                        backgroundColor: 'rgba(42, 171, 238, 0.14)',
-                        color: '#2AABEE',
-                        fontSize: '0.75rem',
-                        fontWeight: 700,
-                      }}
-                    >
-                      <span>{t.openLinkLabel || 'مشاهده'}</span>
-                      <ArrowUpRight size={13} />
-                    </span>
-                  </div>
-                </a>
-
-                <div
-                  style={{
-                    height: '1px',
-                    backgroundColor: theme.isDark
-                      ? 'rgba(255, 255, 255, 0.08)'
-                      : 'rgba(60, 60, 67, 0.12)',
-                    marginInlineStart: '58px',
-                  }}
-                />
-
-                {/* لینک گیت‌هاب */}
-                <a
-                  href="https://github.com/Valuedb"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: '12px',
-                    padding: '13px 16px',
-                    textDecoration: 'none',
-                    color: 'inherit',
-                    transition: 'background-color 0.15s ease',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor = theme.isDark
-                      ? 'rgba(255, 255, 255, 0.045)'
-                      : 'rgba(0, 0, 0, 0.025)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.backgroundColor = 'transparent';
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
-                    <IOSSquircleIcon color="#24292F" gradientTo="#0D1117">
-                      <svg
-                        width="16"
-                        height="16"
-                        viewBox="0 0 24 24"
-                        fill="currentColor"
-                        aria-hidden="true"
-                      >
-                        <path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" />
-                      </svg>
-                    </IOSSquircleIcon>
-                    <div style={{ minWidth: 0 }}>
-                      <div
-                        style={{
-                          fontSize: '0.9063rem',
-                          fontWeight: 600,
-                          color: theme.colors.textPrimary,
-                        }}
-                      >
-                        {t.githubLabel || 'گیت‌هاب'}
-                      </div>
-                      <div
-                        dir="ltr"
-                        style={{
-                          fontSize: '0.75rem',
-                          color: theme.colors.textSecondary,
-                          marginTop: '1px',
-                          textAlign: isRTL ? 'right' : 'left',
-                        }}
-                      >
-                        github.com/Valuedb
-                      </div>
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        handleCopyContact('github', 'https://github.com/Valuedb');
-                      }}
-                      title="github.com/Valuedb"
-                      style={{
-                        width: '30px',
-                        height: '30px',
-                        borderRadius: '9px',
-                        border: `1px solid ${theme.colors.border}`,
-                        backgroundColor: theme.isDark
-                          ? 'rgba(255,255,255,0.06)'
-                          : 'rgba(60,60,67,0.06)',
-                        color:
-                          copiedContact === 'github'
-                            ? '#34C759'
-                            : theme.colors.textSecondary,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      {copiedContact === 'github' ? <Check size={14} /> : <Copy size={13} />}
-                    </button>
-
-                    <span
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '4px',
-                        padding: '6px 12px',
-                        borderRadius: '999px',
-                        backgroundColor: theme.isDark
-                          ? 'rgba(255, 255, 255, 0.12)'
-                          : 'rgba(36, 41, 47, 0.1)',
-                        color: theme.colors.textPrimary,
-                        fontSize: '0.75rem',
-                        fontWeight: 700,
-                      }}
-                    >
-                      <span>{t.openLinkLabel || 'مشاهده'}</span>
-                      <ArrowUpRight size={13} />
-                    </span>
-                  </div>
-                </a>
-              </IOSGroupedSection>
-
-              {/* بخش ۵: درباره موتور و بازنشانی */}
-              <IOSGroupedSection header={t.aboutSectionTitle || 'برنامه و بازنشانی'} theme={theme}>
+              {/* بخش ۴: ارتباط و بازنشانی */}
+              <IOSGroupedSection header={t.aboutSectionTitle || 'درباره برنامه'} theme={theme}>
                 <IOSRow
                   theme={theme}
                   icon={
-                    <IOSSquircleIcon color="#8E8E93" gradientTo="#636366">
-                      <Info size={16} />
+                    <IOSSquircleIcon color="#2AABEE" gradientTo="#229ED9">
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                        <path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z" />
+                      </svg>
                     </IOSSquircleIcon>
                   }
-                  title={t.appEngineLabel || 'موتور صدا'}
-                  valueText="Web Audio DSP 48kHz"
+                  title={t.telegramLabel || 'تلگرام'}
+                  subtitle={
+                    <span dir="ltr" style={{ display: 'inline-block' }}>
+                      https://t.me/Valuedb
+                    </span>
+                  }
+                  trailing={
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <button
+                        type="button"
+                        onClick={() => handleCopyContactLink('telegram', 'https://t.me/Valuedb')}
+                        title={
+                          copiedContactKey === 'telegram'
+                            ? t.copiedLinkTooltip || 'کپی شد'
+                            : t.copyLinkTooltip || 'کپی لینک'
+                        }
+                        aria-label={
+                          copiedContactKey === 'telegram'
+                            ? t.copiedLinkTooltip || 'کپی شد'
+                            : t.copyLinkTooltip || 'کپی لینک'
+                        }
+                        style={{
+                          width: '32px',
+                          height: '32px',
+                          borderRadius: '9px',
+                          border: `1px solid ${theme.colors.border}`,
+                          backgroundColor: theme.isDark
+                            ? 'rgba(255, 255, 255, 0.05)'
+                            : 'rgba(15, 23, 42, 0.04)',
+                          color:
+                            copiedContactKey === 'telegram'
+                              ? '#34C759'
+                              : theme.colors.textSecondary,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {copiedContactKey === 'telegram' ? <Check size={14} /> : <Copy size={14} />}
+                      </button>
+                      <a
+                        href="https://t.me/Valuedb"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          height: '32px',
+                          padding: '0 11px',
+                          borderRadius: '9px',
+                          backgroundColor: theme.isDark
+                            ? 'rgba(42, 171, 238, 0.18)'
+                            : 'rgba(42, 171, 238, 0.14)',
+                          color: '#2AABEE',
+                          fontSize: '0.7813rem',
+                          fontWeight: 600,
+                          textDecoration: 'none',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        <span>{t.openLinkLabel || 'مشاهده'}</span>
+                        <ArrowUpRight size={14} />
+                      </a>
+                    </div>
+                  }
+                />
+
+                <IOSRow
+                  theme={theme}
+                  icon={
+                    <IOSSquircleIcon color="#32383F" gradientTo="#1B1F23">
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                        <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" />
+                      </svg>
+                    </IOSSquircleIcon>
+                  }
+                  title={t.githubLabel || 'گیت‌هاب'}
+                  subtitle={
+                    <span dir="ltr" style={{ display: 'inline-block' }}>
+                      https://github.com/Valuedb
+                    </span>
+                  }
+                  trailing={
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <button
+                        type="button"
+                        onClick={() => handleCopyContactLink('github', 'https://github.com/Valuedb')}
+                        title={
+                          copiedContactKey === 'github'
+                            ? t.copiedLinkTooltip || 'کپی شد'
+                            : t.copyLinkTooltip || 'کپی لینک'
+                        }
+                        aria-label={
+                          copiedContactKey === 'github'
+                            ? t.copiedLinkTooltip || 'کپی شد'
+                            : t.copyLinkTooltip || 'کپی لینک'
+                        }
+                        style={{
+                          width: '32px',
+                          height: '32px',
+                          borderRadius: '9px',
+                          border: `1px solid ${theme.colors.border}`,
+                          backgroundColor: theme.isDark
+                            ? 'rgba(255, 255, 255, 0.05)'
+                            : 'rgba(15, 23, 42, 0.04)',
+                          color:
+                            copiedContactKey === 'github'
+                              ? '#34C759'
+                              : theme.colors.textSecondary,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {copiedContactKey === 'github' ? <Check size={14} /> : <Copy size={14} />}
+                      </button>
+                      <a
+                        href="https://github.com/Valuedb"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          height: '32px',
+                          padding: '0 11px',
+                          borderRadius: '9px',
+                          backgroundColor: theme.isDark
+                            ? 'rgba(255, 255, 255, 0.09)'
+                            : 'rgba(15, 23, 42, 0.07)',
+                          color: theme.colors.textPrimary,
+                          fontSize: '0.7813rem',
+                          fontWeight: 600,
+                          textDecoration: 'none',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        <span>{t.openLinkLabel || 'مشاهده'}</span>
+                        <ArrowUpRight size={14} />
+                      </a>
+                    </div>
+                  }
                 />
 
                 <IOSRow

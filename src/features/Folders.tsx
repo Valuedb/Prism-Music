@@ -14,10 +14,11 @@ import {
   Plus,
   Check,
 } from 'lucide-react';
-import type { Song, Playlist } from '../types';
+import type { LinkedFolder, Song, Playlist } from '../types';
 import { AllSongs } from './AllSongs';
 import { CoverImage } from '../components/CoverImage';
 import { extractSongsBatched, partitionDuplicateSongs } from '../utils/audioMetadata';
+import { isDesktopRuntime, syncDesktopFolderResult } from '../utils/desktopBridge';
 import { deleteAudioBlob } from '../storage/mediaStore';
 import { withAlpha } from '../utils/color';
 
@@ -48,6 +49,7 @@ interface FoldersProps {
   skipDuplicatesOnImport?: boolean;
   onBulkDeleteSongs?: (ids: string[]) => void;
   confirmBeforeDelete?: boolean;
+  onLinkDesktopFolder?: (folder: LinkedFolder) => void;
 }
 
 const UNCATEGORIZED_ID = '__uncategorized__';
@@ -149,6 +151,7 @@ export const Folders: React.FC<FoldersProps> = ({
   skipDuplicatesOnImport = true,
   onBulkDeleteSongs,
   confirmBeforeDelete = true,
+  onLinkDesktopFolder,
 }) => {
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(() =>
     initialFolder ? initialFolder.id : null
@@ -267,6 +270,33 @@ export const Folders: React.FC<FoldersProps> = ({
       setIsImporting(false);
       input.value = '';
     }
+  };
+
+  const handleTriggerImportFolder = async () => {
+    if (isDesktopRuntime() && window.desktopRuntime?.pickMusicFolder) {
+      setIsImporting(true);
+      try {
+        const scan = await window.desktopRuntime.pickMusicFolder();
+        if (!scan) return;
+        const fallbackName = activeFolder && !activeFolder.isUncategorized ? activeFolder.name : undefined;
+        const { newSongs, linkedFolder } = await syncDesktopFolderResult(scan, songs, fallbackName);
+        onLinkDesktopFolder?.(linkedFolder);
+        if (newSongs.length > 0) {
+          let toAdd = newSongs;
+          if (skipDuplicatesOnImport) {
+            const { unique } = partitionDuplicateSongs(newSongs, songs);
+            toAdd = unique;
+          }
+          if (toAdd.length > 0) {
+            setSongs((prev) => [...prev, ...toAdd]);
+          }
+        }
+      } finally {
+        setIsImporting(false);
+      }
+      return;
+    }
+    folderInputRef.current?.click();
   };
 
   const handleCreateSubmit = () => {
@@ -389,7 +419,7 @@ export const Folders: React.FC<FoldersProps> = ({
 
                 <button
                   type="button"
-                  onClick={() => folderInputRef.current?.click()}
+                  onClick={handleTriggerImportFolder}
                   disabled={isImporting}
                   style={{
                     display: 'flex',
@@ -429,7 +459,7 @@ export const Folders: React.FC<FoldersProps> = ({
               theme={theme}
               title={activeFolder.name}
               onBack={() => setSelectedFolderId(null)}
-              backLabel={t.foldersTitle || t.folders || 'فولدربندی‌ها'}
+              backLabel={t.foldersTitle || t.folders || 'پوشه‌بندی'}
               emptyMessage={t.noSongs}
               glassCardCovers={glassCardCovers}
               onBulkDeleteSongs={onBulkDeleteSongs}
@@ -475,7 +505,7 @@ export const Folders: React.FC<FoldersProps> = ({
               letterSpacing: '-0.4px',
             }}
           >
-            {t.foldersTitle || t.folders || 'فولدربندی‌ها'}
+            {t.foldersTitle || t.folders || 'پوشه‌بندی'}
           </h1>
           <div
             style={{
@@ -485,7 +515,7 @@ export const Folders: React.FC<FoldersProps> = ({
               fontVariantNumeric: 'tabular-nums',
             }}
           >
-            {folders.length} {t.foldersCountLabel || 'فولدر'} · {songs.length} {t.tracksCount || 'آهنگ'}
+            {folders.length} {t.foldersCountLabel || 'پوشه'} · {songs.length} {t.tracksCount || 'آهنگ'}
           </div>
         </div>
 
@@ -554,13 +584,13 @@ export const Folders: React.FC<FoldersProps> = ({
             }}
           >
             <FolderPlus size={16} color={theme.colors.primary} />
-            <span>{t.createFolder || 'ساخت فولدر'}</span>
+            <span>{t.createFolder || 'ساخت پوشه'}</span>
           </button>
 
           {/* دکمه وارد کردن پوشه از دستگاه */}
           <button
             type="button"
-            onClick={() => folderInputRef.current?.click()}
+            onClick={handleTriggerImportFolder}
             disabled={isImporting}
             style={{
               display: 'flex',
@@ -603,7 +633,7 @@ export const Folders: React.FC<FoldersProps> = ({
         >
           <Folder size={36} style={{ opacity: 0.4 }} />
           <p style={{ margin: 0, fontSize: '0.9375rem', fontWeight: 500 }}>
-            {t.noFolders || 'هنوز فولدری ساخته یا وارد نشده است.'}
+            {t.noFolders || 'هنوز پوشه‌ای ساخته یا وارد نشده است.'}
           </p>
         </div>
       ) : viewMode === 'grid' ? (
@@ -621,7 +651,7 @@ export const Folders: React.FC<FoldersProps> = ({
             return (
               <div
                 key={folder.id}
-                style={{ position: 'relative', zIndex: isMenuOpen ? 50 : isHovered ? 2 : 1 }}
+                style={{ position: 'relative', zIndex: isMenuOpen ? 50 : 1 }}
               >
                 <div
                   onClick={() => setSelectedFolderId(folder.id)}
@@ -780,13 +810,15 @@ export const Folders: React.FC<FoldersProps> = ({
                           top: 'calc(100% + 6px)',
                           insetInlineEnd: 0,
                           padding: '5px',
-                          backgroundColor: withAlpha(theme.colors.surfaceSolid || theme.colors.background, 0.97),
-                          backdropFilter: 'blur(26px)',
+                          backgroundColor: theme.colors.surfaceSolid || (theme.isDark ? '#18181c' : '#ffffff'),
                           borderRadius: theme.radius.md,
                           border: `1px solid ${theme.colors.border}`,
                           boxShadow: '0 16px 36px rgba(0, 0, 0, 0.42)',
                           minWidth: 180,
                           overflow: 'hidden',
+                          isolation: 'isolate',
+                          transform: 'translate3d(0, 0, 0)',
+                          backfaceVisibility: 'hidden',
                         }}
                       >
                         <button
@@ -818,7 +850,7 @@ export const Folders: React.FC<FoldersProps> = ({
                             color: theme.colors.textPrimary,
                             fontSize: '0.8438rem',
                             fontWeight: 500,
-                            transition: 'background-color 0.12s ease, scale 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
+                            transition: 'background-color 0.12s ease',
                           }}
                         >
                           <Edit2 size={15} /> <span>{t.renameFolder || 'تغییر نام'}</span>
@@ -847,7 +879,7 @@ export const Folders: React.FC<FoldersProps> = ({
                             color: theme.colors.textPrimary,
                             fontSize: '0.8438rem',
                             fontWeight: 500,
-                            transition: 'background-color 0.12s ease, scale 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
+                            transition: 'background-color 0.12s ease',
                           }}
                         >
                           <Plus size={15} /> <span>{t.addSong || 'افزودن آهنگ'}</span>
@@ -877,7 +909,7 @@ export const Folders: React.FC<FoldersProps> = ({
                             color: theme.colors.danger,
                             fontSize: '0.8438rem',
                             fontWeight: 500,
-                            transition: 'background-color 0.12s ease, scale 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
+                            transition: 'background-color 0.12s ease',
                           }}
                         >
                           <Trash2 size={15} /> <span>{t.deleteFolder || 'حذف فولدر'}</span>

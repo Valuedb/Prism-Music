@@ -21,7 +21,6 @@ import {
 } from 'lucide-react';
 import { CoverImage } from '../components/CoverImage';
 import { AllSongs } from './AllSongs';
-import { withAlpha } from '../utils/color';
 
 interface PlaylistsProps {
   playlists: Playlist[];
@@ -139,7 +138,7 @@ const PlaylistMenuButton = ({
         color: theme.colors.textSecondary,
         cursor: 'pointer',
         borderRadius: '50%',
-        transition: 'background-color 0.15s ease, color 0.15s ease, scale 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
+        transition: 'background-color 0.15s ease, color 0.15s ease',
         zIndex: 2,
         outline: 'none',
       }}
@@ -191,7 +190,7 @@ const MenuItem = ({
         cursor: 'pointer',
         textAlign: 'start',
         color: color ?? theme.colors.textPrimary,
-        transition: 'background-color 0.12s ease, scale 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
+        transition: 'background-color 0.12s ease',
         outline: 'none',
       }}
       onMouseEnter={(e) => {
@@ -229,15 +228,16 @@ const PlaylistMenu = ({
       top: 'calc(100% + 6px)',
       [align === 'end' ? 'insetInlineEnd' : 'insetInlineStart']: 0,
       padding: '5px',
-      backgroundColor: withAlpha(theme.colors.surfaceSolid || theme.colors.background, 0.97),
-      backdropFilter: 'blur(26px) saturate(180%)',
-      WebkitBackdropFilter: 'blur(26px) saturate(180%)',
+      backgroundColor: theme.colors.surfaceSolid || (theme.isDark ? '#18181c' : '#ffffff'),
       borderRadius: theme.radius.md,
       border: `1px solid ${theme.colors.border}`,
       boxShadow: '0 16px 36px rgba(0, 0, 0, 0.42)',
       zIndex: 1000,
       minWidth: 185,
       overflow: 'hidden',
+      isolation: 'isolate',
+      transform: 'translate3d(0, 0, 0)',
+      backfaceVisibility: 'hidden',
     }}
   >
     <MenuItem icon={<Edit2 size={16} />} label={t.renamePlaylist} onClick={onRename} theme={theme} />
@@ -279,7 +279,7 @@ const PlaylistCard = ({
   const [hovered, setHovered] = useState(false);
 
   return (
-    <div style={{ position: 'relative', zIndex: menuOpen ? 50 : (hovered ? 2 : 1) }}>
+    <div style={{ position: 'relative', zIndex: menuOpen ? 50 : 1 }}>
       <div
         onClick={onOpen}
         onMouseEnter={() => setHovered(true)}
@@ -387,7 +387,7 @@ const PlaylistRow = ({
           : (theme.isDark ? '0 4px 14px rgba(0,0,0,0.18)' : '0 2px 8px rgba(0,0,0,0.04)'),
         transition: 'background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease',
         position: 'relative',
-        zIndex: menuOpen ? 50 : (hovered ? 2 : 1),
+        zIndex: menuOpen ? 50 : 1,
       }}
     >
       <div style={{ width: 56, height: 56, flexShrink: 0 }}>

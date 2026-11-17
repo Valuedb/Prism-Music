@@ -13,5 +13,6 @@ export const DEFAULT_PLAYBACK_PREFERENCES: PlaybackPreferences = {
   confirmBeforeDelete: true,
   skipDuplicatesOnImport: true,
   seekStepSeconds: 5,
+  defaultTab: 'home',
 };
 

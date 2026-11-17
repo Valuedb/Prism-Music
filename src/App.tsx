@@ -4,8 +4,9 @@ import { Upload } from 'lucide-react';
 import { DEMO_SONGS } from './player/demoSongs';
 import { PlayerBar } from './components/PlayerBar';
 import { TopBar } from './components/TopBar';
+import { SideBar } from './components/SideBar';
+import { TabLoadingView } from './components/TabLoadingView';
 import type { SearchNavigateTarget } from './components/SearchBar';
-import { OfflineIndicator } from './components/PWAInstallControl';
 import { Home } from './features/Home';
 import { usePersistentState } from './hooks/usePersistentState';
 import { usePlayer } from './hooks/usePlayer';
@@ -14,14 +15,18 @@ import { readJSON } from './storage/safeStorage';
 import {
   isDisplaySettings,
   isEqualizerSettings,
+  isLinkedFolderList,
   isPlaybackPreferences,
   isPlaylistList,
   isSongList,
   isSoundSettings,
 } from './types/guards';
 import type {
+  DesktopFolderScanResult,
+  DesktopPickedFile,
   DisplaySettings,
   EqualizerSettings,
+  LinkedFolder,
   PlaybackPreferences,
   Playlist,
   SleepTimerState,
@@ -38,6 +43,14 @@ import {
   extractSongsBatched,
   partitionDuplicateSongs,
 } from './utils/audioMetadata';
+import {
+  buildDesktopMediaUrl,
+  extractDiskSongsBatched,
+  getDroppedFileDiskPath,
+  isDesktopRuntime,
+  normalizeDiskPath,
+  syncDesktopFolderResult,
+} from './utils/desktopBridge';
 import { extractDominantHex } from './utils/artworkColor';
 
 // بارگذاری تنبل صفحات غیر اول برای سرعت بالای راه‌اندازی روی ویندوز
@@ -50,23 +63,22 @@ const Settings = lazy(() => import('./features/Settings').then((m) => ({ default
 
 const tabs = ['home', 'allSongs', 'playlists', 'artists', 'albums', 'folders'] as const;
 
-interface LaunchParamsLike {
-  files?: { getFile: () => Promise<File> }[];
-}
-
-interface LaunchQueueLike {
-  setConsumer: (consumer: (launchParams: LaunchParamsLike) => void) => void;
-}
-
 function App() {
-  const [currentTabIndex, setCurrentTabIndex] = useState(0);
+  const [currentTabIndex, setCurrentTabIndex] = useState(() => {
+    const savedPrefs = readJSON<PlaybackPreferences>(
+      STORAGE_KEYS.playbackPrefs,
+      DEFAULT_PLAYBACK_PREFERENCES,
+      isPlaybackPreferences
+    );
+    const idx = tabs.indexOf(savedPrefs.defaultTab ?? 'home');
+    return idx >= 0 ? idx : 0;
+  });
   const currentTab = tabs[currentTabIndex];
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsSubPage, setSettingsSubPage] = useState<{
     page: 'main' | 'sound' | 'display' | 'library' | 'shortcuts';
     token: number;
   } | null>(null);
-  const [direction, setDirection] = useState(0);
 
   const [language, setLanguage] = usePersistentState<Language>(
     'appLanguage',
@@ -106,18 +118,32 @@ function App() {
     true,
     (v): v is boolean => typeof v === 'boolean'
   );
+  const [sidebarCollapsed, setSidebarCollapsed] = usePersistentState<boolean>(
+    STORAGE_KEYS.sidebarCollapsed,
+    false,
+    (v): v is boolean => typeof v === 'boolean'
+  );
   const [isPlaying, setIsPlaying] = useState(false);
   const [sleepTimer, setSleepTimer] = useState<SleepTimerState>({ mode: 'off' });
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const dragCounterRef = useRef(0);
 
-  // تشخیص حالت تیره/روشن سیستم یا ویندوز
+  // تشخیص حالت تیره/روشن سیستم و عرض پنجره برای تطبیق نوار کناری
+  const [viewportWidth, setViewportWidth] = useState<number>(() =>
+    typeof window !== 'undefined' ? window.innerWidth : 1280
+  );
   const [systemPrefersDark, setSystemPrefersDark] = useState<boolean>(() => {
     if (typeof window !== 'undefined' && window.matchMedia) {
       return window.matchMedia('(prefers-color-scheme: dark)').matches;
     }
     return false;
   });
+
+  useEffect(() => {
+    const onResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.matchMedia) return;
@@ -161,11 +187,17 @@ function App() {
     DEFAULT_PLAYBACK_PREFERENCES,
     isPlaybackPreferences
   );
+  const [linkedFolders, setLinkedFolders] = usePersistentState<LinkedFolder[]>(
+    STORAGE_KEYS.linkedFolders,
+    [],
+    isLinkedFolderList
+  );
   const [adaptivePrimaryHex, setAdaptivePrimaryHex] = useState<string | null>(null);
   const player = usePlayer(songs);
 
   const songsRef = useRef(songs);
   const playbackPrefsRef = useRef(playbackPrefs);
+  const linkedFoldersRef = useRef(linkedFolders);
 
   useEffect(() => {
     songsRef.current = songs;
@@ -174,6 +206,252 @@ function App() {
   useEffect(() => {
     playbackPrefsRef.current = playbackPrefs;
   }, [playbackPrefs]);
+
+  useEffect(() => {
+    linkedFoldersRef.current = linkedFolders;
+  }, [linkedFolders]);
+
+  const desktopSyncQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const folderRetryTimersRef = useRef<Map<string, number>>(new Map());
+  const lastFocusSyncRef = useRef(0);
+  const applyDesktopFolderScanRef = useRef<
+    ((
+      scan: DesktopFolderScanResult,
+      options?: { allowAutoPlay?: boolean; scheduleRetry?: boolean }
+    ) => Promise<{ addedCount: number; removedCount: number; firstAdded?: Song }>) | null
+  >(null);
+
+  const enqueueDesktopTask = useCallback(<T,>(task: () => Promise<T>): Promise<T> => {
+    const run = desktopSyncQueueRef.current.then(task, task);
+    desktopSyncQueueRef.current = run.then(
+      () => undefined,
+      () => undefined
+    );
+    return run;
+  }, []);
+
+  const applyDesktopFolderScan = useCallback(
+    (
+      scan: DesktopFolderScanResult,
+      options?: { allowAutoPlay?: boolean; scheduleRetry?: boolean }
+    ): Promise<{ addedCount: number; removedCount: number; firstAdded?: Song }> =>
+      enqueueDesktopTask(async () => {
+        const linkedItem = linkedFoldersRef.current.find(
+          (item) => normalizeDiskPath(item.path) === normalizeDiskPath(scan.folderPath)
+        );
+        const result = await syncDesktopFolderResult(
+          scan,
+          songsRef.current,
+          linkedItem?.name || scan.folderName
+        );
+
+        let runningSongs = [...songsRef.current];
+        const removedSet = new Set(result.removedIds);
+        const missingSet = new Set(result.missingIds);
+        let changedSongs = false;
+
+        if (removedSet.size > 0) {
+          runningSongs = runningSongs.filter((s) => !removedSet.has(s.id));
+          changedSongs = true;
+        }
+
+        if (result.restoredUpdates.size > 0 || missingSet.size > 0) {
+          runningSongs = runningSongs.map((s) => {
+            const restore = result.restoredUpdates.get(s.id);
+            if (restore) {
+              changedSongs = true;
+              return {
+                ...s,
+                fileMissing: false,
+                fileUrl: restore.fileUrl,
+                linkedFolderPath: restore.linkedFolderPath,
+                folder: restore.folder || s.folder,
+              };
+            }
+            if (missingSet.has(s.id) && !s.fileMissing) {
+              changedSongs = true;
+              return { ...s, fileMissing: true };
+            }
+            return s;
+          });
+        }
+
+        const uniqueNewSongs =
+          result.newSongs.length > 0
+            ? playbackPrefsRef.current.skipDuplicatesOnImport
+              ? partitionDuplicateSongs(result.newSongs, runningSongs).unique
+              : result.newSongs
+            : [];
+
+        if (uniqueNewSongs.length > 0) {
+          runningSongs = [...runningSongs, ...uniqueNewSongs];
+          changedSongs = true;
+        }
+
+        if (changedSongs) {
+          songsRef.current = runningSongs;
+          setSongs(runningSongs);
+
+          if (removedSet.size > 0 || result.restoredUpdates.size > 0 || missingSet.size > 0) {
+            setPlaylists((prev) =>
+              prev.map((pl) => ({
+                ...pl,
+                songs: pl.songs
+                  .filter((s) => !removedSet.has(s.id))
+                  .map((s) => {
+                    const restore = result.restoredUpdates.get(s.id);
+                    if (restore) {
+                      return {
+                        ...s,
+                        fileMissing: false,
+                        fileUrl: restore.fileUrl,
+                        linkedFolderPath: restore.linkedFolderPath,
+                        folder: restore.folder || s.folder,
+                      };
+                    }
+                    if (missingSet.has(s.id) && !s.fileMissing) {
+                      return { ...s, fileMissing: true };
+                    }
+                    return s;
+                  }),
+              }))
+            );
+
+            for (const removedId of removedSet) {
+              player.removeSong(removedId);
+            }
+            for (const [id, restore] of result.restoredUpdates.entries()) {
+              const updatedTarget = runningSongs.find((s) => s.id === id);
+              if (updatedTarget) {
+                player.syncSong({
+                  ...updatedTarget,
+                  fileMissing: false,
+                  fileUrl: restore.fileUrl,
+                  linkedFolderPath: restore.linkedFolderPath,
+                  folder: restore.folder || updatedTarget.folder,
+                });
+              }
+            }
+            for (const missingId of missingSet) {
+              const updatedTarget = runningSongs.find((s) => s.id === missingId);
+              if (updatedTarget) {
+                player.syncSong({ ...updatedTarget, fileMissing: true });
+              }
+            }
+          }
+        }
+
+        const now = Date.now();
+        const rootKey = normalizeDiskPath(scan.folderPath);
+        setLinkedFolders((prev) =>
+          prev.map((item) =>
+            normalizeDiskPath(item.path) === rootKey
+              ? {
+                  ...item,
+                  lastSyncedAt: now,
+                  fileCount: scan.missing ? item.fileCount : scan.files.length,
+                }
+              : item
+          )
+        );
+
+        if (
+          options?.scheduleRetry !== false &&
+          result.failedCount > 0 &&
+          !scan.missing &&
+          window.desktopRuntime?.scanFolder
+        ) {
+          const prevTimer = folderRetryTimersRef.current.get(rootKey);
+          if (prevTimer) window.clearTimeout(prevTimer);
+          const timerId = window.setTimeout(() => {
+            folderRetryTimersRef.current.delete(rootKey);
+            void window.desktopRuntime?.scanFolder?.(scan.folderPath).then((retryScan) => {
+              if (retryScan) {
+                void applyDesktopFolderScanRef.current?.(retryScan, { scheduleRetry: false });
+              }
+            });
+          }, 1500);
+          folderRetryTimersRef.current.set(rootKey, timerId);
+        }
+
+        if (options?.allowAutoPlay && uniqueNewSongs.length > 0) {
+          if (playbackPrefsRef.current.autoPlayOnImport || !player.currentSong) {
+            player.playSongFromList(uniqueNewSongs[0], runningSongs);
+          }
+        }
+
+        return {
+          addedCount: uniqueNewSongs.length,
+          removedCount: removedSet.size,
+          firstAdded: uniqueNewSongs[0],
+        };
+      }),
+    [enqueueDesktopTask, player, setLinkedFolders, setPlaylists, setSongs]
+  );
+
+  useEffect(() => {
+    applyDesktopFolderScanRef.current = applyDesktopFolderScan;
+  }, [applyDesktopFolderScan]);
+
+  const handleOpenExternalFiles = useCallback(
+    (pickedFiles: DesktopPickedFile[]) =>
+      enqueueDesktopTask(async () => {
+        if (!pickedFiles || pickedFiles.length === 0) return;
+
+        const existingByPath = new Map<string, Song>();
+        for (const s of songsRef.current) {
+          if (s.sourcePath) {
+            existingByPath.set(normalizeDiskPath(s.sourcePath), s);
+          }
+        }
+
+        const alreadyPresent: Song[] = [];
+        const toImport: DesktopPickedFile[] = [];
+
+        for (const item of pickedFiles) {
+          const matched = existingByPath.get(normalizeDiskPath(item.path));
+          if (matched) {
+            alreadyPresent.push(matched);
+          } else {
+            toImport.push(item);
+          }
+        }
+
+        let runningSongs = [...songsRef.current];
+        const imported =
+          toImport.length > 0 ? await extractDiskSongsBatched(toImport) : [];
+
+        if (imported.length > 0) {
+          runningSongs = [...runningSongs, ...imported];
+          songsRef.current = runningSongs;
+          setSongs(runningSongs);
+        }
+
+        const targetSong = imported[0] || alreadyPresent[0];
+        if (targetSong) {
+          const cleanTarget = targetSong.fileMissing
+            ? {
+                ...targetSong,
+                fileMissing: false,
+                fileUrl: buildDesktopMediaUrl(targetSong.sourcePath || targetSong.fileUrl),
+              }
+            : targetSong;
+          if (targetSong.fileMissing) {
+            runningSongs = runningSongs.map((s) => (s.id === cleanTarget.id ? cleanTarget : s));
+            songsRef.current = runningSongs;
+            setSongs(runningSongs);
+          }
+          player.playSongFromList(cleanTarget, runningSongs);
+        }
+      }),
+    [enqueueDesktopTask, player, setSongs]
+  );
+
+  // همگام‌سازی خودکار وضعیت پایش لحظه‌ای پوشه‌های متصل روی دیسک در پس‌زمینه
+  useEffect(() => {
+    if (!isDesktopRuntime() || !window.desktopRuntime?.watchFolders) return;
+    void window.desktopRuntime.watchFolders(linkedFolders.map((f) => f.path));
+  }, [linkedFolders]);
 
   // اعمال یکپارچه‌ی تمام تنظیمات صدا و اکولایزر روی موتور DSP خروجی صوتی
   useEffect(() => {
@@ -184,9 +462,11 @@ function App() {
     audioEffects.applySoundSettings(soundSettings);
   }, [soundSettings]);
 
-  // بازیابی یکپارچه و سریع لینک‌های فایل‌های صوتی ذخیره‌شده در IndexedDB + بازیابی آخرین آهنگ پخش‌شده
+  // بازیابی یکپارچه و سریع لینک‌های فایل‌های صوتی ذخیره‌شده در IndexedDB + بازیابی آخرین آهنگ پخش‌شده + پایش زنده پوشه‌ها
   useEffect(() => {
     let cancelled = false;
+    const retryTimers = folderRetryTimersRef.current;
+
     const rehydrateAudioUrls = async () => {
       const localSongIds = songs
         .filter((s) => s.fileUrl.startsWith('blob:'))
@@ -244,53 +524,99 @@ function App() {
     };
 
     rehydrateAudioUrls();
-    return () => {
-      cancelled = true;
+
+    const syncLinkedFolders = async () => {
+      if (!isDesktopRuntime() || !window.desktopRuntime?.scanFolder) return;
+      const api = window.desktopRuntime;
+      for (const folder of linkedFoldersRef.current) {
+        if (cancelled) return;
+        const scan = await api.scanFolder!(folder.path);
+        if (cancelled) return;
+        await applyDesktopFolderScan(
+          scan ?? {
+            folderPath: folder.path,
+            folderName: folder.name,
+            files: [],
+            missing: true,
+          }
+        );
+      }
     };
-    // فقط یک‌بار هنگام شروع برنامه اجرا شود
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
-  // پشتیبانی بومی ویندوز از باز کردن فایل صوتی با برنامه (Open With / LaunchQueue API)
-  useEffect(() => {
-    const win = window as unknown as { launchQueue?: LaunchQueueLike };
-    if (!win.launchQueue?.setConsumer) return;
+    // بررسی وجود فایل‌های متصل مستقیم به هارد و همگام‌سازی خودکار پوشه‌های دسکتاپ هنگام شروع
+    const syncDesktopLibraryOnLaunch = async () => {
+      if (!isDesktopRuntime() || !window.desktopRuntime) return;
+      const api = window.desktopRuntime;
 
-    win.launchQueue.setConsumer(async (launchParams) => {
-      if (!launchParams?.files || launchParams.files.length === 0) return;
-      const files = await Promise.all(launchParams.files.map((handle) => handle.getFile()));
-      const imported = await extractSongsBatched(files);
-      if (imported.length === 0) return;
+      const diskPaths = songsRef.current
+        .map((s) => s.sourcePath)
+        .filter((p): p is string => Boolean(p));
 
-      const prefs = playbackPrefsRef.current;
-      const existing = songsRef.current;
-      const { unique, duplicates } = prefs.skipDuplicatesOnImport
-        ? partitionDuplicateSongs(imported, existing)
-        : { unique: imported, duplicates: [] as Song[] };
-
-      if (duplicates.length > 0) {
-        duplicates.forEach((dup) => {
-          if (dup.fileUrl.startsWith('blob:')) URL.revokeObjectURL(dup.fileUrl);
-          void deleteAudioBlob(dup.id);
+      if (diskPaths.length > 0 && api.checkPathsExist) {
+        const statusMap = await api.checkPathsExist(diskPaths);
+        if (cancelled) return;
+        setSongs((prev) => {
+          let changed = false;
+          const next = prev.map((s) => {
+            if (!s.sourcePath) return s;
+            const exists = statusMap[s.sourcePath] !== false;
+            const expectedUrl = buildDesktopMediaUrl(s.sourcePath);
+            if (Boolean(s.fileMissing) !== !exists || s.fileUrl !== expectedUrl) {
+              changed = true;
+              return { ...s, fileMissing: !exists, fileUrl: expectedUrl };
+            }
+            return s;
+          });
+          if (changed) songsRef.current = next;
+          return changed ? next : prev;
         });
       }
 
-      if (unique.length > 0) {
-        const updated = [...existing, ...unique];
-        setSongs(updated);
-        if (prefs.autoPlayOnImport || !player.currentSong) {
-          player.playSongFromList(unique[0], updated);
-        }
-      } else if (duplicates.length > 0 && (prefs.autoPlayOnImport || !player.currentSong)) {
-        const firstDup = duplicates[0];
-        const matched = existing.find(
-          (s) => s.name === firstDup.name && s.artist === firstDup.artist
-        );
-        if (matched) {
-          player.playSongFromList(matched, existing);
+      await syncLinkedFolders();
+
+      if (api.consumePendingOpenFiles) {
+        const pendingFiles = await api.consumePendingOpenFiles();
+        if (!cancelled && pendingFiles.length > 0) {
+          await handleOpenExternalFiles(pendingFiles);
         }
       }
+    };
+
+    void syncDesktopLibraryOnLaunch();
+
+    const unsubFolderWatch = window.desktopRuntime?.onFolderChanged?.((scan) => {
+      if (!cancelled) {
+        void applyDesktopFolderScan(scan);
+      }
     });
+
+    const unsubOpenFiles = window.desktopRuntime?.onOpenFiles?.((files) => {
+      if (!cancelled && files.length > 0) {
+        void handleOpenExternalFiles(files);
+      }
+    });
+
+    const handleWindowFocusSync = () => {
+      if (!isDesktopRuntime() || linkedFoldersRef.current.length === 0) return;
+      const now = Date.now();
+      if (now - lastFocusSyncRef.current < 6000) return;
+      lastFocusSyncRef.current = now;
+      void syncLinkedFolders();
+    };
+
+    window.addEventListener('focus', handleWindowFocusSync);
+
+    return () => {
+      cancelled = true;
+      unsubFolderWatch?.();
+      unsubOpenFiles?.();
+      window.removeEventListener('focus', handleWindowFocusSync);
+      for (const id of retryTimers.values()) {
+        window.clearTimeout(id);
+      }
+      retryTimers.clear();
+    };
+    // فقط یک‌بار هنگام شروع برنامه اجرا شود
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -644,7 +970,6 @@ function App() {
       if (index === -1) return;
       setNavTarget(null);
       if (index !== currentTabIndex) {
-        setDirection(index > currentTabIndex ? 1 : -1);
         setCurrentTabIndex(index);
       }
       setIsSettingsOpen(false);
@@ -658,7 +983,6 @@ function App() {
       if (index === -1) return;
       setNavTarget({ ...target, token: Date.now() });
       if (index !== currentTabIndex) {
-        setDirection(index > currentTabIndex ? 1 : -1);
         setCurrentTabIndex(index);
       }
       setIsSettingsOpen(false);
@@ -698,6 +1022,69 @@ function App() {
     dragCounterRef.current = 0;
     setIsDraggingFiles(false);
 
+    // در اجرای مستقل دسکتاپ: پوشه‌های رهاشده متصل و پایش می‌شوند و فایل‌ها بدون کپی به دیتابیس لینک می‌گردند
+    if (isDesktopRuntime() && window.desktopRuntime?.inspectPaths && e.dataTransfer.files?.length) {
+      const api = window.desktopRuntime;
+      const droppedPaths = Array.from(e.dataTransfer.files)
+        .map(getDroppedFileDiskPath)
+        .filter(Boolean);
+
+      if (droppedPaths.length > 0) {
+        const inspected = await api.inspectPaths!(droppedPaths);
+        let firstImportedSong: Song | undefined;
+
+        for (const dirPath of inspected.dirs) {
+          const scan = await api.scanFolder?.(dirPath);
+          if (!scan) continue;
+          const folderRecord: LinkedFolder = {
+            id: scan.folderPath,
+            path: scan.folderPath,
+            name: scan.folderName,
+            addedAt: Date.now(),
+            lastSyncedAt: Date.now(),
+            fileCount: scan.files.length,
+          };
+          setLinkedFolders((prev) => [
+            ...prev.filter((item) => normalizeDiskPath(item.path) !== normalizeDiskPath(scan.folderPath)),
+            folderRecord,
+          ]);
+          const outcome = await applyDesktopFolderScan(scan, { allowAutoPlay: false });
+          if (!firstImportedSong && outcome.firstAdded) {
+            firstImportedSong = outcome.firstAdded;
+          }
+        }
+
+        if (inspected.files.length > 0) {
+          const existingPaths = new Set(
+            songsRef.current
+              .map((s) => (s.sourcePath ? normalizeDiskPath(s.sourcePath) : ''))
+              .filter(Boolean)
+          );
+          const freshFiles = inspected.files.filter(
+            (f) => !existingPaths.has(normalizeDiskPath(f.path))
+          );
+          if (freshFiles.length > 0) {
+            const diskSongs = await extractDiskSongsBatched(freshFiles);
+            const prefs = playbackPrefsRef.current;
+            const { unique } = prefs.skipDuplicatesOnImport
+              ? partitionDuplicateSongs(diskSongs, songsRef.current)
+              : { unique: diskSongs };
+            if (unique.length > 0) {
+              const updated = [...songsRef.current, ...unique];
+              songsRef.current = updated;
+              setSongs(updated);
+              if (!firstImportedSong) firstImportedSong = unique[0];
+            }
+          }
+        }
+
+        if (firstImportedSong && (playbackPrefsRef.current.autoPlayOnImport || !player.currentSong)) {
+          player.playSongFromList(firstImportedSong, songsRef.current);
+        }
+        return;
+      }
+    }
+
     const extractedItems = await extractDroppedAudioFiles(e.dataTransfer);
     if (extractedItems.length === 0) return;
 
@@ -726,37 +1113,6 @@ function App() {
     }
   };
 
-  // انیمیشن جابه‌جایی صفحات به سبک One UI / Samsung Music بدون جمع شدن صفحه
-  const variants = {
-    enter: (dir: number) => {
-      if (dir === 0) return { x: 0 };
-      const isRtl = language === 'fa';
-      const offset = dir > 0 ? (isRtl ? -100 : 100) : isRtl ? 100 : -100;
-      return {
-        x: `${offset}%`,
-      };
-    },
-    center: { zIndex: 1, x: 0 },
-    exit: (dir: number) => {
-      if (dir === 0) return { x: 0 };
-      const isRtl = language === 'fa';
-      const offset = dir > 0 ? (isRtl ? 100 : -100) : isRtl ? -100 : 100;
-      return {
-        zIndex: 0,
-        x: `${offset}%`,
-      };
-    },
-  };
-
-  const paginate = (newDirection: number) => {
-    setDirection(newDirection);
-    setCurrentTabIndex((prev) => {
-      const next = prev + newDirection;
-      if (next < 0 || next >= tabs.length) return prev;
-      return next;
-    });
-  };
-
   const renderContent = () => {
     if (isSettingsOpen) {
       return (
@@ -767,6 +1123,8 @@ function App() {
           setPlaylists={setPlaylists}
           customFolders={customFolders}
           setCustomFolders={setCustomFolders}
+          linkedFolders={linkedFolders}
+          setLinkedFolders={setLinkedFolders}
           t={t}
           language={language}
           setLanguage={setLanguage}
@@ -795,6 +1153,7 @@ function App() {
           onSetSleepTimer={setSleepTimer}
           onPlayImported={handlePlaySongFromList}
           onDeleteSongsBatch={handleBulkDeleteSongs}
+          onSyncDesktopFolderScan={applyDesktopFolderScan}
           onCloseSettings={() => setIsSettingsOpen(false)}
           initialSubPage={settingsSubPage}
         />
@@ -958,6 +1317,14 @@ function App() {
             initialFolder={
               navTarget?.tab === 'folders' ? { id: navTarget.key, token: navTarget.token } : null
             }
+            onLinkDesktopFolder={(folder) =>
+              setLinkedFolders((prev) => [
+                ...prev.filter(
+                  (item) => normalizeDiskPath(item.path) !== normalizeDiskPath(folder.path)
+                ),
+                folder,
+              ])
+            }
           />
         );
       default:
@@ -1103,77 +1470,129 @@ function App() {
       </div>
       )}
 
-      <OfflineIndicator theme={theme} t={t} isRTL={language === 'fa'} />
+      {(() => {
+        const navLayout = displaySettings.navigationLayout ?? 'top';
+        const isDesktopViewport = viewportWidth >= 768;
+        const expandedSidebarWidth = viewportWidth >= 1024 ? 204 : 196;
+        const sidebarWidth = sidebarCollapsed ? 64 : expandedSidebarWidth;
+        const showDesktopSidebar = navLayout === 'sidebar' && isDesktopViewport;
+        const isDockedPlayer = (displaySettings.playerBarStyle ?? 'floating') === 'docked';
 
-      <TopBar
-        currentTab={isSettingsOpen ? 'settings' : currentTab}
-        setCurrentTab={setTab}
-        t={t}
-        theme={theme}
-        songs={songs}
-        playlists={playlists}
-        customFolders={customFolders}
-        onPlaySong={handlePlaySongFromList}
-        onPlayNext={player.playNextSongs}
-        onAddToQueue={player.addToQueue}
-        onAddSongsToPlaylist={handleAddSongsToPlaylist}
-        onCreatePlaylist={handleCreatePlaylist}
-        onSearchNavigate={handleNavigateFromSearch}
-      />
+        return (
+          <>
+            <div
+              dir={navLayout === 'sidebar' ? 'ltr' : language === 'fa' ? 'rtl' : 'ltr'}
+              style={{
+                display: 'flex',
+                flexDirection: showDesktopSidebar ? 'row' : 'column',
+                flex: 1,
+                minHeight: 0,
+                overflow: 'hidden',
+                position: 'relative',
+                zIndex: 1,
+              }}
+            >
+              {navLayout === 'sidebar' ? (
+                <SideBar
+                  currentTab={isSettingsOpen ? 'settings' : currentTab}
+                  setCurrentTab={setTab}
+                  t={t}
+                  theme={theme}
+                  songs={songs}
+                  playlists={playlists}
+                  customFolders={customFolders}
+                  onPlaySong={handlePlaySongFromList}
+                  onPlayNext={player.playNextSongs}
+                  onAddToQueue={player.addToQueue}
+                  onAddSongsToPlaylist={handleAddSongsToPlaylist}
+                  onCreatePlaylist={handleCreatePlaylist}
+                  onSearchNavigate={handleNavigateFromSearch}
+                  isDesktopViewport={isDesktopViewport}
+                  sidebarWidth={sidebarWidth}
+                  isCollapsed={sidebarCollapsed}
+                  onToggleCollapse={() => setSidebarCollapsed((prev) => !prev)}
+                  isDockedPlayer={isDockedPlayer}
+                  reduceMotion={displaySettings.reduceMotion}
+                  isRTL={language === 'fa'}
+                />
+              ) : (
+                <TopBar
+                  currentTab={isSettingsOpen ? 'settings' : currentTab}
+                  setCurrentTab={setTab}
+                  t={t}
+                  theme={theme}
+                  songs={songs}
+                  playlists={playlists}
+                  customFolders={customFolders}
+                  onPlaySong={handlePlaySongFromList}
+                  onPlayNext={player.playNextSongs}
+                  onAddToQueue={player.addToQueue}
+                  onAddSongsToPlaylist={handleAddSongsToPlaylist}
+                  onCreatePlaylist={handleCreatePlaylist}
+                  onSearchNavigate={handleNavigateFromSearch}
+                />
+              )}
 
-      <div style={{ flex: 1, position: 'relative', overflow: 'hidden', zIndex: 1 }}>
-        <AnimatePresence initial={false} custom={direction}>
-          <motion.div
-            key={isSettingsOpen ? 'settings' : currentTab}
-            custom={direction}
-            variants={variants}
-            initial="enter"
-            animate="center"
-            exit="exit"
-            transition={{
-              x: { type: 'spring', stiffness: 350, damping: 35, mass: 0.75 },
-            }}
-            drag={isSettingsOpen ? false : 'x'}
-            dragConstraints={{ left: 0, right: 0 }}
-            dragElastic={0.18}
-            onDragEnd={(_, { offset, velocity }) => {
-              if (isSettingsOpen) return;
-              const swipe = offset.x;
-              const vel = velocity.x;
-              if (language === 'fa') {
-                if (swipe > 60 || vel > 350) paginate(1);
-                else if (swipe < -60 || vel < -350) paginate(-1);
-              } else {
-                if (swipe < -60 || vel < -350) paginate(1);
-                else if (swipe > 60 || vel > 350) paginate(-1);
-              }
-            }}
-            style={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              overflowY: 'auto',
-              backgroundColor: 'transparent',
-            }}
-          >
-            <Suspense fallback={null}>{renderContent()}</Suspense>
-          </motion.div>
-        </AnimatePresence>
-      </div>
+              <div
+                dir={language === 'fa' ? 'rtl' : 'ltr'}
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  minHeight: 0,
+                  position: 'relative',
+                  overflow: 'hidden',
+                  zIndex: 1,
+                }}
+              >
+                <AnimatePresence mode="wait" initial={false}>
+                  <motion.div
+                    key={isSettingsOpen ? 'settings' : currentTab}
+                    initial={displaySettings.reduceMotion ? false : { opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={displaySettings.reduceMotion ? { opacity: 1 } : { opacity: 0 }}
+                    transition={{
+                      duration: displaySettings.reduceMotion ? 0 : 0.11,
+                      ease: 'easeOut',
+                    }}
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      overflowY: 'auto',
+                      scrollbarGutter: 'stable both-edges',
+                      backgroundColor: 'transparent',
+                    }}
+                  >
+                    <Suspense
+                      fallback={
+                        <TabLoadingView
+                          theme={theme}
+                          subtitle={t.loadingTab || 'در حال بارگذاری...'}
+                          reduceMotion={displaySettings.reduceMotion}
+                          isRTL={language === 'fa'}
+                        />
+                      }
+                    >
+                      {renderContent()}
+                    </Suspense>
+                  </motion.div>
+                </AnimatePresence>
+              </div>
+            </div>
 
-      <div
-        dir="ltr"
-        style={{
-          position: 'fixed',
-          bottom: 0,
-          left: 0,
-          right: 0,
-          zIndex: 100,
-          direction: 'ltr',
-        }}
-      >
+            <div
+              dir="ltr"
+              style={{
+                position: 'fixed',
+                bottom: 0,
+                left: 0,
+                right: 0,
+                zIndex: 120,
+                direction: 'ltr',
+              }}
+            >
         <PlayerBar
           currentSong={player.currentSong}
           queue={player.queue}
@@ -1196,7 +1615,10 @@ function App() {
           onPlayQueueSong={player.playQueueSongAt}
           onClearQueue={player.clearQueue}
           onShuffleQueue={player.shuffleQueue}
+          playlists={playlists}
+          onAddSongToPlaylist={addSongToPlaylist}
           onCreatePlaylist={handleCreatePlaylist}
+          onDeleteSong={deleteSong}
           onSelectTabIndex={(idx) => {
             if (tabs[idx]) setTab(tabs[idx]);
           }}
@@ -1209,6 +1631,9 @@ function App() {
           playbackPrefs={playbackPrefs}
         />
       </div>
+          </>
+        );
+      })()}
 
       {/* راهنمای رها کردن فایل/پوشه فقط هنگام کشیدن فایل روی پنجره ویندوز */}
       {isDraggingFiles && (

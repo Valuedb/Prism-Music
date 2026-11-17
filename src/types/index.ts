@@ -7,6 +7,8 @@ export type AppTab =
   | 'folders'
   | 'settings';
 
+export type StartupTab = Exclude<AppTab, 'settings'>;
+
 /** یک آهنگ در کتابخانه */
 export interface Song {
   id: string;
@@ -14,6 +16,9 @@ export interface Song {
   artist: string;
   cover: string;
   fileUrl: string;
+  sourcePath?: string;
+  linkedFolderPath?: string;
+  fileMissing?: boolean;
   playCount: number;
   addedAt: number;
   album?: string;
@@ -23,6 +28,54 @@ export interface Song {
   isFavorite?: boolean;
   lastPlayedAt?: number;
   lyrics?: string;
+}
+
+export interface LinkedFolder {
+  id: string;
+  path: string;
+  name: string;
+  addedAt: number;
+  lastSyncedAt?: number;
+  fileCount?: number;
+}
+
+export interface DesktopPickedFile {
+  path: string;
+  name: string;
+  folder?: string;
+  size?: number;
+}
+
+export interface DesktopFolderScanResult {
+  folderPath: string;
+  folderName: string;
+  files: DesktopPickedFile[];
+  missing?: boolean;
+}
+
+export interface DesktopRuntimeAPI {
+  platform: string;
+  isDesktop: boolean;
+  getPathForFile?: (file: File) => string;
+  pickAudioFiles?: () => Promise<DesktopPickedFile[]>;
+  pickMusicFolder?: () => Promise<DesktopFolderScanResult | null>;
+  scanFolder?: (folderPath: string) => Promise<DesktopFolderScanResult | null>;
+  watchFolders?: (paths: string[]) => Promise<void>;
+  onFolderChanged?: (callback: (scan: DesktopFolderScanResult) => void) => () => void;
+  readFileBytes?: (filePath: string) => Promise<Uint8Array | null>;
+  checkPathsExist?: (paths: string[]) => Promise<Record<string, boolean>>;
+  showItemInFolder?: (filePath: string) => Promise<boolean>;
+  openFolder?: (folderPath: string) => Promise<boolean>;
+  inspectPaths?: (paths: string[]) => Promise<{ dirs: string[]; files: DesktopPickedFile[] }>;
+  getDefaultMusicFolder?: () => Promise<{ path: string; name: string } | null>;
+  consumePendingOpenFiles?: () => Promise<DesktopPickedFile[]>;
+  onOpenFiles?: (callback: (files: DesktopPickedFile[]) => void) => () => void;
+}
+
+declare global {
+  interface Window {
+    desktopRuntime?: DesktopRuntimeAPI;
+  }
 }
 
 export interface Playlist {
@@ -99,6 +152,7 @@ export type PlayerBarStyle = 'floating' | 'docked';
 export type ArtworkStyle = 'classic' | 'vinyl';
 export type VisualizerStyle = 'bars' | 'wave' | 'ring';
 export type HomeLayoutStyle = 'wide' | 'widget';
+export type NavigationLayoutStyle = 'top' | 'sidebar';
 export type SeekStepSeconds = 5 | 10 | 15;
 
 export interface PlaybackPreferences {
@@ -107,6 +161,7 @@ export interface PlaybackPreferences {
   confirmBeforeDelete: boolean;
   skipDuplicatesOnImport: boolean;
   seekStepSeconds: SeekStepSeconds;
+  defaultTab?: StartupTab;
 }
 
 export interface DisplaySettings {
@@ -126,5 +181,6 @@ export interface DisplaySettings {
   artworkStyle: ArtworkStyle;
   visualizerStyle: VisualizerStyle;
   homeLayout?: HomeLayoutStyle;
+  navigationLayout?: NavigationLayoutStyle;
   reduceMotion: boolean;
 }

@@ -2,11 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Heart } from 'lucide-react';
 import { DEFAULT_PLAYBACK_PREFERENCES, PLAY_COUNT_THRESHOLD_SECONDS } from '../player/constants';
-import type { DisplaySettings, PlaybackPreferences, RepeatMode, SleepTimerState, Song, SoundSettings } from '../types';
+import type { DisplaySettings, PlaybackPreferences, Playlist, RepeatMode, SleepTimerState, Song, SoundSettings } from '../types';
 import { FullScreenPlayer } from './FullScreenPlayer';
 import { QueueDrawer } from './QueueDrawer';
 import { CoverImage } from './CoverImage';
 import { MarqueeText } from './MarqueeText';
+import { ProgressScrubber } from './ProgressScrubber';
 import { syncMediaSession, syncMediaSessionPosition } from '../utils/mediaSession';
 import { DEFAULT_SOUND_SETTINGS, audioEffects } from '../player/audioEffects';
 import { DEFAULT_DISPLAY_SETTINGS } from '../theme';
@@ -18,7 +19,7 @@ import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { withAlpha } from '../utils/color';
 
 /**
- * رنگ‌ها و متریال نوار پلیر به سبک Apple Music هماهنگ با پالت و تم روشن/تاریک:
+ * رنگ‌ها و متریال نوار پلیر Prism Music هماهنگ با پالت و تم روشن/تاریک:
  * - سطح شیشه‌ای نوار (پس‌زمینه، لبه و سایه) از theme.glass.bar می‌آید (src/theme.ts)
  * - رنگ متن‌ها و آیکون‌ها از پالت فعال می‌آید تا با تم روشن و تیره کاملاً هماهنگ باشد
  */
@@ -56,6 +57,8 @@ interface PlayerBarProps {
   onPlayQueueSong?: (index: number) => void;
   onClearQueue?: () => void;
   onShuffleQueue?: () => void;
+  playlists?: Playlist[];
+  onAddSongToPlaylist?: (playlistId: string, song: Song) => void;
   onCreatePlaylist?: (name: string, songs: Song[]) => void;
   onSelectTabIndex?: (index: number) => void;
   onOpenSettings?: () => void;
@@ -66,6 +69,7 @@ interface PlayerBarProps {
   displaySettings?: DisplaySettings;
   playbackPrefs?: PlaybackPreferences;
   onUpdateSong?: (updatedSong: Song) => void;
+  onDeleteSong?: (id: string) => void;
 }
 
 type AudioWithPitchFlags = HTMLAudioElement & {
@@ -113,6 +117,8 @@ export const PlayerBar = ({
   onPlayQueueSong,
   onClearQueue,
   onShuffleQueue,
+  playlists = [],
+  onAddSongToPlaylist,
   onCreatePlaylist,
   onSelectTabIndex,
   onOpenSettings,
@@ -123,6 +129,7 @@ export const PlayerBar = ({
   displaySettings = DEFAULT_DISPLAY_SETTINGS,
   playbackPrefs = DEFAULT_PLAYBACK_PREFERENCES,
   onUpdateSong,
+  onDeleteSong,
 }: PlayerBarProps) => {
   const audioRefA = useRef<HTMLAudioElement>(null);
   const audioRefB = useRef<HTMLAudioElement>(null);
@@ -155,7 +162,6 @@ export const PlayerBar = ({
     (v): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1
   );
   const lastNonZeroVolumeRef = useRef<number>(volume > 0 ? volume : 1);
-  const [isHoveringProgress, setIsHoveringProgress] = useState(false);
   const [isHoveringVolume, setIsHoveringVolume] = useState(false);
   const [isNowPlayingOpen, setIsNowPlayingOpen] = useState(false);
   const [isHeartPopping, setIsHeartPopping] = useState(false);
@@ -224,11 +230,11 @@ export const PlayerBar = ({
   useEffect(() => {
     if (typeof document === 'undefined') return;
     if (currentSong && isPlaying) {
-      document.title = `▶ ${currentSong.name} - ${currentSong.artist} | Apple Music`;
+      document.title = `▶ ${currentSong.name} - ${currentSong.artist} | Prism Music`;
     } else if (currentSong) {
-      document.title = `${currentSong.name} - ${currentSong.artist} | Apple Music`;
+      document.title = `${currentSong.name} - ${currentSong.artist} | Prism Music`;
     } else {
-      document.title = 'Music Player';
+      document.title = 'Prism Music';
     }
   }, [currentSong, isPlaying]);
 
@@ -294,7 +300,6 @@ export const PlayerBar = ({
     retriedRecoveryRef.current = null;
     audioEffects.attach(audio);
     audioEffects.cancelDeckFade(audio);
-    audioEffects.setDeckGain(audio, 1, 0);
     applyDeckPlaybackParams(
       audio,
       effectiveVolume,
@@ -305,10 +310,20 @@ export const PlayerBar = ({
     if (!songUrl) {
       setCurrentTime(0);
       setDuration(0);
-      audio.pause();
       handlePlayState(false);
-      audio.removeAttribute('src');
-      audio.load();
+      if (!audio.paused) {
+        audioEffects.setDeckGain(audio, 0, 0.024);
+        pauseFadeTimerRef.current = window.setTimeout(() => {
+          audio.pause();
+          audio.removeAttribute('src');
+          audio.load();
+          pauseFadeTimerRef.current = null;
+        }, 32);
+      } else {
+        audio.pause();
+        audio.removeAttribute('src');
+        audio.load();
+      }
       return;
     }
 
@@ -316,6 +331,7 @@ export const PlayerBar = ({
     audio.src = songUrl;
 
     if (playToken === 0) {
+      audioEffects.setDeckGain(audio, 1, 0);
       const resumeAt = pendingResumeTimeRef.current ?? 0;
       setCurrentTime(resumeAt);
       const applyResumeTime = () => {
@@ -333,15 +349,11 @@ export const PlayerBar = ({
     setCurrentTime(0);
     pendingResumeTimeRef.current = null;
     audioEffects.resumeContext();
-    if (soundSettings.fadeOnPlayPause) {
-      audioEffects.setDeckGain(audio, 0.02, 0);
-    }
+    audioEffects.setDeckGain(audio, 0.001, 0);
     audio
       .play()
       .then(() => {
-        if (soundSettings.fadeOnPlayPause) {
-          audioEffects.setDeckGain(audio, 1, 0.22);
-        }
+        audioEffects.setDeckGain(audio, 1, soundSettings.fadeOnPlayPause ? 0.2 : 0.022);
         handlePlayState(true);
       })
       .catch((err: unknown) => {
@@ -477,51 +489,64 @@ export const PlayerBar = ({
     }
   };
 
-  const formatTime = (time: number) => {
-    if (isNaN(time)) return '0:00';
-    const mins = Math.floor(time / 60);
-    const secs = Math.floor(time % 60);
-    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
-  };
+  const fadeOutAndPauseDeck = useCallback(
+    (audio: HTMLAudioElement | null, onAfterPause?: () => void) => {
+      if (!audio) {
+        onAfterPause?.();
+        return;
+      }
+      if (pauseFadeTimerRef.current) {
+        window.clearTimeout(pauseFadeTimerRef.current);
+        pauseFadeTimerRef.current = null;
+      }
+      if (audio.paused) {
+        audioEffects.setDeckGain(audio, 0, 0);
+        handlePlayState(false);
+        onAfterPause?.();
+        return;
+      }
+      const fadeSec = soundSettings.fadeOnPlayPause ? 0.16 : 0.026;
+      const waitMs = soundSettings.fadeOnPlayPause ? 185 : 34;
+      audioEffects.setDeckGain(audio, 0, fadeSec);
+      handlePlayState(false);
+      pauseFadeTimerRef.current = window.setTimeout(() => {
+        audio.pause();
+        // گین را در 0 نگه می‌داریم و به 1 برنمی‌گردانیم تا هیچ تیک صوتی در لحظه توقف رخ ندهد
+        audioEffects.setDeckGain(audio, 0, 0);
+        pauseFadeTimerRef.current = null;
+        onAfterPause?.();
+      }, waitMs);
+    },
+    [handlePlayState, soundSettings.fadeOnPlayPause]
+  );
 
   const togglePlay = useCallback(() => {
     const audio = getActiveAudio();
     if (!audio || !currentSong) return;
     audioEffects.resumeContext();
+
+    // اگر کاربر وسط انیمیشن توقف دوباره Play زد، بلافاصله رمپ توقف لغو و صدا بازگردانده شود
     if (pauseFadeTimerRef.current) {
       window.clearTimeout(pauseFadeTimerRef.current);
       pauseFadeTimerRef.current = null;
+      audioEffects.setDeckGain(audio, 1, soundSettings.fadeOnPlayPause ? 0.16 : 0.022);
+      handlePlayState(true);
+      return;
     }
 
     if (audio.paused) {
-      if (soundSettings.fadeOnPlayPause) {
-        audioEffects.setDeckGain(audio, 0.02, 0);
-      } else {
-        audioEffects.setDeckGain(audio, 1, 0);
-      }
+      audioEffects.setDeckGain(audio, 0.001, 0);
       audio
         .play()
         .then(() => {
-          if (soundSettings.fadeOnPlayPause) {
-            audioEffects.setDeckGain(audio, 1, 0.2);
-          }
+          audioEffects.setDeckGain(audio, 1, soundSettings.fadeOnPlayPause ? 0.2 : 0.022);
           handlePlayState(true);
         })
         .catch(console.error);
-    } else if (soundSettings.fadeOnPlayPause) {
-      audioEffects.setDeckGain(audio, 0, 0.17);
-      handlePlayState(false);
-      pauseFadeTimerRef.current = window.setTimeout(() => {
-        audio.pause();
-        audioEffects.setDeckGain(audio, 1, 0);
-        pauseFadeTimerRef.current = null;
-      }, 175);
     } else {
-      audio.pause();
-      audioEffects.setDeckGain(audio, 1, 0);
-      handlePlayState(false);
+      fadeOutAndPauseDeck(audio);
     }
-  }, [currentSong, getActiveAudio, handlePlayState, soundSettings.fadeOnPlayPause]);
+  }, [currentSong, fadeOutAndPauseDeck, getActiveAudio, handlePlayState, soundSettings.fadeOnPlayPause]);
 
   useEffect(() => {
     const handleExternalToggle = () => {
@@ -544,13 +569,20 @@ export const PlayerBar = ({
     if (!sleepTimer || sleepTimer.mode !== 'until') return;
     const remainingMs = Math.max(0, sleepTimer.endsAt - Date.now());
     const timer = window.setTimeout(() => {
-      getActiveAudio()?.pause();
-      getStandbyAudio()?.pause();
-      handlePlayState(false);
-      onClearSleepTimer?.();
+      const active = getActiveAudio();
+      const standby = getStandbyAudio();
+      if (standby && !standby.paused) {
+        audioEffects.setDeckGain(standby, 0, 0.026);
+        window.setTimeout(() => standby.pause(), 34);
+      } else {
+        standby?.pause();
+      }
+      fadeOutAndPauseDeck(active, () => {
+        onClearSleepTimer?.();
+      });
     }, remainingMs);
     return () => window.clearTimeout(timer);
-  }, [sleepTimer, getActiveAudio, getStandbyAudio, handlePlayState, onClearSleepTimer]);
+  }, [sleepTimer, fadeOutAndPauseDeck, getActiveAudio, getStandbyAudio, onClearSleepTimer]);
 
   const toggleRepeat = useCallback(() => {
     if (repeatMode === 'off') setRepeatMode('all');
@@ -641,10 +673,20 @@ export const PlayerBar = ({
   useEffect(() => {
     syncMediaSession(currentSong, isPlaying, {
       onPlay: () => {
-        getActiveAudio()?.play().catch(console.error);
+        const audio = getActiveAudio();
+        if (!audio) return;
+        audioEffects.resumeContext();
+        audioEffects.setDeckGain(audio, 0.001, 0);
+        audio
+          .play()
+          .then(() => {
+            audioEffects.setDeckGain(audio, 1, soundSettings.fadeOnPlayPause ? 0.18 : 0.022);
+            handlePlayState(true);
+          })
+          .catch(console.error);
       },
       onPause: () => {
-        getActiveAudio()?.pause();
+        fadeOutAndPauseDeck(getActiveAudio());
       },
       onNext: () => {
         playNextRef.current();
@@ -656,7 +698,7 @@ export const PlayerBar = ({
         handleSeekRef.current(time);
       },
     });
-  }, [currentSong, isPlaying, getActiveAudio]);
+  }, [currentSong, isPlaying, fadeOutAndPauseDeck, getActiveAudio, handlePlayState, soundSettings.fadeOnPlayPause]);
 
   const handleSongEnd = (deck: 'A' | 'B') => {
     if (deck !== activeDeckRef.current) return;
@@ -722,10 +764,17 @@ export const PlayerBar = ({
     if (!playNext()) handlePlayState(false);
   };
 
-  // بازیابی خودکار از IndexedDB در صورت منقضی‌شدن Blob URL و همگام‌سازی آدرس تازه در کل برنامه
+  // بازیابی خودکار از IndexedDB برای ترک‌های کپی‌شده، یا علامت‌گذاری فایل مفقود برای ترک‌های متصل به هارد
   const handleAudioError = async (deck: 'A' | 'B') => {
     if (deck !== activeDeckRef.current) return;
     const audio = getActiveAudio();
+    if (currentSong && currentSong.sourcePath) {
+      if (!currentSong.fileMissing) {
+        onUpdateSong?.({ ...currentSong, fileMissing: true });
+      }
+      handlePlayState(false);
+      return;
+    }
     if (currentSong && audio && retriedRecoveryRef.current !== currentSong.id) {
       retriedRecoveryRef.current = currentSong.id;
       const blob = await getAudioBlob(currentSong.id);
@@ -752,7 +801,6 @@ export const PlayerBar = ({
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  const progressPercent = duration ? (currentTime / duration) * 100 : 0;
   const volumePercent = effectiveVolume * 100;
 
   // # درخشش نوار پیشرفت (بر اساس پالت)
@@ -782,7 +830,7 @@ export const PlayerBar = ({
     <div
       style={{
         boxSizing: 'border-box',
-        height: isMobile ? '66px' : '90px',
+        height: isMobile ? '66px' : '92px',
         width: isDocked ? '100%' : isMobile ? '320px' : '90%',
         maxWidth: isDocked ? '100%' : isMobile ? 'calc(100% - 24px)' : '1000px',
         // # سطح شیشه‌ای نوار (پس‌زمینه، لبه، بلور و سایه) از تم می‌آید
@@ -791,17 +839,20 @@ export const PlayerBar = ({
         WebkitBackdropFilter: theme.glass.bar.backdropFilter || `blur(${theme.display?.playerBarBlur ?? theme.display?.glassBlur ?? 28}px) saturate(190%)`,
         borderRadius: isDocked ? '0px' : isMobile ? theme.radius.lg || '18px' : theme.radius.xl || '24px',
         margin: isDocked ? '0' : isMobile ? '0 auto 12px auto' : '0 auto 16px auto',
-        display: 'flex',
+        display: isMobile ? 'flex' : 'grid',
+        gridTemplateColumns: isMobile
+          ? undefined
+          : 'minmax(0, 1fr) minmax(280px, min(560px, 48%)) minmax(0, 1fr)',
         alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: isMobile ? '0 10px' : '10px 24px 8px 24px',
+        justifyContent: isMobile ? 'space-between' : undefined,
+        padding: isMobile ? '0 10px' : '0 24px',
         position: 'relative',
         color: songTitleColor,
         zIndex: 20,
         boxShadow: isDocked ? '0 -8px 28px rgba(0,0,0,0.22)' : theme.glass.bar.boxShadow,
         border: isDocked ? 'none' : theme.glass.bar.border,
         borderTop: isDocked ? theme.glass.bar.border : theme.glass.bar.border,
-        gap: isMobile ? '8px' : '0',
+        gap: isMobile ? '8px' : '14px',
       }}
     >
       <style>{BUTTON_CSS}</style>
@@ -832,8 +883,10 @@ export const PlayerBar = ({
           display: 'flex',
           alignItems: 'center',
           gap: isMobile ? '10px' : '12px',
-          width: isMobile ? 'auto' : '220px',
-          flex: isMobile ? 1 : 'none',
+          width: isMobile ? 'auto' : '100%',
+          maxWidth: isMobile ? undefined : '280px',
+          flex: isMobile ? 1 : undefined,
+          justifySelf: isMobile ? undefined : 'start',
           minWidth: 0,
           cursor: currentSong ? 'pointer' : 'default',
         }}
@@ -903,85 +956,39 @@ export const PlayerBar = ({
           flexDirection: isMobile ? 'row' : 'column',
           alignItems: 'center',
           justifyContent: 'center',
-          flex: isMobile ? 'none' : 1,
-          maxWidth: isMobile ? 'none' : '600px',
-          paddingTop: isMobile ? '0' : '4px',
+          width: isMobile ? 'auto' : '100%',
+          maxWidth: isMobile ? 'none' : '100%',
+          justifySelf: isMobile ? undefined : 'center',
+          paddingBottom: isMobile ? '0' : '4px',
         }}
       >
         {/* نوار پیشرفت فقط در دسکتاپ نمایش داده می‌شود */}
         {!isMobile && (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '10px',
-              width: '100%',
-              marginTop: '4px',
-              marginBottom: '10px',
-            }}
-            onMouseEnter={() => setIsHoveringProgress(true)}
-            onMouseLeave={() => setIsHoveringProgress(false)}
-          >
-            <span
-              style={{
-                fontSize: '0.625rem',
-                color: artistColor,
-                width: '30px',
-                textAlign: 'right',
-                fontVariantNumeric: 'tabular-nums',
-              }}
-            >
-              {formatTime(currentTime)}
-            </span>
-            <div style={{ flex: 1, position: 'relative', height: '16px', display: 'flex', alignItems: 'center' }}>
-              <div
-                style={{
-                  position: 'absolute',
-                  left: 0,
-                  right: 0,
-                  height: isHoveringProgress ? '6px' : '3px',
-                  backgroundColor: theme.isDark ? 'rgba(255, 255, 255, 0.18)' : 'rgba(0, 0, 0, 0.1)',
-                  backdropFilter: 'blur(10px)',
-                  borderRadius: '3px',
-                  transition: 'height 0.2s ease',
-                }}
-              >
-                <div
-                  style={{
-                    width: `${progressPercent}%`,
-                    height: '100%',
-                    backgroundColor: theme.colors.primary,
-                    borderRadius: '3px',
-                    boxShadow: glowColor,
-                  }}
-                ></div>
-              </div>
-              <input
-                type="range"
-                min={0}
-                max={duration || 0}
-                value={currentTime}
-                onChange={(e) => handleSeek(Number(e.target.value))}
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  width: '100%',
-                  height: '100%',
-                  opacity: 0,
-                  cursor: 'pointer',
-                  zIndex: 2,
-                }}
-              />
-            </div>
-            <span style={{ fontSize: '0.625rem', color: artistColor, width: '30px', fontVariantNumeric: 'tabular-nums' }}>
-              {formatTime(duration)}
-            </span>
+          <div style={{ width: '100%', marginTop: '0px', marginBottom: '4px' }}>
+            <ProgressScrubber
+              songKey={currentSong?.id || 'none'}
+              currentTime={currentTime}
+              duration={duration}
+              onSeek={handleSeek}
+              primaryColor={theme.colors.primary}
+              trackBgColor={theme.isDark ? 'rgba(255, 255, 255, 0.18)' : 'rgba(0, 0, 0, 0.1)'}
+              timeTextColor={artistColor}
+              glowColor={glowColor}
+              isDarkSurface={theme.isDark}
+              tooltipBgColor={withAlpha(
+                theme.colors.surfaceSolid || theme.colors.background,
+                theme.isDark ? 0.94 : 0.96
+              )}
+              tooltipTextColor={theme.colors.textPrimary}
+              tooltipBorderColor={theme.colors.border}
+              variant="bar"
+              seekStepSeconds={playbackPrefs.seekStepSeconds}
+            />
           </div>
         )}
 
         {/* دکمه‌های کنترل */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '2px' : '26px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '2px' : '24px' }}>
           {!isMobile && (
             <button
               className="pb-btn"
@@ -989,13 +996,13 @@ export const PlayerBar = ({
               title={`${isShuffle ? (t.shuffleOn || 'Shuffle On') : (t.shuffleOff || 'Shuffle Off')} (S)`}
               style={{
                 ...btnStyle,
-                width: '34px',
-                height: '34px',
+                width: '36px',
+                height: '36px',
                 position: 'relative',
                 color: isShuffle ? iconActiveColor : iconInactiveColor,
               }}
             >
-              <svg width="19" height="19" viewBox="0 0 16 16" fill="currentColor">
+              <svg width="21" height="21" viewBox="0 0 16 16" fill="currentColor">
                 <path
                   fillRule="evenodd"
                   d="M0 3.5A.5.5 0 0 1 .5 3H1c2.202 0 3.827 1.24 4.874 2.418.49.552.865 1.102 1.126 1.532.26-.43.636-.98 1.126-1.532C9.173 4.24 10.798 3 13 3v1c-1.798 0-3.173 1.01-4.126 2.082A9.6 9.6 0 0 0 7.556 8a9.6 9.6 0 0 0 1.317 1.918C9.828 10.99 11.204 12 13 12v1c-2.202 0-3.827-1.24-4.874-2.418A10.6 10.6 0 0 1 7 9.05c-.26.43-.636.98-1.126 1.532C4.827 11.76 3.202 13 1 13H.5a.5.5 0 0 1 0-1H1c1.798 0 3.173-1.01 4.126-2.082A9.6 9.6 0 0 0 6.444 8a9.6 9.6 0 0 0-1.317-1.918C4.172 5.01 2.796 4 1 4H.5a.5.5 0 0 1-.5-.5"
@@ -1006,7 +1013,7 @@ export const PlayerBar = ({
                 <span
                   style={{
                     position: 'absolute',
-                    bottom: '1px',
+                    bottom: '0px',
                     width: '4px',
                     height: '4px',
                     borderRadius: '50%',
@@ -1027,12 +1034,12 @@ export const PlayerBar = ({
             title={t.previous || 'Previous'}
             style={{
               ...btnStyle,
-              width: isMobile ? '26px' : '38px',
-              height: isMobile ? '26px' : '38px',
+              width: isMobile ? '26px' : '42px',
+              height: isMobile ? '26px' : '42px',
               color: iconColor,
             }}
           >
-            <svg width={isMobile ? '17' : '24'} height={isMobile ? '17' : '24'} viewBox="0 0 16 16" fill="currentColor">
+            <svg width={isMobile ? '17' : '27'} height={isMobile ? '17' : '27'} viewBox="0 0 16 16" fill="currentColor">
               <path d="M8.404 7.304a.802.802 0 0 0 0 1.392l6.363 3.692c.52.302 1.233-.043 1.233-.696V4.308c0-.653-.713-.998-1.233-.696z" />
               <path d="M.404 7.304a.802.802 0 0 0 0 1.392l6.363 3.692c.52.302 1.233-.043 1.233-.696V4.308c0-.653-.713-.998-1.233-.696z" />
             </svg>
@@ -1047,20 +1054,20 @@ export const PlayerBar = ({
             title={isPlaying ? t.pause || 'Pause' : t.play || 'Play'}
             style={{
               ...btnStyle,
-              width: isMobile ? '32px' : '44px',
-              height: isMobile ? '32px' : '44px',
+              width: isMobile ? '32px' : '48px',
+              height: isMobile ? '32px' : '48px',
               color: iconColor,
               flexShrink: 0,
             }}
           >
             {isPlaying ? (
-              <svg width={isMobile ? '22' : '34'} height={isMobile ? '22' : '34'} viewBox="0 0 16 16" fill="currentColor">
+              <svg width={isMobile ? '22' : '38'} height={isMobile ? '22' : '38'} viewBox="0 0 16 16" fill="currentColor">
                 <path d="M5.5 3.5A1.5 1.5 0 0 1 7 5v6a1.5 1.5 0 0 1-3 0V5a1.5 1.5 0 0 1 1.5-1.5m5 0A1.5 1.5 0 0 1 12 5v6a1.5 1.5 0 0 1-3 0V5a1.5 1.5 0 0 1 1.5-1.5" />
               </svg>
             ) : (
               <svg
-                width={isMobile ? '22' : '34'}
-                height={isMobile ? '22' : '34'}
+                width={isMobile ? '22' : '38'}
+                height={isMobile ? '22' : '38'}
                 viewBox="0 0 16 16"
                 fill="currentColor"
                 style={{ transform: 'translateX(1.5px)' }}
@@ -1079,12 +1086,12 @@ export const PlayerBar = ({
             title={t.next || 'Next'}
             style={{
               ...btnStyle,
-              width: isMobile ? '26px' : '38px',
-              height: isMobile ? '26px' : '38px',
+              width: isMobile ? '26px' : '42px',
+              height: isMobile ? '26px' : '42px',
               color: iconColor,
             }}
           >
-            <svg width={isMobile ? '17' : '24'} height={isMobile ? '17' : '24'} viewBox="0 0 16 16" fill="currentColor">
+            <svg width={isMobile ? '17' : '27'} height={isMobile ? '17' : '27'} viewBox="0 0 16 16" fill="currentColor">
               <path d="M7.596 7.304a.802.802 0 0 1 0 1.392l-6.363 3.692C.713 12.69 0 12.345 0 11.692V4.308c0-.653.713-.998 1.233-.696z" />
               <path d="M15.596 7.304a.802.802 0 0 1 0 1.392l-6.363 3.692C8.713 12.69 8 12.345 8 11.692V4.308c0-.653.713-.998 1.233-.696z" />
             </svg>
@@ -1103,19 +1110,19 @@ export const PlayerBar = ({
               } (R)`}
               style={{
                 ...btnStyle,
-                width: '34px',
-                height: '34px',
+                width: '36px',
+                height: '36px',
                 position: 'relative',
                 color: repeatMode !== 'off' ? iconActiveColor : iconInactiveColor,
               }}
             >
               {repeatMode === 'one' ? (
-                <svg width="19" height="19" viewBox="0 0 16 16" fill="currentColor">
+                <svg width="21" height="21" viewBox="0 0 16 16" fill="currentColor">
                   <path d="M11 4v1.466a.25.25 0 0 0 .41.192l2.36-1.966a.25.25 0 0 0 0-.384l-2.36-1.966a.25.25 0 0 0-.41.192V3H5a5 5 0 0 0-4.48 7.223.5.5 0 0 0 .896-.446A4 4 0 0 1 5 4zm4.48 1.777a.5.5 0 0 0-.896.446A4 4 0 0 1 11 12H5.001v-1.466a.25.25 0 0 0-.41-.192l-2.36 1.966a.25.25 0 0 0 0 .384l2.36 1.966a.25.25 0 0 0 .41-.192V13h6a5 5 0 0 0 4.48-7.223Z" />
                   <path d="M9 5.5a.5.5 0 0 0-.854-.354l-1.75 1.75a.5.5 0 1 0 .708.708L8 6.707V10.5a.5.5 0 0 0 1 0z" />
                 </svg>
               ) : (
-                <svg width="19" height="19" viewBox="0 0 16 16" fill="currentColor">
+                <svg width="21" height="21" viewBox="0 0 16 16" fill="currentColor">
                   <path d="M11 5.466V4H5a4 4 0 0 0-3.584 5.777.5.5 0 1 1-.896.446A5 5 0 0 1 5 3h6V1.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384l-2.36 1.966a.25.25 0 0 1-.41-.192m3.81.086a.5.5 0 0 1 .67.225A5 5 0 0 1 11 13H5v1.466a.25.25 0 0 1-.41.192l-2.36-1.966a.25.25 0 0 1 0-.384l2.36-1.966a.25.25 0 0 1 .41.192V12h6a4 4 0 0 0 3.585-5.777.5.5 0 0 1 .225-.67Z" />
                 </svg>
               )}
@@ -1123,7 +1130,7 @@ export const PlayerBar = ({
                 <span
                   style={{
                     position: 'absolute',
-                    bottom: '1px',
+                    bottom: '0px',
                     width: '4px',
                     height: '4px',
                     borderRadius: '50%',
@@ -1139,7 +1146,17 @@ export const PlayerBar = ({
 
       {/* # کنترل صدا، علاقه‌مندی و صف فقط در دسکتاپ */}
       {!isMobile && (
-        <div style={{ minWidth: '220px', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '6px' }}>
+        <div
+          style={{
+            minWidth: 0,
+            width: '100%',
+            justifySelf: 'end',
+            display: 'flex',
+            justifyContent: 'flex-end',
+            alignItems: 'center',
+            gap: '6px',
+          }}
+        >
           <div
             style={{ position: 'relative', display: 'flex', alignItems: 'center', height: '34px' }}
             onMouseEnter={() => setIsHoveringVolume(true)}
@@ -1299,6 +1316,8 @@ export const PlayerBar = ({
               color: showQueue ? iconActiveColor : iconInactiveColor,
               backgroundColor: 'transparent',
               gap: '6px',
+              whiteSpace: 'nowrap',
+              flexShrink: 0,
             }}
           >
             <svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor">
@@ -1372,9 +1391,14 @@ export const PlayerBar = ({
         onPlayQueueSong={onPlayQueueSong}
         onClearQueue={onClearQueue}
         onShuffleQueue={onShuffleQueue}
+        playlists={playlists}
+        onAddSongToPlaylist={onAddSongToPlaylist}
         onCreatePlaylist={onCreatePlaylist}
         onToggleFavorite={onToggleFavorite}
         onUpdateSong={onUpdateSong}
+        onDeleteSong={onDeleteSong}
+        onOpenSettings={onOpenSettings}
+        confirmBeforeDelete={playbackPrefs.confirmBeforeDelete}
         liveVisualizer={soundSettings.liveVisualizer}
         artworkStyle={displaySettings.artworkStyle}
         visualizerStyle={displaySettings.visualizerStyle}

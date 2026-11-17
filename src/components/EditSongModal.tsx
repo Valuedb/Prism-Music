@@ -325,7 +325,7 @@ export const EditSongModal: React.FC<EditSongModalProps> = ({
               </div>
 
               <div>
-                <label style={labelStyle(theme)}>{t.folder || 'فولدر'}</label>
+                <label style={labelStyle(theme)}>{t.folder || 'پوشه'}</label>
                 <input
                   type="text"
                   placeholder={t.folderPlaceholder || 'مثال: راک / منتخب'}

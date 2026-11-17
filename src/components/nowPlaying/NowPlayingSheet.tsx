@@ -33,7 +33,7 @@ interface NowPlayingSheetProps {
 }
 
 /**
- * صفحه تمام‌صفحه و مدال بازشونده پخش موسیقی مشابه طراحی اختصاصی Apple Music در iOS
+ * صفحه تمام‌صفحه و مدال بازشونده پخش موسیقی با طراحی اختصاصی Prism Music
  */
 export const NowPlayingSheet = memo(({
   isOpen,

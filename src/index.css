@@ -143,11 +143,40 @@ code {
   animation: miniEq3 0.8s ease-in-out infinite 0.3s;
 }
 
+/* نشانگر بارگذاری شعاعی ۱۲ پره با انیمیشن سبک روی GPU */
+@keyframes activityIndicatorFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes activitySpokeFade {
+  0% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0.14;
+  }
+}
+
+.activity-indicator-fade-in {
+  animation: activityIndicatorFadeIn 0.12s ease-out both;
+}
+
+.activity-spoke {
+  animation: activitySpokeFade 0.84s linear infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .vinyl-spin,
   .mini-eq-1,
   .mini-eq-2,
-  .mini-eq-3 {
+  .mini-eq-3,
+  .activity-indicator-fade-in,
+  .activity-spoke {
     animation: none !important;
   }
 }

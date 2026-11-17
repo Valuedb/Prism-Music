@@ -103,6 +103,7 @@ export const AllSongs = ({
   const [hoveredMenuId, setHoveredMenuId] = useState<string | null>(
     null
   );
+  const [hoveredDropdownItem, setHoveredDropdownItem] = useState<string | null>(null);
 
   // استیت‌های مودال
   const [editingSong, setEditingSong] = useState<Song | null>(null);
@@ -121,6 +122,10 @@ export const AllSongs = ({
     typeof window !== 'undefined' ? window.innerWidth < 768 : false
   );
   const [isBulkMenuOpen, setIsBulkMenuOpen] = useState(false);
+
+  useEffect(() => {
+    setHoveredDropdownItem(null);
+  }, [activeMenuId, isSortMenuOpen, isBulkMenuOpen]);
 
   // رفرنس‌ها
   const sortMenuRef = useRef<HTMLDivElement>(null);
@@ -415,9 +420,6 @@ export const AllSongs = ({
     [activeMenuId, filteredAndSortedSongs]
   );
 
-  const menuHoverBg = theme.isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.07)';
-  const dangerHoverBg = withAlpha(theme.colors.danger || '#ff453a', 0.15);
-
   // ================= رندر =================
   return (
     <div ref={pageRef} style={styles.container}>
@@ -630,9 +632,9 @@ export const AllSongs = ({
                       setIsBulkMenuOpen(false);
                       handlePlaySelected();
                     }}
-                    style={menuItemStyle(theme)}
-                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = menuHoverBg)}
-                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                    style={menuItemStyle(theme, false, hoveredDropdownItem === 'bulk-play')}
+                    onMouseEnter={() => setHoveredDropdownItem('bulk-play')}
+                    onMouseLeave={() => setHoveredDropdownItem(null)}
                   >
                     <Play size={15} />
                     <span>{t.play || 'پخش'}</span>
@@ -643,9 +645,9 @@ export const AllSongs = ({
                       setIsBulkMenuOpen(false);
                       handleOpenPlaylistModal();
                     }}
-                    style={menuItemStyle(theme)}
-                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = menuHoverBg)}
-                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                    style={menuItemStyle(theme, false, hoveredDropdownItem === 'bulk-playlist')}
+                    onMouseEnter={() => setHoveredDropdownItem('bulk-playlist')}
+                    onMouseLeave={() => setHoveredDropdownItem(null)}
                   >
                     <FolderPlus size={15} />
                     <span>{t.addToPlaylist || 'افزودن به لیست'}</span>
@@ -656,9 +658,9 @@ export const AllSongs = ({
                       setIsBulkMenuOpen(false);
                       handleBulkPlayNext();
                     }}
-                    style={menuItemStyle(theme)}
-                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = menuHoverBg)}
-                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                    style={menuItemStyle(theme, false, hoveredDropdownItem === 'bulk-next')}
+                    onMouseEnter={() => setHoveredDropdownItem('bulk-next')}
+                    onMouseLeave={() => setHoveredDropdownItem(null)}
                   >
                     <SkipForward size={15} />
                     <span>{t.playNext || 'پخش بعدی'}</span>
@@ -670,11 +672,11 @@ export const AllSongs = ({
                       handleBulkDelete();
                     }}
                     style={{
-                      ...menuItemStyle(theme),
+                      ...menuItemStyle(theme, false, hoveredDropdownItem === 'bulk-delete', true),
                       color: theme.colors.danger || '#ff453a',
                     }}
-                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = dangerHoverBg)}
-                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                    onMouseEnter={() => setHoveredDropdownItem('bulk-delete')}
+                    onMouseLeave={() => setHoveredDropdownItem(null)}
                   >
                     <Trash2 size={15} />
                     <span>{deleteActionLabel || t.deleteSong}</span>
@@ -711,6 +713,7 @@ export const AllSongs = ({
                 <div style={styles.dropdown(theme, '160px')}>
                   {['date', 'name', 'artist'].map((type) => {
                     const isActive = sortBy === type;
+                    const itemKey = `sort-${type}`;
                     return (
                       <button
                         type="button"
@@ -719,17 +722,9 @@ export const AllSongs = ({
                           setSortBy(type as any);
                           setIsSortMenuOpen(false);
                         }}
-                        style={menuItemStyle(theme, isActive)}
-                        onMouseEnter={(e) => {
-                          if (!isActive) {
-                            e.currentTarget.style.backgroundColor = menuHoverBg;
-                          }
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.backgroundColor = isActive
-                            ? withAlpha(theme.colors.primary, 0.16)
-                            : 'transparent';
-                        }}
+                        style={menuItemStyle(theme, isActive, hoveredDropdownItem === itemKey)}
+                        onMouseEnter={() => setHoveredDropdownItem(itemKey)}
+                        onMouseLeave={() => setHoveredDropdownItem(null)}
                       >
                         {type === 'date'
                           ? t.sortDate
@@ -817,6 +812,8 @@ export const AllSongs = ({
                       inset: 0,
                       borderRadius: theme.radius?.lg || '16px',
                       overflow: 'hidden',
+                      contain: 'strict',
+                      transform: 'translateZ(0)',
                       zIndex: 0,
                       pointerEvents: 'none',
                     }}
@@ -826,13 +823,12 @@ export const AllSongs = ({
                       alt=""
                       style={{
                         position: 'absolute',
-                        inset: '-16px',
-                        width: 'calc(100% + 32px)',
-                        height: 'calc(100% + 32px)',
+                        inset: '-30px',
+                        width: 'calc(100% + 60px)',
+                        height: 'calc(100% + 60px)',
                         objectFit: 'cover',
                         objectPosition: 'center',
                         filter: 'blur(26px) saturate(165%)',
-                        transform: 'scale(1.12)',
                         opacity: theme.isDark ? 0.34 : 0.22,
                       }}
                     />
@@ -1089,6 +1085,7 @@ export const AllSongs = ({
             }}
           >
             <button
+              type="button"
               onClick={(e) => {
                 e.stopPropagation();
                 setIsSelectMode(true);
@@ -1097,52 +1094,43 @@ export const AllSongs = ({
                 );
                 setActiveMenuId(null);
               }}
-              style={menuItemStyle(theme)}
-              onMouseEnter={(e) =>
-                (e.currentTarget.style.backgroundColor = menuHoverBg)
-              }
-              onMouseLeave={(e) =>
-                (e.currentTarget.style.backgroundColor = 'transparent')
-              }
+              style={menuItemStyle(theme, false, hoveredDropdownItem === 'song-select')}
+              onMouseEnter={() => setHoveredDropdownItem('song-select')}
+              onMouseLeave={() => setHoveredDropdownItem(null)}
             >
               <CheckSquare size={16} />{' '}
               {t.select || 'انتخاب'}
             </button>
             <button
+              type="button"
               onClick={(e) => {
                 e.stopPropagation();
                 setInfoSong(activeMenuSong);
                 setIsInfoModalOpen(true);
                 setActiveMenuId(null);
               }}
-              style={menuItemStyle(theme)}
-              onMouseEnter={(e) =>
-                (e.currentTarget.style.backgroundColor = menuHoverBg)
-              }
-              onMouseLeave={(e) =>
-                (e.currentTarget.style.backgroundColor = 'transparent')
-              }
+              style={menuItemStyle(theme, false, hoveredDropdownItem === 'song-info')}
+              onMouseEnter={() => setHoveredDropdownItem('song-info')}
+              onMouseLeave={() => setHoveredDropdownItem(null)}
             >
               <Info size={16} />{' '}
               {t.songInfo || 'اطلاعات آهنگ'}
             </button>
             <button
+              type="button"
               onClick={(e) => {
                 e.stopPropagation();
                 handleOpenPlaylistModal(activeMenuSong.id);
               }}
-              style={menuItemStyle(theme)}
-              onMouseEnter={(e) =>
-                (e.currentTarget.style.backgroundColor = menuHoverBg)
-              }
-              onMouseLeave={(e) =>
-                (e.currentTarget.style.backgroundColor = 'transparent')
-              }
+              style={menuItemStyle(theme, false, hoveredDropdownItem === 'song-playlist')}
+              onMouseEnter={() => setHoveredDropdownItem('song-playlist')}
+              onMouseLeave={() => setHoveredDropdownItem(null)}
             >
               <FolderPlus size={16} />{' '}
               {t.addToPlaylist || 'Add to Playlist'}
             </button>
             <button
+              type="button"
               onClick={(e) => {
                 e.stopPropagation();
                 if (onPlayNext) {
@@ -1152,31 +1140,24 @@ export const AllSongs = ({
                 }
                 setActiveMenuId(null);
               }}
-              style={menuItemStyle(theme)}
-              onMouseEnter={(e) =>
-                (e.currentTarget.style.backgroundColor = menuHoverBg)
-              }
-              onMouseLeave={(e) =>
-                (e.currentTarget.style.backgroundColor = 'transparent')
-              }
+              style={menuItemStyle(theme, false, hoveredDropdownItem === 'song-next')}
+              onMouseEnter={() => setHoveredDropdownItem('song-next')}
+              onMouseLeave={() => setHoveredDropdownItem(null)}
             >
               <SkipForward size={16} />{' '}
               {t.playNext || 'پخش بعدی'}
             </button>
             {onToggleFavorite && (
               <button
+                type="button"
                 onClick={(e) => {
                   e.stopPropagation();
                   onToggleFavorite(activeMenuSong.id);
                   setActiveMenuId(null);
                 }}
-                style={menuItemStyle(theme)}
-                onMouseEnter={(e) =>
-                  (e.currentTarget.style.backgroundColor = menuHoverBg)
-                }
-                onMouseLeave={(e) =>
-                  (e.currentTarget.style.backgroundColor = 'transparent')
-                }
+                style={menuItemStyle(theme, false, hoveredDropdownItem === 'song-fav')}
+                onMouseEnter={() => setHoveredDropdownItem('song-fav')}
+                onMouseLeave={() => setHoveredDropdownItem(null)}
               >
                 <Heart
                   size={16}
@@ -1193,17 +1174,14 @@ export const AllSongs = ({
               </button>
             )}
             <button
+              type="button"
               onClick={(e) => handleDelete(e, activeMenuSong.id)}
               style={{
-                ...menuItemStyle(theme),
+                ...menuItemStyle(theme, false, hoveredDropdownItem === 'song-delete', true),
                 color: theme.colors.danger,
               }}
-              onMouseEnter={(e) =>
-                (e.currentTarget.style.backgroundColor = dangerHoverBg)
-              }
-              onMouseLeave={(e) =>
-                (e.currentTarget.style.backgroundColor = 'transparent')
-              }
+              onMouseEnter={() => setHoveredDropdownItem('song-delete')}
+              onMouseLeave={() => setHoveredDropdownItem(null)}
             >
               <Trash2 size={16} />{' '}
               {deleteActionLabel || t.deleteSong}
@@ -1358,14 +1336,25 @@ export const AllSongs = ({
 /** استایل آیتم‌های منو */
 const menuItemStyle = (
   theme: any,
-  active: boolean = false
+  active: boolean = false,
+  hovered: boolean = false,
+  danger: boolean = false
 ) => ({
   width: '100%',
   padding: '9px 12px',
   borderRadius: '8px',
   textAlign: 'start' as const,
   border: 'none',
-  backgroundColor: active ? withAlpha(theme.colors.primary, 0.16) : 'transparent',
+  outline: 'none',
+  backgroundColor: active
+    ? withAlpha(theme.colors.primary, 0.16)
+    : hovered
+    ? danger
+      ? 'rgba(255, 69, 58, 0.15)'
+      : theme.isDark
+      ? 'rgba(255, 255, 255, 0.12)'
+      : 'rgba(0, 0, 0, 0.07)'
+    : 'transparent',
   color: active
     ? theme.colors.primary
     : theme.colors.textPrimary,
@@ -1374,7 +1363,7 @@ const menuItemStyle = (
   gap: '9px',
   fontSize: '0.8125rem',
   fontWeight: active ? 600 : 500,
-  transition: 'background-color 0.12s ease, scale 0.2s cubic-bezier(0.22, 1, 0.36, 1)',
+  transition: 'background-color 0.12s ease',
   cursor: 'pointer',
 });
 
@@ -1431,15 +1420,17 @@ const styles = {
     top: 'calc(100% + 6px)',
     insetInlineEnd: 0,
     padding: '5px',
-    backgroundColor: withAlpha(theme.colors.surfaceSolid, 0.96),
-    backdropFilter: 'blur(24px) saturate(180%)',
-    WebkitBackdropFilter: 'blur(24px) saturate(180%)',
+    backgroundColor: theme.colors.surfaceSolid || (theme.isDark ? '#18181c' : '#ffffff'),
     borderRadius: theme.radius.md,
     border: `1px solid ${theme.colors.border}`,
     boxShadow: '0 16px 36px rgba(0, 0, 0, 0.42)',
     zIndex: 50,
     minWidth,
     overflow: 'hidden',
+    isolation: 'isolate' as const,
+    transform: 'translate3d(0, 0, 0)',
+    backfaceVisibility: 'hidden' as const,
+    contain: 'layout paint' as const,
   }),
   songRow: (
     theme: any,
@@ -1503,7 +1494,7 @@ const styles = {
         : (theme.isDark
             ? '0 2px 10px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255,255,255,0.06)'
             : '0 2px 10px rgba(0, 0, 0, 0.04), inset 0 1px 0 rgba(255,255,255,0.65)'),
-      zIndex: isMenuOpen ? 100 : isHovered ? 2 : 1,
+      zIndex: isMenuOpen ? 100 : 1,
     };
   },
   checkbox: (theme: any, isSelected: boolean) => ({
@@ -1595,9 +1586,7 @@ const styles = {
   songMenu: (theme: any) => ({
     position: 'fixed' as const,
     padding: '5px',
-    backgroundColor: withAlpha(theme.colors.surfaceSolid, 0.96),
-    backdropFilter: 'blur(26px) saturate(180%)',
-    WebkitBackdropFilter: 'blur(26px) saturate(180%)',
+    backgroundColor: theme.colors.surfaceSolid || (theme.isDark ? '#18181c' : '#ffffff'),
     borderRadius: theme.radius.md,
     border: `1px solid ${theme.colors.border}`,
     boxShadow: theme.shadows.hard,
@@ -1608,6 +1597,10 @@ const styles = {
     overflowY: 'auto' as const,
     overflowX: 'hidden' as const,
     fontFamily: theme.fonts?.main,
+    isolation: 'isolate' as const,
+    transform: 'translate3d(0, 0, 0)',
+    backfaceVisibility: 'hidden' as const,
+    contain: 'layout paint' as const,
   }),
   modalOverlay: {
     position: 'fixed' as const,

@@ -1,2 +1,2 @@
-# Music Project
-App
+# Prism Music
+Standalone Desktop Music Player

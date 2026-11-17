@@ -527,7 +527,7 @@ export const IOSConfirmDialog: React.FC<IOSConfirmDialogProps> = ({
           style={{
             position: 'fixed',
             inset: 0,
-            zIndex: 10020,
+            zIndex: 10000010,
             backgroundColor: isDark ? 'rgba(0, 0, 0, 0.65)' : 'rgba(15, 23, 42, 0.36)',
             backdropFilter: 'blur(12px)',
             WebkitBackdropFilter: 'blur(12px)',

@@ -1,4 +1,5 @@
-import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { isRTLString } from '../utils/bidi';
 
 interface MarqueeTextProps {
   text: string;
@@ -8,11 +9,11 @@ interface MarqueeTextProps {
   pauseAtEdgeMs?: number;
 }
 
-const RTL_CHAR_REGEX = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\u0590-\u05FF]/;
-
 /**
  * نمایشگر هوشمند متن چرخشی (مشابه زیرنویس شبکه‌های خبری):
- * - اگر متن جا بشود کاملاً ثابت و بدون افکت رندر می‌شود.
+ * - تراز افقی متن از کانتینر والد (راست در فارسی / چپ در انگلیسی یا مرکز) پیروی می‌کند تا عنوان انگلیسی
+ *   در رابط فارسی به سمت مقابل صفحه نپرد.
+ * - اگر متن جا بشود کاملاً ثابت و بدون افکت رندر می‌شود و در صورت نیاز از انتهای واقعی خود برش می‌خورد.
  * - اگر متن طولانی‌تر از کادر باشد، پیوسته و نرم با GPU (translate3d) می‌چرخد.
  */
 export const MarqueeText: React.FC<MarqueeTextProps> = ({
@@ -24,13 +25,35 @@ export const MarqueeText: React.FC<MarqueeTextProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const measureRef = useRef<HTMLSpanElement>(null);
+  const [parentIsRTL, setParentIsRTL] = useState(false);
+  const [parentTextAlign, setParentTextAlign] = useState<string>('');
   const [overflowState, setOverflowState] = useState<{
     isOverflowing: boolean;
     shiftPx: number;
   }>({ isOverflowing: false, shiftPx: 0 });
 
   const uniqueId = useId().replace(/:/g, '');
-  const isRTLText = useMemo(() => RTL_CHAR_REGEX.test(text), [text]);
+  const isRTLText = useMemo(() => isRTLString(text), [text]);
+
+  useLayoutEffect(() => {
+    const syncDirection = () => {
+      const parent = containerRef.current?.parentElement;
+      if (!parent) return;
+      const computed = window.getComputedStyle(parent);
+      const nextIsRTL = computed.direction === 'rtl';
+      const nextTextAlign = computed.textAlign || '';
+      setParentIsRTL((prev) => (prev === nextIsRTL ? prev : nextIsRTL));
+      setParentTextAlign((prev) => (prev === nextTextAlign ? prev : nextTextAlign));
+    };
+
+    syncDirection();
+    const dirAncestor = containerRef.current?.closest('[dir]');
+    if (!dirAncestor || typeof MutationObserver === 'undefined') return;
+
+    const observer = new MutationObserver(syncDirection);
+    observer.observe(dirAncestor, { attributes: true, attributeFilter: ['dir', 'style'] });
+    return () => observer.disconnect();
+  }, [text]);
 
   useEffect(() => {
     const checkOverflow = () => {
@@ -75,11 +98,14 @@ export const MarqueeText: React.FC<MarqueeTextProps> = ({
   const pausePercent = Math.min(28, Math.round((pauseSeconds / totalDuration) * 100));
   const animName = `mq_${uniqueId}`;
   const targetTranslate = isRTLText ? shiftPx : -shiftPx;
+  const resolvedTextAlign =
+    style?.textAlign ||
+    (parentTextAlign === 'center' ? 'center' : parentIsRTL ? 'right' : 'left');
 
   return (
     <div
       ref={containerRef}
-      dir={isRTLText ? 'rtl' : 'ltr'}
+      dir={isOverflowing ? (isRTLText ? 'rtl' : 'ltr') : undefined}
       style={{
         position: 'relative',
         overflow: 'hidden',
@@ -92,6 +118,7 @@ export const MarqueeText: React.FC<MarqueeTextProps> = ({
           ? 'linear-gradient(90deg, transparent 0%, #000 7%, #000 93%, transparent 100%)'
           : undefined,
         ...style,
+        textAlign: resolvedTextAlign,
       }}
     >
       {/* عنصر مخفی برای اندازه‌گیری دقیق عرض واقعی متن */}
@@ -144,11 +171,15 @@ export const MarqueeText: React.FC<MarqueeTextProps> = ({
         </>
       ) : (
         <span
+          dir={isRTLText ? 'rtl' : 'ltr'}
           style={{
             display: 'block',
+            width: '100%',
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
+            unicodeBidi: 'plaintext',
+            textAlign: resolvedTextAlign,
           }}
         >
           {text}

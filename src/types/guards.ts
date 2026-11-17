@@ -26,6 +26,16 @@ export const isPlaylist = (value: unknown): value is Playlist =>
 export const isPlaylistList = (value: unknown): value is Playlist[] =>
   Array.isArray(value) && value.every(isPlaylist);
 
+export const isLinkedFolder = (value: unknown): value is import('./index').LinkedFolder =>
+  isRecord(value) &&
+  typeof value.id === 'string' &&
+  typeof value.path === 'string' &&
+  typeof value.name === 'string' &&
+  typeof value.addedAt === 'number';
+
+export const isLinkedFolderList = (value: unknown): value is import('./index').LinkedFolder[] =>
+  Array.isArray(value) && value.every(isLinkedFolder);
+
 export const isEqualizerSettings = (value: unknown): value is import('./index').EqualizerSettings =>
   isRecord(value) &&
   typeof value.enabled === 'boolean' &&
@@ -92,7 +102,12 @@ export const isDisplaySettings = (value: unknown): value is import('./index').Di
   (value.homeLayout === undefined ||
     value.homeLayout === 'wide' ||
     value.homeLayout === 'widget') &&
+  (value.navigationLayout === undefined ||
+    value.navigationLayout === 'top' ||
+    value.navigationLayout === 'sidebar') &&
   typeof value.reduceMotion === 'boolean';
+
+const STARTUP_TABS = new Set(['home', 'allSongs', 'playlists', 'artists', 'albums', 'folders']);
 
 export const isPlaybackPreferences = (
   value: unknown
@@ -102,4 +117,6 @@ export const isPlaybackPreferences = (
   typeof value.rememberPlaybackPosition === 'boolean' &&
   typeof value.confirmBeforeDelete === 'boolean' &&
   typeof value.skipDuplicatesOnImport === 'boolean' &&
-  (value.seekStepSeconds === 5 || value.seekStepSeconds === 10 || value.seekStepSeconds === 15);
+  (value.seekStepSeconds === 5 || value.seekStepSeconds === 10 || value.seekStepSeconds === 15) &&
+  (value.defaultTab === undefined ||
+    (typeof value.defaultTab === 'string' && STARTUP_TABS.has(value.defaultTab)));

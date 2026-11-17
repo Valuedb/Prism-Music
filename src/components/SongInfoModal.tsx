@@ -13,10 +13,15 @@ import {
   BarChart2,
   CalendarPlus,
   Heart,
+  HardDrive,
+  Copy,
+  Check,
+  FolderOpen,
 } from 'lucide-react';
 import type { Song } from '../types';
 import { CoverImage } from './CoverImage';
 import { withAlpha } from '../utils/color';
+import { isDesktopRuntime } from '../utils/desktopBridge';
 
 interface SongInfoModalProps {
   isOpen: boolean;
@@ -42,6 +47,12 @@ export const SongInfoModal: React.FC<SongInfoModalProps> = ({
   theme,
   t,
 }) => {
+  const [copiedPath, setCopiedPath] = React.useState(false);
+
+  useEffect(() => {
+    setCopiedPath(false);
+  }, [song?.id, isOpen]);
+
   useEffect(() => {
     if (!isOpen) return;
     const onKeyDown = (e: KeyboardEvent) => {
@@ -67,16 +78,56 @@ export const SongInfoModal: React.FC<SongInfoModalProps> = ({
       })
     : '—';
 
-  const infoRows = song
+  const handleCopyPath = () => {
+    if (!song?.sourcePath || !navigator.clipboard?.writeText) return;
+    navigator.clipboard.writeText(song.sourcePath).catch(() => {});
+    setCopiedPath(true);
+    window.setTimeout(() => setCopiedPath(false), 1800);
+  };
+
+  const handleShowInFolder = () => {
+    if (!song?.sourcePath || !window.desktopRuntime?.showItemInFolder) return;
+    void window.desktopRuntime.showItemInFolder(song.sourcePath);
+  };
+
+  const canRevealInFolder =
+    Boolean(song?.sourcePath) &&
+    !song?.fileMissing &&
+    isDesktopRuntime() &&
+    Boolean(window.desktopRuntime?.showItemInFolder);
+
+  const infoRows: Array<{
+    icon: React.ComponentType<{ size?: number; style?: React.CSSProperties }>;
+    label: string;
+    value: string;
+    tabular?: boolean;
+    isPath?: boolean;
+    isWarning?: boolean;
+  }> = song
     ? [
         { icon: Music, label: t.songName || 'نام آهنگ', value: song.name || '—' },
         { icon: User, label: t.artist || 'نام خواننده', value: song.artist || (t.unknownArtist || '—') },
         { icon: Disc, label: t.album || 'آلبوم', value: song.album?.trim() || t.unknownAlbum || '—' },
-        { icon: Folder, label: t.folder || 'فولدر', value: song.folder?.trim() || t.noFolder || '—' },
+        { icon: Folder, label: t.folder || 'پوشه', value: song.folder?.trim() || t.noFolder || '—' },
         { icon: Calendar, label: t.year || 'سال انتشار', value: song.year?.trim() || '—' },
         { icon: Clock, label: t.durationLabel || 'مدت زمان', value: formatDuration(song.duration), tabular: true },
         { icon: BarChart2, label: t.playCountLabel || 'تعداد پخش', value: String(song.playCount ?? 0), tabular: true },
         { icon: CalendarPlus, label: t.dateAddedLabel || 'تاریخ افزودن', value: formattedDate },
+        song.sourcePath
+          ? {
+              icon: HardDrive,
+              label: t.filePathLabel || 'مسیر فایل',
+              value: song.sourcePath,
+              isPath: true,
+              isWarning: Boolean(song.fileMissing),
+            }
+          : {
+              icon: HardDrive,
+              label: t.fileStorageSourceLabel || 'محل نگهداری',
+              value: song.fileUrl.startsWith('blob:')
+                ? t.storedInAppMemory || 'حافظه داخلی برنامه'
+                : t.builtInDemoTrack || 'فایل نمونه داخلی',
+            },
       ]
     : [];
 
@@ -136,7 +187,7 @@ export const SongInfoModal: React.FC<SongInfoModalProps> = ({
               color: textPrimary,
             }}
           >
-            {/* هدر مودال به سبک iOS */}
+            {/* هدر مودال اطلاعات آهنگ */}
             <div
               style={{
                 display: 'flex',
@@ -256,7 +307,7 @@ export const SongInfoModal: React.FC<SongInfoModalProps> = ({
               )}
             </div>
 
-            {/* جدول گروهی اطلاعات آهنگ مشابه iOS Settings / Music Info */}
+            {/* جدول گروهی اطلاعات آهنگ */}
             <div
               style={{
                 borderRadius: '18px',
@@ -272,7 +323,7 @@ export const SongInfoModal: React.FC<SongInfoModalProps> = ({
                     key={row.label}
                     style={{
                       display: 'flex',
-                      alignItems: 'center',
+                      alignItems: row.isPath ? 'flex-start' : 'center',
                       justifyContent: 'space-between',
                       gap: '12px',
                       padding: '11px 14px',
@@ -289,25 +340,111 @@ export const SongInfoModal: React.FC<SongInfoModalProps> = ({
                         fontSize: '0.8125rem',
                         fontWeight: 500,
                         flexShrink: 0,
+                        paddingTop: row.isPath ? '2px' : 0,
                       }}
                     >
-                      <Icon size={15} style={{ color: primaryColor, opacity: 0.9 }} />
+                      <Icon size={15} style={{ color: row.isWarning ? '#ff453a' : primaryColor, opacity: 0.9 }} />
                       <span>{row.label}</span>
                     </div>
-                    <div
-                      style={{
-                        fontSize: '0.8125rem',
-                        fontWeight: 600,
-                        color: textPrimary,
-                        textAlign: 'end',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                        fontVariantNumeric: row.tabular ? 'tabular-nums' : undefined,
-                      }}
-                    >
-                      {row.value}
-                    </div>
+                    {row.isPath ? (
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '8px',
+                          minWidth: 0,
+                          flex: 1,
+                          justifyContent: 'flex-end',
+                        }}
+                      >
+                        <div
+                          dir="ltr"
+                          title={row.value}
+                          style={{
+                            fontSize: '0.75rem',
+                            fontWeight: 500,
+                            color: row.isWarning ? '#ff453a' : textPrimary,
+                            textAlign: 'left',
+                            wordBreak: 'break-all',
+                            lineHeight: 1.45,
+                            unicodeBidi: 'plaintext',
+                          }}
+                        >
+                          {row.value}
+                          {row.isWarning && (
+                            <span
+                              style={{
+                                display: 'block',
+                                fontSize: '0.6875rem',
+                                color: '#ff453a',
+                                marginTop: '2px',
+                              }}
+                            >
+                              {t.fileMissingShort || 'فایل در مسیر پیدا نشد'}
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                          {canRevealInFolder && (
+                            <button
+                              type="button"
+                              onClick={handleShowInFolder}
+                              title={t.showInFolderTooltip || 'نمایش در پوشه سیستم'}
+                              aria-label={t.showInFolderTooltip || 'نمایش در پوشه سیستم'}
+                              style={{
+                                width: '28px',
+                                height: '28px',
+                                borderRadius: '8px',
+                                border: `1px solid ${borderColor}`,
+                                backgroundColor: withAlpha(textPrimary, theme.isDark ? 0.08 : 0.05),
+                                color: primaryColor,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                cursor: 'pointer',
+                              }}
+                            >
+                              <FolderOpen size={13} />
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={handleCopyPath}
+                            title={copiedPath ? (t.copiedPathMsg || 'مسیر کپی شد') : (t.copyPathTooltip || 'کپی مسیر فایل')}
+                            aria-label={t.copyPathTooltip || 'کپی مسیر فایل'}
+                            style={{
+                              width: '28px',
+                              height: '28px',
+                              borderRadius: '8px',
+                              border: `1px solid ${borderColor}`,
+                              backgroundColor: withAlpha(textPrimary, theme.isDark ? 0.08 : 0.05),
+                              color: copiedPath ? '#34c759' : textSecondary,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            {copiedPath ? <Check size={13} /> : <Copy size={13} />}
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div
+                        style={{
+                          fontSize: '0.8125rem',
+                          fontWeight: 600,
+                          color: textPrimary,
+                          textAlign: 'end',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                          fontVariantNumeric: row.tabular ? 'tabular-nums' : undefined,
+                        }}
+                      >
+                        {row.value}
+                      </div>
+                    )}
                   </div>
                 );
               })}

@@ -23,6 +23,7 @@ import {
 import type { Playlist, Song } from '../types';
 import { STORAGE_KEYS } from '../storage/keys';
 import { CoverImage } from './CoverImage';
+import { getBidiTruncateStyle } from '../utils/bidi';
 import { withAlpha } from '../utils/color';
 
 export interface SearchNavigateTarget {
@@ -44,6 +45,8 @@ interface SearchBarProps {
   onCreatePlaylist?: (name: string, songs: Song[]) => void;
   onNavigate?: (target: SearchNavigateTarget) => void;
   t?: any;
+  triggerVariant?: 'icon' | 'sidebar' | 'sidebar-collapsed';
+  triggerLabel?: string;
 }
 
 type SearchCategoryTab = 'all' | 'songs' | 'artists' | 'albums' | 'folders' | 'playlists';
@@ -85,7 +88,10 @@ export const SearchBar = ({
   onCreatePlaylist,
   onNavigate,
   t = {},
+  triggerVariant = 'icon',
+  triggerLabel,
 }: SearchBarProps) => {
+  const uiIsRTL = t?.direction === 'rtl' || t?.home === 'خانه';
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [activeTab, setActiveTab] = useState<SearchCategoryTab>('all');
@@ -260,7 +266,7 @@ export const SearchBar = ({
   };
 
   const singlesLabel = t.singlesAlbum || 'Singles';
-  const uncategorizedLabel = t.uncategorizedFolder || 'بدون فولدر';
+  const uncategorizedLabel = t.uncategorizedFolder || 'بدون پوشه';
   const unknownArtistLabel = t.unknownArtist || 'Unknown';
 
   // فیلتر بلادرنگ هوشمند در تمام بخش‌های کتابخانه (آهنگ‌ها، آرتیست‌ها، آلبوم‌ها، فولدرها و پلی‌لیست‌ها)
@@ -610,13 +616,13 @@ export const SearchBar = ({
     { id: 'songs', label: t.songsCategory || 'آهنگ‌ها', count: filteredSongs.length },
     {
       id: 'artists',
-      label: t.artistsCategory || t.artists || 'آرتیست‌ها',
+      label: t.artistsCategory || t.artists || 'خواننده‌ها',
       count: filteredArtists.length,
     },
     { id: 'albums', label: t.albumsCategory || t.albums || 'آلبوم‌ها', count: filteredAlbums.length },
     {
       id: 'folders',
-      label: t.foldersCategory || t.folders || 'فولدربندی‌ها',
+      label: t.foldersCategory || t.folders || 'پوشه‌بندی',
       count: filteredFolders.length,
     },
     {
@@ -628,36 +634,131 @@ export const SearchBar = ({
 
   return (
     <>
-      {/* دکمه باز کردن جستجو در TopBar */}
-      <motion.button
-        whileHover={{ scale: 1.05 }}
-        whileTap={{ scale: 0.94 }}
-        onClick={handleOpen}
-        aria-label={t.search || 'Search'}
-        title={`${t.search || 'Search'} (Ctrl+K)`}
-        style={{
-          background: 'none',
-          border: 'none',
-          padding: '8px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          cursor: 'pointer',
-          color: textMuted,
-          borderRadius: theme.radius?.md || '10px',
-          transition: 'background-color 0.15s ease, color 0.15s ease',
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.backgroundColor = hoverBg;
-          e.currentTarget.style.color = textColor;
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.backgroundColor = 'transparent';
-          e.currentTarget.style.color = textMuted;
-        }}
-      >
-        <Search size={22} />
-      </motion.button>
+      {triggerVariant === 'sidebar' ? (
+        <motion.button
+          type="button"
+          whileTap={{ scale: 0.985 }}
+          onClick={handleOpen}
+          aria-label={t.search || 'Search'}
+          title={`${t.search || 'Search'} (Ctrl+K)`}
+          style={{
+            width: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '8px',
+            padding: '8px 11px',
+            borderRadius: theme.radius?.md || '10px',
+            border: '1px solid transparent',
+            backgroundColor: isDark ? 'rgba(255, 255, 255, 0.045)' : 'rgba(0, 0, 0, 0.035)',
+            color: textMuted,
+            cursor: 'pointer',
+            fontSize: '0.8125rem',
+            fontWeight: 500,
+            transition: 'background-color 0.15s ease, color 0.15s ease',
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.backgroundColor = hoverBg;
+            e.currentTarget.style.color = textColor;
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.backgroundColor = isDark
+              ? 'rgba(255, 255, 255, 0.045)'
+              : 'rgba(0, 0, 0, 0.035)';
+            e.currentTarget.style.color = textMuted;
+          }}
+        >
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+            <Search size={16} style={{ flexShrink: 0 }} />
+            <span
+              style={{
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {triggerLabel || (uiIsRTL ? 'جستجو...' : 'Search...')}
+            </span>
+          </span>
+          <kbd
+            style={{
+              fontSize: '0.625rem',
+              padding: '2px 5px',
+              borderRadius: '5px',
+              backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)',
+              color: textMuted,
+              flexShrink: 0,
+              fontFamily: 'inherit',
+            }}
+          >
+            Ctrl+K
+          </kbd>
+        </motion.button>
+      ) : triggerVariant === 'sidebar-collapsed' ? (
+        <motion.button
+          type="button"
+          whileTap={{ scale: 0.96 }}
+          onClick={handleOpen}
+          aria-label={t.search || 'Search'}
+          title={`${t.search || 'Search'} (Ctrl+K)`}
+          style={{
+            width: '100%',
+            minHeight: '40px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 0,
+            borderRadius: theme.radius?.md || '10px',
+            border: '1px solid transparent',
+            backgroundColor: isDark ? 'rgba(255, 255, 255, 0.045)' : 'rgba(0, 0, 0, 0.035)',
+            color: textMuted,
+            cursor: 'pointer',
+            transition: 'background-color 0.15s ease, color 0.15s ease',
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.backgroundColor = hoverBg;
+            e.currentTarget.style.color = textColor;
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.backgroundColor = isDark
+              ? 'rgba(255, 255, 255, 0.045)'
+              : 'rgba(0, 0, 0, 0.035)';
+            e.currentTarget.style.color = textMuted;
+          }}
+        >
+          <Search size={18} />
+        </motion.button>
+      ) : (
+        <motion.button
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.94 }}
+          onClick={handleOpen}
+          aria-label={t.search || 'Search'}
+          title={`${t.search || 'Search'} (Ctrl+K)`}
+          style={{
+            background: 'none',
+            border: 'none',
+            padding: '8px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            color: textMuted,
+            borderRadius: theme.radius?.md || '10px',
+            transition: 'background-color 0.15s ease, color 0.15s ease',
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.backgroundColor = hoverBg;
+            e.currentTarget.style.color = textColor;
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.backgroundColor = 'transparent';
+            e.currentTarget.style.color = textMuted;
+          }}
+        >
+          <Search size={22} />
+        </motion.button>
+      )}
 
       {/* مودال هوشمند جستجو با پورتال مستقیم به بدنه صفحه */}
       {typeof document !== 'undefined' &&
@@ -756,7 +857,7 @@ export const SearchBar = ({
                       placeholder={
                         placeholder ||
                         t.searchHint ||
-                        'جستجوی آهنگ، آرتیست، آلبوم، فولدر یا پلی‌لیست...'
+                        'جستجوی آهنگ، خواننده، آلبوم، پوشه یا پلی‌لیست...'
                       }
                       style={{
                         flex: 1,
@@ -1330,7 +1431,7 @@ export const SearchBar = ({
                             <Clock size={28} style={{ opacity: 0.4, margin: '0 auto 8px auto' }} />
                             <div>
                               {t.searchHint ||
-                                'نام آهنگ، آرتیست، آلبوم، فولدر یا پلی‌لیست را تایپ کنید...'}
+                                'نام آهنگ، خواننده، آلبوم، پوشه یا پلی‌لیست را تایپ کنید...'}
                             </div>
                           </div>
                         )}
@@ -1415,9 +1516,7 @@ export const SearchBar = ({
                                           fontSize: '0.875rem',
                                           fontWeight: '600',
                                           color: textColor,
-                                          whiteSpace: 'nowrap',
-                                          overflow: 'hidden',
-                                          textOverflow: 'ellipsis',
+                                          ...getBidiTruncateStyle(s.name, uiIsRTL),
                                         }}
                                       >
                                         {s.name}
@@ -1426,9 +1525,7 @@ export const SearchBar = ({
                                         style={{
                                           fontSize: '0.75rem',
                                           color: textMuted,
-                                          whiteSpace: 'nowrap',
-                                          overflow: 'hidden',
-                                          textOverflow: 'ellipsis',
+                                          ...getBidiTruncateStyle(s.artist || '', uiIsRTL),
                                         }}
                                       >
                                         {s.artist}
@@ -1639,9 +1736,7 @@ export const SearchBar = ({
                                                   fontSize: '0.875rem',
                                                   fontWeight: '600',
                                                   color: textColor,
-                                                  whiteSpace: 'nowrap',
-                                                  overflow: 'hidden',
-                                                  textOverflow: 'ellipsis',
+                                                  ...getBidiTruncateStyle(song.name, uiIsRTL),
                                                 }}
                                               >
                                                 {song.name}
@@ -1650,10 +1745,11 @@ export const SearchBar = ({
                                                 style={{
                                                   fontSize: '0.75rem',
                                                   color: textMuted,
-                                                  whiteSpace: 'nowrap',
-                                                  overflow: 'hidden',
-                                                  textOverflow: 'ellipsis',
                                                   marginTop: '2px',
+                                                  ...getBidiTruncateStyle(
+                                                    `${song.artist}${song.album ? ` • ${song.album}` : ''}`,
+                                                    uiIsRTL
+                                                  ),
                                                 }}
                                               >
                                                 {song.artist}
@@ -1752,7 +1848,7 @@ export const SearchBar = ({
                                 </div>
                               )}
 
-                            {/* ۲. دسته‌بندی: آرتیست‌ها */}
+                            {/* ۲. دسته‌بندی: خواننده‌ها */}
                             {(effectiveTab === 'all' || effectiveTab === 'artists') &&
                               filteredArtists.length > 0 && (
                                 <div>
@@ -1769,7 +1865,7 @@ export const SearchBar = ({
                                     }}
                                   >
                                     <Mic size={15} color={primaryColor} />
-                                    <span>{t.artistsCategory || t.artists || 'آرتیست‌ها'}</span>
+                                    <span>{t.artistsCategory || t.artists || 'خواننده‌ها'}</span>
                                     <span style={{ fontSize: '0.6875rem', opacity: 0.7 }}>
                                       ({filteredArtists.length})
                                     </span>
@@ -1823,9 +1919,7 @@ export const SearchBar = ({
                                                 fontSize: '0.875rem',
                                                 fontWeight: '600',
                                                 color: textColor,
-                                                whiteSpace: 'nowrap',
-                                                overflow: 'hidden',
-                                                textOverflow: 'ellipsis',
+                                                ...getBidiTruncateStyle(art.artist, uiIsRTL),
                                               }}
                                             >
                                               {art.artist}
@@ -1945,9 +2039,7 @@ export const SearchBar = ({
                                                 fontSize: '0.875rem',
                                                 fontWeight: '600',
                                                 color: textColor,
-                                                whiteSpace: 'nowrap',
-                                                overflow: 'hidden',
-                                                textOverflow: 'ellipsis',
+                                                ...getBidiTruncateStyle(alb.album, uiIsRTL),
                                               }}
                                             >
                                               {alb.album}
@@ -2012,7 +2104,7 @@ export const SearchBar = ({
                                     }}
                                   >
                                     <Folder size={15} color={primaryColor} />
-                                    <span>{t.foldersCategory || t.folders || 'فولدربندی‌ها'}</span>
+                                    <span>{t.foldersCategory || t.folders || 'پوشه‌بندی'}</span>
                                     <span style={{ fontSize: '0.6875rem', opacity: 0.7 }}>
                                       ({filteredFolders.length})
                                     </span>
@@ -2069,9 +2161,7 @@ export const SearchBar = ({
                                                 fontSize: '0.875rem',
                                                 fontWeight: '600',
                                                 color: textColor,
-                                                whiteSpace: 'nowrap',
-                                                overflow: 'hidden',
-                                                textOverflow: 'ellipsis',
+                                                ...getBidiTruncateStyle(folder.name, uiIsRTL),
                                               }}
                                             >
                                               {folder.name}
@@ -2191,9 +2281,7 @@ export const SearchBar = ({
                                                 fontSize: '0.875rem',
                                                 fontWeight: '600',
                                                 color: textColor,
-                                                whiteSpace: 'nowrap',
-                                                overflow: 'hidden',
-                                                textOverflow: 'ellipsis',
+                                                ...getBidiTruncateStyle(pl.name, uiIsRTL),
                                               }}
                                             >
                                               {pl.name}

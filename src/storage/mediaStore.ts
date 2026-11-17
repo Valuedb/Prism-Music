@@ -1,4 +1,4 @@
-const DB_NAME = 'apple-music-media-db';
+const DB_NAME = 'prism-music-media-db';
 const DB_VERSION = 1;
 const AUDIO_STORE = 'audioBlobs';
 

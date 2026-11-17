@@ -1,11 +1,27 @@
 import React, { useState, useEffect, useRef, useMemo, memo } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence, LayoutGroup, useDragControls } from 'framer-motion';
-import { Heart, Music, Edit3, Check, X } from 'lucide-react';
-import type { ArtworkStyle, RepeatMode, Song, VisualizerStyle } from '../types';
+import {
+  Heart,
+  Music,
+  Edit3,
+  Check,
+  X,
+  MoreHorizontal,
+  Info,
+  FolderPlus,
+  Settings,
+  Trash2,
+  Plus,
+} from 'lucide-react';
+import type { ArtworkStyle, Playlist, RepeatMode, Song, VisualizerStyle } from '../types';
 import { withAlpha } from '../utils/color';
 import { QueueDrawer } from './QueueDrawer';
 import { MarqueeText } from './MarqueeText';
+import { SongInfoModal } from './SongInfoModal';
+import { EditSongModal } from './EditSongModal';
+import { IOSConfirmDialog } from './IOSSettingsPrimitives';
+import { ProgressScrubber } from './ProgressScrubber';
 import { audioEffects } from '../player/audioEffects';
 
 interface LyricLine {
@@ -70,8 +86,13 @@ interface FullScreenPlayerProps {
   onPlayQueueSong?: (index: number) => void;
   onClearQueue?: () => void;
   onShuffleQueue?: () => void;
+  playlists?: Playlist[];
+  onAddSongToPlaylist?: (playlistId: string, song: Song) => void;
   onCreatePlaylist?: (name: string, songs: Song[]) => void;
   onUpdateSong?: (updatedSong: Song) => void;
+  onDeleteSong?: (id: string) => void;
+  onOpenSettings?: () => void;
+  confirmBeforeDelete?: boolean;
   liveVisualizer?: boolean;
   artworkStyle?: ArtworkStyle;
   visualizerStyle?: VisualizerStyle;
@@ -101,56 +122,69 @@ const FullScreenVisualizer: React.FC<{
     }
 
     let rafId = 0;
-    const bins = new Uint8Array(audioEffects.getFrequencyBinCount() || 128);
+    const bins = new Uint8Array(audioEffects.getFrequencyBinCount() || 256);
     const smoothed = new Float32Array(barCount);
-    const glowTint = withAlpha(color, 0.55);
+    const glowTint = withAlpha(color, 0.62);
+    let runningPeak = 84;
+    let prevBass = 0;
 
     const tick = (now: number) => {
       const ok = audioEffects.getFrequencyData(bins);
       const mid = (barCount - 1) / 2;
-      const maxMusicalBin = Math.min(bins.length - 1, 52);
+      const maxMusicalBin = Math.min(bins.length - 1, 108);
       let maxEnergy = 0;
+      let bassSum = 0;
+      const bassSpan = Math.min(6, maxMusicalBin);
       if (ok) {
-        for (let b = 0; b <= maxMusicalBin; b++) {
+        for (let b = 1; b <= maxMusicalBin; b++) {
           if (bins[b] > maxEnergy) maxEnergy = bins[b];
+          if (b <= bassSpan) bassSum += bins[b];
         }
       }
+
+      const hasAudio = ok && maxEnergy > 2;
+      if (hasAudio) {
+        runningPeak = Math.max(36, runningPeak * 0.978, maxEnergy * 1.02);
+      }
+      const bassNorm = hasAudio && bassSpan > 0 ? bassSum / (bassSpan * runningPeak) : 0;
+      const bassPunch = Math.max(0, bassNorm - prevBass) * 2.4;
+      prevBass = prevBass * 0.64 + bassNorm * 0.36;
 
       for (let i = 0; i < barCount; i++) {
         const bar = barRefs.current[i];
         if (!bar) continue;
 
         let target: number;
-        if (!ok || maxEnergy === 0) {
-          // نبض ملایم در زمان مکث کوتاه یا در دسترس‌نبودن لحظه‌ای آنالایزر
-          const phase = now * 0.0042 + i * 0.42;
+        if (!hasAudio) {
+          const phase = now * 0.0046 + i * 0.42;
           const wave = 0.5 + 0.5 * Math.sin(phase) * Math.cos(phase * 0.55);
-          target = 0.18 + wave * 0.34;
+          target = 0.14 + wave * 0.36;
         } else {
           const linearPos =
             variant === 'wave'
               ? Math.abs(i - mid) / Math.max(1, mid)
               : i / Math.max(1, barCount - 1);
-          const curvedPos = Math.pow(linearPos, 1.55);
+          const curvedPos = Math.pow(linearPos, 1.5);
           const binIdx = Math.min(
             maxMusicalBin,
-            Math.floor(curvedPos * maxMusicalBin)
+            Math.max(1, Math.floor(curvedPos * maxMusicalBin))
           );
           const nextBin = Math.min(maxMusicalBin, binIdx + 1);
-          const raw = (bins[binIdx] * 0.72 + bins[nextBin] * 0.28) / 255;
-          const boosted = Math.pow(raw, 0.72) * (1.06 + linearPos * 0.24);
-          target = Math.max(0.14, Math.min(1, boosted));
+          const raw = (bins[binIdx] * 0.7 + bins[nextBin] * 0.3) / runningPeak;
+          const punchShare = (1 - linearPos * 0.55) * bassPunch;
+          const boosted = Math.pow(Math.min(1, raw * 1.15), 0.78) + punchShare * 0.48;
+          target = Math.max(0.12, Math.min(1.06, boosted));
         }
 
-        // حمله سریع و افت نرم برای حرکت طبیعی اکولایزر
-        const prev = smoothed[i] || 0.14;
-        const rate = target > prev ? 0.52 : 0.24;
+        // حمله سریع و افت نرم برای ضرباهنگ پرانرژی اکولایزر
+        const prev = smoothed[i] || 0.12;
+        const rate = target > prev ? 0.66 : 0.25;
         const nextVal = prev + (target - prev) * rate;
         smoothed[i] = nextVal;
 
         bar.style.transform = `scaleY(${nextVal.toFixed(3)})`;
-        bar.style.opacity = (0.36 + nextVal * 0.64).toFixed(2);
-        bar.style.boxShadow = nextVal > 0.66 ? `0 0 10px ${glowTint}` : 'none';
+        bar.style.opacity = Math.min(1, 0.32 + nextVal * 0.68).toFixed(2);
+        bar.style.boxShadow = nextVal > 0.62 ? `0 0 12px ${glowTint}` : 'none';
       }
       rafId = window.requestAnimationFrame(tick);
     };
@@ -224,8 +258,13 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
   onPlayQueueSong,
   onClearQueue,
   onShuffleQueue,
+  playlists = [],
+  onAddSongToPlaylist,
   onCreatePlaylist,
   onUpdateSong,
+  onDeleteSong,
+  onOpenSettings,
+  confirmBeforeDelete = true,
   liveVisualizer = true,
   artworkStyle = 'classic',
   visualizerStyle = 'bars',
@@ -236,16 +275,24 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
   const [showLyrics, setShowLyrics] = useState(false);
   const [isEditingLyrics, setIsEditingLyrics] = useState(false);
   const [lyricsDraft, setLyricsDraft] = useState('');
-  const [isHoveringProgress, setIsHoveringProgress] = useState(false);
   const [isHoveringVolume, setIsHoveringVolume] = useState(false);
   const [isHeartPopping, setIsHeartPopping] = useState(false);
   const [coverError, setCoverError] = useState(false);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [hoveredMenuItem, setHoveredMenuItem] = useState<'info' | 'playlist' | 'settings' | 'delete' | null>(null);
+  const [isInfoModalOpen, setIsInfoModalOpen] = useState(false);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isPlaylistModalOpen, setIsPlaylistModalOpen] = useState(false);
+  const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(null);
+  const [newPlaylistName, setNewPlaylistName] = useState('');
+  const [pendingDeleteConfirm, setPendingDeleteConfirm] = useState(false);
   const [isMobile, setIsMobile] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth < 768 : false
   );
   const ringHaloRef = useRef<HTMLDivElement>(null);
   const ringInnerHaloRef = useRef<HTMLDivElement>(null);
   const activeLyricRef = useRef<HTMLButtonElement | null>(null);
+  const menuContainerRef = useRef<HTMLDivElement>(null);
   const dragControls = useDragControls();
 
   useEffect(() => {
@@ -253,8 +300,28 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
       setShowQueue(false);
       setShowLyrics(false);
       setIsEditingLyrics(false);
+      setIsMenuOpen(false);
+      setHoveredMenuItem(null);
+      setIsInfoModalOpen(false);
+      setIsEditModalOpen(false);
+      setIsPlaylistModalOpen(false);
+      setSelectedPlaylistId(null);
+      setNewPlaylistName('');
+      setPendingDeleteConfirm(false);
     }
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!isMenuOpen) return;
+    const handlePointerDown = (e: MouseEvent) => {
+      if (menuContainerRef.current && !menuContainerRef.current.contains(e.target as Node)) {
+        setIsMenuOpen(false);
+        setHoveredMenuItem(null);
+      }
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [isMenuOpen]);
 
   useEffect(() => {
     if (!liveVisualizer || visualizerStyle !== 'ring' || !isOpen || !isPlaying) {
@@ -339,7 +406,17 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !showQueue) {
+      if (e.key !== 'Escape') return;
+      if (isInfoModalOpen || isEditModalOpen || pendingDeleteConfirm) return;
+      if (isPlaylistModalOpen) {
+        setIsPlaylistModalOpen(false);
+        return;
+      }
+      if (isMenuOpen) {
+        setIsMenuOpen(false);
+        return;
+      }
+      if (!showQueue) {
         if (isEditingLyrics) {
           setIsEditingLyrics(false);
         } else if (showLyrics) {
@@ -351,18 +428,21 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, showQueue, isEditingLyrics, showLyrics, onClose]);
+  }, [
+    isOpen,
+    showQueue,
+    isEditingLyrics,
+    showLyrics,
+    isMenuOpen,
+    isInfoModalOpen,
+    isEditModalOpen,
+    isPlaylistModalOpen,
+    pendingDeleteConfirm,
+    onClose,
+  ]);
 
   if (typeof document === 'undefined') return null;
 
-  const formatTime = (time: number) => {
-    if (isNaN(time)) return '0:00';
-    const mins = Math.floor(time / 60);
-    const secs = Math.floor(time % 60);
-    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
-  };
-
-  const progressPercent = duration ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
   const volumePercent = Math.max(0, Math.min(100, volume * 100));
 
   const primaryColor = theme?.colors?.primary || '#0a84ff';
@@ -372,6 +452,34 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
   const iconActiveColor = primaryColor;
   const iconInactiveColor = 'rgba(255, 255, 255, 0.5)';
   const glowColor = `0 0 12px ${withAlpha(primaryColor, 0.7)}`;
+
+  const isRtl = t.deleteSong === 'حذف آهنگ' || t.close === 'بستن';
+
+  const executeDeleteCurrentSong = () => {
+    if (!currentSong) return;
+    const deletedId = currentSong.id;
+    onDeleteSong?.(deletedId);
+    if (queue.length <= 1) {
+      onClose();
+    }
+  };
+
+  const handleConfirmAddToPlaylist = () => {
+    if (!currentSong) return;
+    const trimmedNew = newPlaylistName.trim();
+    if (trimmedNew && onCreatePlaylist) {
+      onCreatePlaylist(trimmedNew, [currentSong]);
+      setNewPlaylistName('');
+      setSelectedPlaylistId(null);
+      setIsPlaylistModalOpen(false);
+      return;
+    }
+    if (selectedPlaylistId && onAddSongToPlaylist) {
+      onAddSongToPlaylist(selectedPlaylistId, currentSong);
+      setSelectedPlaylistId(null);
+      setIsPlaylistModalOpen(false);
+    }
+  };
 
   const btnStyle: React.CSSProperties = {
     background: 'none',
@@ -509,7 +617,7 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
               exit={{ opacity: 0, y: -8, transition: { duration: 0.18 } }}
               transition={{ duration: 0.34, delay: 0.08, ease: [0.22, 1, 0.36, 1] }}
               onPointerDown={(e) => {
-                if ((e.target as HTMLElement).closest('button')) return;
+                if ((e.target as HTMLElement).closest('button, [data-fs-menu="true"]')) return;
                 dragControls.start(e);
               }}
               style={{
@@ -520,6 +628,8 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
                 flexShrink: 0,
                 touchAction: 'none',
                 cursor: 'grab',
+                position: 'relative',
+                zIndex: 20,
               }}
             >
               <button
@@ -580,7 +690,7 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
                 </span>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', zIndex: 2 }}>
-                  {onToggleFavorite ? (
+                  {onToggleFavorite && (
                     <motion.button
                       whileTap={{ scale: 0.88 }}
                       whileHover={{ opacity: 0.82 }}
@@ -622,9 +732,229 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
                         strokeWidth={currentSong.isFavorite ? 0 : 2}
                       />
                     </motion.button>
-                  ) : (
-                    <div style={{ width: '38px', height: '38px' }} />
                   )}
+
+                  {/* دکمه سه‌نقطه دسترسی سریع در گوشه بالا راست */}
+                  <div
+                    ref={menuContainerRef}
+                    data-fs-menu="true"
+                    style={{ position: 'relative' }}
+                  >
+                    <motion.button
+                      type="button"
+                      whileTap={{ scale: 0.9 }}
+                      whileHover={{ opacity: 0.85 }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setIsMenuOpen((prev) => !prev);
+                        setHoveredMenuItem(null);
+                      }}
+                      title={t.moreOptionsLabel || 'گزینه‌های بیشتر'}
+                      aria-label={t.moreOptionsLabel || 'گزینه‌های بیشتر'}
+                      aria-expanded={isMenuOpen}
+                      style={{
+                        ...btnStyle,
+                        width: '38px',
+                        height: '38px',
+                        borderRadius: '50%',
+                        backgroundColor: isMenuOpen
+                          ? withAlpha(primaryColor, 0.28)
+                          : 'rgba(255, 255, 255, 0.1)',
+                        color: '#ffffff',
+                        border: isMenuOpen
+                          ? `1px solid ${withAlpha(primaryColor, 0.5)}`
+                          : '1px solid transparent',
+                        transition: 'background-color 0.2s, border-color 0.2s',
+                      }}
+                    >
+                      <MoreHorizontal size={19} />
+                    </motion.button>
+
+                    <AnimatePresence>
+                      {isMenuOpen && (
+                        <motion.div
+                          initial={{ opacity: 0, scale: 0.94, y: -6 }}
+                          animate={{ opacity: 1, scale: 1, y: 0 }}
+                          exit={{ opacity: 0, scale: 0.94, y: -6 }}
+                          transition={{ duration: 0.15, ease: 'easeOut' }}
+                          onClick={(e) => e.stopPropagation()}
+                          style={{
+                            position: 'absolute',
+                            top: 'calc(100% + 8px)',
+                            right: 0,
+                            minWidth: '204px',
+                            backgroundColor: '#1b1b21',
+                            borderRadius: '14px',
+                            border: '1px solid rgba(255, 255, 255, 0.14)',
+                            padding: '6px',
+                            boxShadow: '0 18px 44px rgba(0, 0, 0, 0.65)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '3px',
+                            direction: isRtl ? 'rtl' : 'ltr',
+                            zIndex: 60,
+                            isolation: 'isolate',
+                            transform: 'translate3d(0, 0, 0)',
+                            backfaceVisibility: 'hidden',
+                            contain: 'layout paint',
+                          }}
+                        >
+                          {/* ۱. اطلاعات آهنگ */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsMenuOpen(false);
+                              setHoveredMenuItem(null);
+                              setIsInfoModalOpen(true);
+                            }}
+                            onMouseEnter={() => setHoveredMenuItem('info')}
+                            onMouseLeave={() => setHoveredMenuItem(null)}
+                            style={{
+                              width: '100%',
+                              padding: '10px 12px',
+                              borderRadius: '9px',
+                              border: 'none',
+                              outline: 'none',
+                              backgroundColor:
+                                hoveredMenuItem === 'info'
+                                  ? 'rgba(255, 255, 255, 0.11)'
+                                  : 'transparent',
+                              color: '#ffffff',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '10px',
+                              fontSize: '0.8438rem',
+                              fontWeight: 500,
+                              textAlign: 'start',
+                              cursor: 'pointer',
+                              transition: 'background-color 0.12s ease',
+                            }}
+                          >
+                            <Info size={16} />
+                            <span>{t.songInfo || 'اطلاعات آهنگ'}</span>
+                          </button>
+
+                          {/* ۲. افزودن به لیست */}
+                          {(onAddSongToPlaylist || onCreatePlaylist) && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsMenuOpen(false);
+                                setHoveredMenuItem(null);
+                                setSelectedPlaylistId(null);
+                                setNewPlaylistName('');
+                                setIsPlaylistModalOpen(true);
+                              }}
+                              onMouseEnter={() => setHoveredMenuItem('playlist')}
+                              onMouseLeave={() => setHoveredMenuItem(null)}
+                              style={{
+                                width: '100%',
+                                padding: '10px 12px',
+                                borderRadius: '9px',
+                                border: 'none',
+                                outline: 'none',
+                                backgroundColor:
+                                  hoveredMenuItem === 'playlist'
+                                    ? 'rgba(255, 255, 255, 0.11)'
+                                    : 'transparent',
+                                color: '#ffffff',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '10px',
+                                fontSize: '0.8438rem',
+                                fontWeight: 500,
+                                textAlign: 'start',
+                                cursor: 'pointer',
+                                transition: 'background-color 0.12s ease',
+                              }}
+                            >
+                              <FolderPlus size={16} />
+                              <span>{t.addToPlaylist || 'افزودن به لیست'}</span>
+                            </button>
+                          )}
+
+                          {/* ۳. تنظیمات */}
+                          {onOpenSettings && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsMenuOpen(false);
+                                setHoveredMenuItem(null);
+                                onClose();
+                                onOpenSettings();
+                              }}
+                              onMouseEnter={() => setHoveredMenuItem('settings')}
+                              onMouseLeave={() => setHoveredMenuItem(null)}
+                              style={{
+                                width: '100%',
+                                padding: '10px 12px',
+                                borderRadius: '9px',
+                                border: 'none',
+                                outline: 'none',
+                                backgroundColor:
+                                  hoveredMenuItem === 'settings'
+                                    ? 'rgba(255, 255, 255, 0.11)'
+                                    : 'transparent',
+                                color: '#ffffff',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '10px',
+                                fontSize: '0.8438rem',
+                                fontWeight: 500,
+                                textAlign: 'start',
+                                cursor: 'pointer',
+                                transition: 'background-color 0.12s ease',
+                              }}
+                            >
+                              <Settings size={16} />
+                              <span>{t.settings || 'تنظیمات'}</span>
+                            </button>
+                          )}
+
+                          {/* ۴. حذف آهنگ */}
+                          {onDeleteSong && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsMenuOpen(false);
+                                setHoveredMenuItem(null);
+                                if (confirmBeforeDelete) {
+                                  setPendingDeleteConfirm(true);
+                                } else {
+                                  executeDeleteCurrentSong();
+                                }
+                              }}
+                              onMouseEnter={() => setHoveredMenuItem('delete')}
+                              onMouseLeave={() => setHoveredMenuItem(null)}
+                              style={{
+                                width: '100%',
+                                padding: '10px 12px',
+                                borderRadius: '9px',
+                                border: 'none',
+                                outline: 'none',
+                                backgroundColor:
+                                  hoveredMenuItem === 'delete'
+                                    ? 'rgba(255, 69, 58, 0.18)'
+                                    : 'transparent',
+                                color: theme?.colors?.danger || '#ff453a',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '10px',
+                                fontSize: '0.8438rem',
+                                fontWeight: 600,
+                                textAlign: 'start',
+                                cursor: 'pointer',
+                                transition: 'background-color 0.12s ease',
+                              }}
+                            >
+                              <Trash2 size={16} />
+                              <span>{t.deleteSong || 'حذف آهنگ'}</span>
+                            </button>
+                          )}
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
                 </div>
               </div>
             </motion.div>
@@ -843,10 +1173,13 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
                         damping: 24,
                       }}
                       style={{
-                        marginTop: showLyrics ? '10px' : '14px',
+                        marginTop: showLyrics ? '10px' : '16px',
                         textAlign: showLyrics ? 'left' : 'center',
                         width: '100%',
-                        padding: showLyrics ? '0 2px' : '0 8px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: showLyrics ? 'flex-start' : 'center',
+                        padding: showLyrics ? '0 2px' : '0 12px',
                         boxSizing: 'border-box',
                         transformOrigin: showLyrics ? 'left top' : 'center top',
                       }}
@@ -880,6 +1213,7 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
                             color: songTitleColor,
                             letterSpacing: '-0.2px',
                             lineHeight: 1.28,
+                            textAlign: 'center',
                           }}
                         />
                       )}
@@ -895,6 +1229,7 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
                             : 'clamp(13px, 3.4vw, 15px)',
                           color: artistColor,
                           marginTop: '4px',
+                          textAlign: showLyrics ? 'left' : 'center',
                         }}
                       />
                       {!showLyrics && liveVisualizer && (
@@ -1244,60 +1579,22 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
                 </motion.button>
               </div>
 
-              {/* نوار پیشرفت زمان */}
-              <div
-                style={{ display: 'flex', alignItems: 'center', gap: '10px', width: '100%' }}
-                onMouseEnter={() => setIsHoveringProgress(true)}
-                onMouseLeave={() => setIsHoveringProgress(false)}
-              >
-                <span style={{ fontSize: '0.7188rem', color: artistColor, minWidth: '32px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 500 }}>
-                  {formatTime(currentTime)}
-                </span>
-                <div style={{ flex: 1, position: 'relative', height: '24px', display: 'flex', alignItems: 'center' }}>
-                  <div
-                    style={{
-                      position: 'absolute',
-                      left: 0,
-                      right: 0,
-                      height: isHoveringProgress ? '6px' : '4px',
-                      backgroundColor: 'rgba(255, 255, 255, 0.22)',
-                      backdropFilter: 'blur(10px)',
-                      borderRadius: '999px',
-                      transition: 'height 0.15s ease',
-                    }}
-                  >
-                    <div
-                      style={{
-                        width: `${progressPercent}%`,
-                        height: '100%',
-                        backgroundColor: primaryColor,
-                        borderRadius: '999px',
-                        boxShadow: glowColor,
-                      }}
-                    />
-                  </div>
-                  <input
-                    type="range"
-                    min={0}
-                    max={duration || 0}
-                    value={currentTime}
-                    onChange={(e) => onSeek(Number(e.target.value))}
-                    style={{
-                      position: 'absolute',
-                      top: 0,
-                      left: 0,
-                      width: '100%',
-                      height: '100%',
-                      opacity: 0,
-                      cursor: 'pointer',
-                      zIndex: 2,
-                    }}
-                  />
-                </div>
-                <span style={{ fontSize: '0.7188rem', color: artistColor, minWidth: '30px', fontVariantNumeric: 'tabular-nums', fontWeight: 500 }}>
-                  {formatTime(duration)}
-                </span>
-              </div>
+              {/* نوار پیشرفت زمان با پیش‌نمایش زمان هنگام هاور */}
+              <ProgressScrubber
+                songKey={`${currentSong.id}-${isOpen ? 'open' : 'closed'}`}
+                currentTime={currentTime}
+                duration={duration}
+                onSeek={onSeek}
+                primaryColor={primaryColor}
+                trackBgColor="rgba(255, 255, 255, 0.22)"
+                timeTextColor={artistColor}
+                glowColor={glowColor}
+                isDarkSurface
+                tooltipBgColor="rgba(20, 20, 28, 0.94)"
+                tooltipTextColor="#ffffff"
+                tooltipBorderColor="rgba(255, 255, 255, 0.18)"
+                variant="fullscreen"
+              />
 
               {/* دکمه‌های اصلی پخش */}
               <div
@@ -1573,6 +1870,234 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
             t={t}
             isMobile={isMobile}
             inFullScreen
+          />
+
+          <SongInfoModal
+            isOpen={isInfoModalOpen}
+            onClose={() => setIsInfoModalOpen(false)}
+            song={currentSong}
+            onEdit={() => {
+              setIsInfoModalOpen(false);
+              setIsEditModalOpen(true);
+            }}
+            theme={theme}
+            t={t}
+          />
+
+          <EditSongModal
+            isOpen={isEditModalOpen}
+            onClose={() => setIsEditModalOpen(false)}
+            song={currentSong}
+            onSave={(updated) => onUpdateSong?.(updated)}
+            theme={theme}
+            t={t}
+          />
+
+          {isPlaylistModalOpen &&
+            createPortal(
+              <div
+                onClick={() => setIsPlaylistModalOpen(false)}
+                style={{
+                  position: 'fixed',
+                  inset: 0,
+                  backgroundColor: 'rgba(0, 0, 0, 0.72)',
+                  backdropFilter: 'blur(14px)',
+                  WebkitBackdropFilter: 'blur(14px)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  zIndex: 9999999,
+                  padding: '20px',
+                  boxSizing: 'border-box',
+                }}
+              >
+                <div
+                  role="dialog"
+                  aria-modal="true"
+                  dir={isRtl ? 'rtl' : 'ltr'}
+                  onClick={(e) => e.stopPropagation()}
+                  style={{
+                    backgroundColor: theme.colors.surfaceSolid || theme.colors.surface,
+                    border: `1px solid ${theme.colors.border}`,
+                    borderRadius: theme.radius?.xl || '20px',
+                    padding: '22px 20px',
+                    width: '100%',
+                    maxWidth: '380px',
+                    boxShadow: '0 24px 60px rgba(0, 0, 0, 0.6)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '14px',
+                    fontFamily: theme?.fonts?.main,
+                  }}
+                >
+                  <h3
+                    style={{
+                      margin: 0,
+                      fontSize: '1.0313rem',
+                      fontWeight: 700,
+                      color: theme.colors.textPrimary,
+                      textAlign: 'center',
+                    }}
+                  >
+                    {t.selectPlaylist || 'انتخاب پلی‌لیست'}
+                  </h3>
+
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '8px',
+                      maxHeight: '220px',
+                      overflowY: 'auto',
+                    }}
+                  >
+                    {playlists.length === 0 ? (
+                      <p
+                        style={{
+                          margin: '6px 0',
+                          fontSize: '0.8438rem',
+                          color: theme.colors.textSecondary,
+                          textAlign: 'center',
+                        }}
+                      >
+                        {t.noPlaylists || 'هیچ پلی‌لیستی وجود ندارد.'}
+                      </p>
+                    ) : (
+                      playlists.map((pl) => {
+                        const alreadyInPlaylist = pl.songs.some((s) => s.id === currentSong.id);
+                        const isPicked = selectedPlaylistId === pl.id;
+                        return (
+                          <button
+                            key={pl.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedPlaylistId(pl.id);
+                              setNewPlaylistName('');
+                            }}
+                            style={{
+                              width: '100%',
+                              padding: '11px 14px',
+                              borderRadius: theme.radius?.md || '12px',
+                              border: `1px solid ${isPicked ? primaryColor : theme.colors.border}`,
+                              backgroundColor: isPicked
+                                ? withAlpha(primaryColor, 0.16)
+                                : theme.colors.surface,
+                              color: theme.colors.textPrimary,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              gap: '10px',
+                              fontSize: '0.875rem',
+                              fontWeight: isPicked ? 600 : 500,
+                              cursor: 'pointer',
+                              textAlign: 'start',
+                            }}
+                          >
+                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {pl.name}{' '}
+                              <span style={{ fontSize: '0.75rem', color: theme.colors.textSecondary }}>
+                                ({pl.songs.length} {t.songs || 'آهنگ'})
+                              </span>
+                            </span>
+                            {alreadyInPlaylist && <Check size={16} color={primaryColor} />}
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+
+                  {onCreatePlaylist && (
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        paddingTop: '4px',
+                        borderTop: `1px solid ${theme.colors.border}`,
+                      }}
+                    >
+                      <Plus size={16} color={theme.colors.textSecondary} style={{ flexShrink: 0 }} />
+                      <input
+                        type="text"
+                        value={newPlaylistName}
+                        onChange={(e) => {
+                          setNewPlaylistName(e.target.value);
+                          if (e.target.value.trim()) setSelectedPlaylistId(null);
+                        }}
+                        placeholder={t.newPlaylistPlaceholder || 'یا نام پلی‌لیست جدید...'}
+                        style={{
+                          flex: 1,
+                          minWidth: 0,
+                          padding: '9px 12px',
+                          borderRadius: '10px',
+                          border: `1px solid ${theme.colors.border}`,
+                          backgroundColor: theme.colors.background,
+                          color: theme.colors.textPrimary,
+                          fontSize: '0.8125rem',
+                          outline: 'none',
+                        }}
+                      />
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', gap: '10px', marginTop: '4px' }}>
+                    <button
+                      type="button"
+                      onClick={() => setIsPlaylistModalOpen(false)}
+                      style={{
+                        flex: 1,
+                        padding: '10px 14px',
+                        borderRadius: '10px',
+                        border: `1px solid ${theme.colors.border}`,
+                        backgroundColor: 'transparent',
+                        color: theme.colors.textPrimary,
+                        fontSize: '0.875rem',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {t.cancel || 'لغو'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!selectedPlaylistId && !newPlaylistName.trim()}
+                      onClick={handleConfirmAddToPlaylist}
+                      style={{
+                        flex: 1,
+                        padding: '10px 14px',
+                        borderRadius: '10px',
+                        border: 'none',
+                        backgroundColor: primaryColor,
+                        color: theme?.colors?.onPrimary || '#ffffff',
+                        fontSize: '0.875rem',
+                        fontWeight: 600,
+                        cursor:
+                          !selectedPlaylistId && !newPlaylistName.trim() ? 'not-allowed' : 'pointer',
+                        opacity: !selectedPlaylistId && !newPlaylistName.trim() ? 0.45 : 1,
+                      }}
+                    >
+                      {t.add || 'افزودن'}
+                    </button>
+                  </div>
+                </div>
+              </div>,
+              document.body
+            )}
+
+          <IOSConfirmDialog
+            isOpen={pendingDeleteConfirm}
+            title={t.deleteSong || 'حذف آهنگ'}
+            message={t.deleteConfirm}
+            confirmLabel={t.deleteSong || 'حذف آهنگ'}
+            cancelLabel={t.cancel || 'لغو'}
+            destructive
+            theme={theme}
+            isRtl={isRtl}
+            onCancel={() => setPendingDeleteConfirm(false)}
+            onConfirm={() => {
+              setPendingDeleteConfirm(false);
+              executeDeleteCurrentSong();
+            }}
           />
         </motion.div>
       )}
