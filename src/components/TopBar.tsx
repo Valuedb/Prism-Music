@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, useCallback, useMemo } from 'react';
+import { useRef, useState, useEffect, useLayoutEffect, useCallback, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { Settings } from 'lucide-react';
 import { SearchBar, type SearchNavigateTarget } from './SearchBar';
@@ -22,32 +22,6 @@ interface TopBarProps {
   onCreatePlaylist?: (name: string, songs: Song[]) => void;
   onSearchNavigate?: (target: SearchNavigateTarget) => void;
 }
-
-// استخراج ایمن مقدار translateX از استایل کامپیوترشده برای سازگاری با تمامی مرورگرها در RTL و LTR
-const getTranslateX = (el: HTMLElement): number => {
-  const transform = window.getComputedStyle(el).transform;
-  if (!transform || transform === 'none') return 0;
-  if (typeof DOMMatrixReadOnly !== 'undefined') {
-    try {
-      return new DOMMatrixReadOnly(transform).m41;
-    } catch {
-      // fallback
-    }
-  }
-  if (typeof (window as any).WebKitCSSMatrix !== 'undefined') {
-    try {
-      return new (window as any).WebKitCSSMatrix(transform).m41;
-    } catch {
-      // fallback
-    }
-  }
-  const match = transform.match(/matrix.*\((.+)\)/);
-  if (match) {
-    const values = match[1].split(',').map((v) => parseFloat(v.trim()));
-    return values.length === 6 ? values[4] : values.length === 16 ? values[12] : 0;
-  }
-  return 0;
-};
 
 export const TopBar = ({
   currentTab,
@@ -82,39 +56,53 @@ export const TopBar = ({
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const [trackX, setTrackX] = useState(0);
 
-  // محاسبه و تنظیم دقیق موقعیت ترک تب‌ها تا تب فعال در هر جهت و زبان (فارسی RTL یا انگلیسی LTR) دقیقاً در مرکز افقی صفحه قرار گیرد
+  // محاسبه قطعی موقعیت ترک بر اساس آفست نسبی درونی تا وسط انیمیشن فنری دوباره تریگر نشود و روی پیکسل صحیح بنشیند
   const centerActiveTab = useCallback(() => {
     const activeIndex = menuItems.findIndex((item) => item.id === currentTab);
     if (activeIndex === -1) return;
     const activeEl = tabRefs.current[activeIndex];
-    const container = containerRef.current;
     const track = trackRef.current;
-    if (!activeEl || !container || !track) return;
+    if (!activeEl || !track) return;
 
-    const containerRect = container.getBoundingClientRect();
+    const trackRect = track.getBoundingClientRect();
     const activeRect = activeEl.getBoundingClientRect();
+    if (trackRect.width <= 0 || activeRect.width <= 0) return;
 
-    const containerCenter = containerRect.left + containerRect.width / 2;
-    const activeCenter = activeRect.left + activeRect.width / 2;
+    const offsetInsideTrack = activeRect.left - trackRect.left;
+    const activeCenterInsideTrack = offsetInsideTrack + activeRect.width / 2;
+    const nextX = Math.round(trackRect.width / 2 - activeCenterInsideTrack);
 
-    const currentX = getTranslateX(track);
-    const delta = containerCenter - activeCenter;
-
-    // اگر اختلاف کمتر از 0.5 پیکسل باشد تغییری نمی‌دهیم تا چرخه اضافه ایجاد نشود
-    if (Math.abs(delta) < 0.5) return;
-
-    setTrackX(currentX + delta);
+    setTrackX((prev) => (prev === nextX ? prev : nextX));
   }, [currentTab, menuItems]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     centerActiveTab();
-    const rafId = requestAnimationFrame(centerActiveTab);
-    const timer = setTimeout(centerActiveTab, 60);
+  }, [centerActiveTab]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    const track = trackRef.current;
+
+    let observer: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      observer = new ResizeObserver(() => {
+        centerActiveTab();
+      });
+      if (container) observer.observe(container);
+      if (track) observer.observe(track);
+    }
+
     const onResize = () => centerActiveTab();
     window.addEventListener('resize', onResize);
+
+    let cancelled = false;
+    document.fonts?.ready?.then(() => {
+      if (!cancelled) centerActiveTab();
+    });
+
     return () => {
-      cancelAnimationFrame(rafId);
-      clearTimeout(timer);
+      cancelled = true;
+      observer?.disconnect();
       window.removeEventListener('resize', onResize);
     };
   }, [centerActiveTab]);
@@ -213,7 +201,7 @@ export const TopBar = ({
         </div>
       </div>
 
-      {/* کاروسل تب‌های سنترشده با افکت بلوری عمق میدان (Cover-Flow Tab Carousel) */}
+      {/* کاروسل تب‌های سنترشده */}
       <div
         ref={containerRef}
         style={{
@@ -224,17 +212,18 @@ export const TopBar = ({
           justifyContent: 'center',
           alignItems: 'center',
           boxSizing: 'border-box',
-          minHeight: '38px',
+          minHeight: '46px',
         }}
       >
         <motion.div
           ref={trackRef}
+          initial={false}
           animate={{ x: trackX }}
           transition={{
             type: 'spring',
-            stiffness: 380,
-            damping: 34,
-            mass: 0.8,
+            stiffness: 420,
+            damping: 38,
+            mass: 0.75,
           }}
           style={{
             display: 'inline-flex',
@@ -261,10 +250,14 @@ export const TopBar = ({
                   display: 'flex',
                   flexDirection: 'column',
                   alignItems: 'center',
-                  justifyContent: 'center',
-                  padding: '4px 10px 2px 10px',
-                  fontSize: 'clamp(0.875rem, 1.45vw, 0.9688rem)',
-                  fontWeight: 700,
+                  justifyContent: 'flex-end',
+                  height: '44px',
+                  padding: '4px 10px 4px 10px',
+                  fontSize: isActive
+                    ? 'clamp(1.0625rem, 1.75vw, 1.1875rem)'
+                    : 'clamp(0.8438rem, 1.3vw, 0.9375rem)',
+                  fontWeight: isActive ? 800 : 600,
+                  letterSpacing: isActive ? '-0.015em' : '0em',
                   color: isActive ? theme.colors.primary : theme.colors.textSecondary,
                   whiteSpace: 'nowrap',
                   flexShrink: 0,
@@ -272,16 +265,26 @@ export const TopBar = ({
                   userSelect: 'none',
                   opacity: isActive ? 1 : theme.isDark ? 0.62 : 0.78,
                   zIndex: isActive ? 2 : 1,
-                  transition: 'opacity 0.25s ease, color 0.25s ease',
+                  transition: 'opacity 0.2s ease, color 0.2s ease',
+                  WebkitFontSmoothing: 'antialiased',
                 }}
               >
-                <span style={{ lineHeight: '1.2' }}>{item.label}</span>
+                <span
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    height: '28px',
+                    lineHeight: '1.2',
+                  }}
+                >
+                  {item.label}
+                </span>
 
                 {/* نشانگر ظریف کپسولی متحرک زیر تب فعال */}
                 <div
                   style={{
                     height: '4px',
-                    marginTop: '4px',
+                    marginTop: '3px',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
@@ -292,7 +295,7 @@ export const TopBar = ({
                     <motion.div
                       layoutId="activeCenteredTabPill"
                       style={{
-                        width: '22px',
+                        width: '24px',
                         height: '3px',
                         borderRadius: '3px',
                         backgroundColor: theme.colors.primary,
@@ -300,8 +303,8 @@ export const TopBar = ({
                       }}
                       transition={{
                         type: 'spring',
-                        stiffness: 450,
-                        damping: 35,
+                        stiffness: 460,
+                        damping: 36,
                       }}
                     />
                   )}

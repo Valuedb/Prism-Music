@@ -47,6 +47,7 @@ export const CoverImage: React.FC<CoverImageProps> = memo(({
     <img
       src={src}
       alt={alt}
+      draggable={false}
       loading="lazy"
       decoding="async"
       onError={() => setHasError(true)}

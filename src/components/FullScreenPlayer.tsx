@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo, memo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, memo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence, LayoutGroup, useDragControls } from 'framer-motion';
 import {
@@ -280,6 +280,12 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
   const [isHoveringVolume, setIsHoveringVolume] = useState(false);
   const [isHeartPopping, setIsHeartPopping] = useState(false);
   const heartTimerRef = useRef<number | null>(null);
+
+  const handleCloseQueue = useCallback(() => setShowQueue(false), []);
+  const handlePlayQueueSong = useCallback((idx: number) => onPlayQueueSong?.(idx), [onPlayQueueSong]);
+  const handleReorderQueue = useCallback((from: number, to: number) => reorderQueue?.(from, to), [reorderQueue]);
+  const handleClearQueue = useCallback(() => onClearQueue?.(), [onClearQueue]);
+  const handleShuffleQueue = useCallback(() => onShuffleQueue?.(), [onShuffleQueue]);
 
   useEffect(() => {
     return () => {
@@ -1893,16 +1899,16 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
 
           <QueueDrawer
             isOpen={showQueue}
-            onClose={() => setShowQueue(false)}
+            onClose={handleCloseQueue}
             queue={queue}
             currentSong={currentSong}
             currentQueueIndex={currentQueueIndex}
             isPlaying={isPlaying}
-            onPlaySong={(idx: number) => onPlayQueueSong?.(idx)}
+            onPlaySong={handlePlayQueueSong}
             onRemoveFromQueue={removeFromQueue}
-            onReorderQueue={(from, to) => reorderQueue?.(from, to)}
-            onClearQueue={() => onClearQueue?.()}
-            onShuffleQueue={() => onShuffleQueue?.()}
+            onReorderQueue={handleReorderQueue}
+            onClearQueue={handleClearQueue}
+            onShuffleQueue={handleShuffleQueue}
             onCreatePlaylist={onCreatePlaylist}
             theme={theme}
             t={t}
