@@ -20,7 +20,7 @@ import type { Song, Playlist } from '../types';
 import { EditSongModal } from '../components/EditSongModal';
 import { SongInfoModal } from '../components/SongInfoModal';
 import { CoverImage } from '../components/CoverImage';
-import { IOSConfirmDialog } from '../components/IOSSettingsPrimitives';
+import { ConfirmDialog } from '../components/SettingsPrimitives';
 import { mixHex, withAlpha } from '../utils/color';
 
 // ================= اینترفیس پراپ‌ها =================
@@ -50,6 +50,7 @@ interface AllSongsProps {
   onBulkDeleteSongs?: (ids: string[]) => void;
   deleteActionLabel?: string;
   confirmBeforeDelete?: boolean;
+  defaultSortBy?: 'default' | 'date' | 'name' | 'artist';
 }
 
 // ================= کامپوننت اصلی =================
@@ -79,6 +80,7 @@ export const AllSongs = ({
   onBulkDeleteSongs,
   deleteActionLabel,
   confirmBeforeDelete = true,
+  defaultSortBy = 'date',
 }: AllSongsProps) => {
   // استیت‌های انتخاب
   const [selectedSongs, setSelectedSongs] = useState<string[]>([]);
@@ -92,9 +94,13 @@ export const AllSongs = ({
     right: number;
   }>({ top: 0, right: 16 });
   const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
-  const [sortBy, setSortBy] = useState<'date' | 'name' | 'artist'>(
-    'date'
+  const [sortBy, setSortBy] = useState<'default' | 'date' | 'name' | 'artist'>(
+    defaultSortBy
   );
+
+  useEffect(() => {
+    setSortBy(defaultSortBy);
+  }, [defaultSortBy]);
 
   // استیت‌های UI
   const [hoveredSongId, setHoveredSongId] = useState<string | null>(
@@ -231,20 +237,117 @@ export const AllSongs = ({
 
   /** فیلتر و مرتب‌سازی آهنگ‌ها (مموایز شده برای جلوگیری از پردازش مجدد هنگام هاور ماوس) */
   const filteredAndSortedSongs = useMemo(() => {
-    const q = searchTerm.toLowerCase();
-    return songs
-      .filter(
-        (song) =>
-          song.name.toLowerCase().includes(q) ||
-          song.artist.toLowerCase().includes(q)
-      )
-      .sort((a, b) => {
-        if (sortBy === 'date') return b.addedAt - a.addedAt;
-        if (sortBy === 'name') return a.name.localeCompare(b.name);
-        if (sortBy === 'artist') return a.artist.localeCompare(b.artist);
-        return 0;
-      });
+    const q = searchTerm.trim().toLowerCase();
+    const list = q
+      ? songs.filter(
+          (song) =>
+            song.name.toLowerCase().includes(q) ||
+            song.artist.toLowerCase().includes(q)
+        )
+      : [...songs];
+
+    if (sortBy === 'default') {
+      return list;
+    }
+
+    return list.sort((a, b) => {
+      if (sortBy === 'date') return (b.addedAt || 0) - (a.addedAt || 0);
+      if (sortBy === 'name') return a.name.localeCompare(b.name);
+      if (sortBy === 'artist') return a.artist.localeCompare(b.artist);
+      return 0;
+    });
   }, [songs, searchTerm, sortBy]);
+
+  const selectedSongsSet = useMemo(() => new Set(selectedSongs), [selectedSongs]);
+
+  // مجازی‌سازی هوشمند لیست آهنگ‌ها برای پشتیبانی روان از هزاران آهنگ بدون سنگین شدن DOM
+  const listWrapperRef = useRef<HTMLDivElement>(null);
+  const VIRTUAL_THRESHOLD = 80;
+  const VIRTUAL_OVERSCAN = 8;
+  const listDensity = theme.display?.listDensity || 'comfortable';
+  const rowHeight = listDensity === 'compact' ? 60 : listDensity === 'spacious' ? 76 : 66;
+  const rowGap = listDensity === 'compact' ? 5 : listDensity === 'spacious' ? 13 : 8;
+  const rowStride = rowHeight + rowGap;
+  const isVirtualized = filteredAndSortedSongs.length > VIRTUAL_THRESHOLD;
+  const [visibleRange, setVisibleRange] = useState<{ start: number; end: number }>({
+    start: 0,
+    end: 30,
+  });
+
+  useEffect(() => {
+    if (!isVirtualized) return;
+    const listEl = listWrapperRef.current;
+    if (!listEl || typeof window === 'undefined') return;
+
+    const scrollTargets: HTMLElement[] = [];
+    let cursor: HTMLElement | null = listEl.parentElement;
+    while (cursor) {
+      const style = window.getComputedStyle(cursor);
+      const oy = style.overflowY;
+      if (oy === 'auto' || oy === 'scroll' || oy === 'overlay') {
+        scrollTargets.push(cursor);
+      }
+      cursor = cursor.parentElement;
+    }
+
+    const totalCount = filteredAndSortedSongs.length;
+    let rafId = 0;
+
+    const updateRange = () => {
+      rafId = 0;
+      const currentListEl = listWrapperRef.current;
+      if (!currentListEl) return;
+
+      const listRect = currentListEl.getBoundingClientRect();
+      const activeClipEl = scrollTargets.find(
+        (el) => el.clientHeight > 0 && el.scrollHeight > el.clientHeight + 2
+      );
+      const clipTop = activeClipEl ? activeClipEl.getBoundingClientRect().top : 0;
+      const clipBottom = activeClipEl
+        ? activeClipEl.getBoundingClientRect().bottom
+        : window.innerHeight;
+
+      const viewTopInList = Math.max(0, clipTop - listRect.top);
+      const viewBottomInList = Math.max(viewTopInList, clipBottom - listRect.top);
+
+      const rawStart = Math.floor(viewTopInList / rowStride) - VIRTUAL_OVERSCAN;
+      const rawEnd = Math.ceil(viewBottomInList / rowStride) + VIRTUAL_OVERSCAN;
+      const nextStart = Math.max(0, rawStart);
+      const nextEnd = Math.min(totalCount - 1, Math.max(nextStart, rawEnd));
+
+      setVisibleRange((prev) =>
+        prev.start === nextStart && prev.end === nextEnd ? prev : { start: nextStart, end: nextEnd }
+      );
+    };
+
+    const scheduleUpdate = () => {
+      if (!rafId) {
+        rafId = window.requestAnimationFrame(updateRange);
+      }
+    };
+
+    updateRange();
+    scrollTargets.forEach((el) => el.addEventListener('scroll', scheduleUpdate, { passive: true }));
+    window.addEventListener('scroll', scheduleUpdate, { passive: true });
+    window.addEventListener('resize', scheduleUpdate, { passive: true });
+
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined'
+        ? new ResizeObserver(scheduleUpdate)
+        : null;
+    if (resizeObserver) {
+      resizeObserver.observe(listEl);
+      scrollTargets.forEach((el) => resizeObserver.observe(el));
+    }
+
+    return () => {
+      if (rafId) window.cancelAnimationFrame(rafId);
+      scrollTargets.forEach((el) => el.removeEventListener('scroll', scheduleUpdate));
+      window.removeEventListener('scroll', scheduleUpdate);
+      window.removeEventListener('resize', scheduleUpdate);
+      resizeObserver?.disconnect();
+    };
+  }, [isVirtualized, filteredAndSortedSongs.length, rowStride]);
 
   // ================= توابع کنترلی =================
 
@@ -316,7 +419,7 @@ export const AllSongs = ({
     if (isSelectMode) exitSelectMode();
   };
 
-  /** حذف یک آهنگ با تأییدیه iOS */
+  /** حذف یک آهنگ با دیالوگ تأییدیه */
   const handleDelete = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     if (!confirmBeforeDelete) {
@@ -327,7 +430,7 @@ export const AllSongs = ({
     setPendingDeleteIds([id]);
   };
 
-  /** حذف گروهی آهنگ‌های انتخاب شده با تأییدیه iOS */
+  /** حذف گروهی آهنگ‌های انتخاب شده با دیالوگ تأییدیه */
   const handleBulkDelete = () => {
     if (selectedSongs.length === 0) return;
     if (!confirmBeforeDelete) {
@@ -710,8 +813,11 @@ export const AllSongs = ({
                 <ArrowUpDown size={15} /> {t.sortBy}
               </button>
               {isSortMenuOpen && (
-                <div style={styles.dropdown(theme, '160px')}>
-                  {['date', 'name', 'artist'].map((type) => {
+                <div style={styles.dropdown(theme, '165px')}>
+                  {(defaultSortBy === 'default'
+                    ? (['default', 'date', 'name', 'artist'] as const)
+                    : (['date', 'name', 'artist'] as const)
+                  ).map((type) => {
                     const isActive = sortBy === type;
                     const itemKey = `sort-${type}`;
                     return (
@@ -719,14 +825,16 @@ export const AllSongs = ({
                         type="button"
                         key={type}
                         onClick={() => {
-                          setSortBy(type as any);
+                          setSortBy(type);
                           setIsSortMenuOpen(false);
                         }}
                         style={menuItemStyle(theme, isActive, hoveredDropdownItem === itemKey)}
                         onMouseEnter={() => setHoveredDropdownItem(itemKey)}
                         onMouseLeave={() => setHoveredDropdownItem(null)}
                       >
-                        {type === 'date'
+                        {type === 'default'
+                          ? t.sortDefault || 'ترتیب پیش‌فرض'
+                          : type === 'date'
                           ? t.sortDate
                           : type === 'name'
                           ? t.sortName
@@ -760,23 +868,43 @@ export const AllSongs = ({
         </div>
       ) : (
         <div
-          style={{
-            ...styles.listContainer,
-            gap:
-              theme.display?.listDensity === 'compact'
-                ? '5px'
-                : theme.display?.listDensity === 'spacious'
-                ? '13px'
-                : '8px',
-          }}
+          ref={listWrapperRef}
+          style={
+            isVirtualized
+              ? {
+                  position: 'relative',
+                  height: `${Math.max(0, filteredAndSortedSongs.length * rowStride - rowGap)}px`,
+                }
+              : {
+                  ...styles.listContainer,
+                  gap: `${rowGap}px`,
+                }
+          }
         >
-          {filteredAndSortedSongs.map((song) => {
+          {(isVirtualized
+            ? filteredAndSortedSongs.slice(
+                Math.min(visibleRange.start, Math.max(0, filteredAndSortedSongs.length - 1)),
+                Math.min(visibleRange.end + 1, filteredAndSortedSongs.length)
+              )
+            : filteredAndSortedSongs
+          ).map((song, sliceIdx) => {
+            const actualIndex = isVirtualized
+              ? Math.min(visibleRange.start, Math.max(0, filteredAndSortedSongs.length - 1)) + sliceIdx
+              : sliceIdx;
             const isHovered = hoveredSongId === song.id;
-            const isSelected = selectedSongs.includes(song.id);
+            const isSelected = selectedSongsSet.has(song.id);
             const isMenuHovered = hoveredMenuId === song.id;
             const isMenuOpen = activeMenuId === song.id;
             const isCurrentSong = currentSong?.id === song.id;
             const isTrackPlaying = isCurrentSong && isPlaying;
+            const baseRowStyle = styles.songRow(
+              theme,
+              isSelected,
+              isHovered,
+              isMenuOpen,
+              isCurrentSong,
+              glassCardCovers
+            );
 
             return (
               <div
@@ -794,14 +922,19 @@ export const AllSongs = ({
                         filteredAndSortedSongs
                       )
                 }
-                style={styles.songRow(
-                  theme,
-                  isSelected,
-                  isHovered,
-                  isMenuOpen,
-                  isCurrentSong,
-                  glassCardCovers
-                )}
+                style={
+                  isVirtualized
+                    ? {
+                        ...baseRowStyle,
+                        position: 'absolute',
+                        top: `${actualIndex * rowStride}px`,
+                        left: 0,
+                        right: 0,
+                        height: `${rowHeight}px`,
+                        boxSizing: 'border-box',
+                      }
+                    : baseRowStyle
+                }
               >
                 {/* پس‌زمینه کاور شیشه‌ای روی کارت آهنگ بدون شکست افقی رندر */}
                 {glassCardCovers && song.cover && (
@@ -1311,7 +1444,7 @@ export const AllSongs = ({
           document.body
         )}
 
-      <IOSConfirmDialog
+      <ConfirmDialog
         isOpen={pendingDeleteIds !== null}
         title={deleteActionLabel || t.deleteSong || 'حذف آهنگ'}
         message={t.deleteConfirm}

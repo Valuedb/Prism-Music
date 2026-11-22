@@ -2,16 +2,13 @@
   "name": "prism-music",
   "private": true,
   "version": "1.0.0",
-  "description": "Prism Music — Standalone Desktop Music Player with Web Audio DSP Equalizer",
+  "description": "Prism Music — Music Player with Web Audio DSP Equalizer",
   "type": "module",
-  "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 3000",
     "build": "tsc -b && vite build",
     "desktop:build": "npm run build",
     "desktop:preview": "vite preview --port 3000",
-    "desktop:start": "npm run build && electron .",
-    "desktop:exe": "npm run build && electron-builder --win --config electron-builder.json",
     "lint": "eslint .",
     "test": "node --test \"tests/**/*.test.ts\"",
     "preview": "vite preview"

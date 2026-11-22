@@ -27,7 +27,6 @@ import {
   CopyCheck,
   SkipForward,
   Trash2,
-  Sparkles,
   FileDown,
   FileUp,
   RotateCcw,
@@ -55,7 +54,6 @@ import { SoundSettings } from './SoundSettings';
 import { DisplaySettings } from './DisplaySettings';
 import { DEFAULT_EQ_SETTINGS, DEFAULT_SOUND_SETTINGS } from '../player/audioEffects';
 import { DEFAULT_PLAYBACK_PREFERENCES } from '../player/constants';
-import { DEMO_SONGS } from '../player/demoSongs';
 import {
   extractSongsBatched,
   findDuplicateSongIds,
@@ -76,13 +74,14 @@ import {
 import { getLocalDbStats, type LocalDbStats } from '../storage/kvDatabase';
 import { isDisplaySettings, isEqualizerSettings, isPlaybackPreferences, isPlaylistList, isSongList, isSoundSettings } from '../types/guards';
 import {
-  IOSConfirmDialog,
-  IOSGroupedSection,
-  IOSRow,
-  IOSSegmentedControl,
-  IOSSquircleIcon,
-  IOSSwitch,
-} from '../components/IOSSettingsPrimitives';
+  ConfirmDialog,
+  SettingsSection,
+  SettingsRow,
+  SettingsSegmentedControl,
+  SettingsIconBadge,
+  SettingsSwitch,
+} from '../components/SettingsPrimitives';
+import { AppLogo } from '../components/AppLogo';
 
 interface SettingsProps {
   songs: Song[];
@@ -653,15 +652,6 @@ export const Settings = ({
     refreshStorageStats();
   };
 
-  const handleRestoreDemoTracks = () => {
-    setSongs((prev) => {
-      const existingIds = new Set(prev.map((s) => s.id));
-      const missing = DEMO_SONGS.filter((demo) => !existingIds.has(demo.id));
-      return missing.length > 0 ? [...prev, ...missing] : prev;
-    });
-    showNotice(t.demoRestoredMsg || 'آهنگ‌های نمونه بازگردانی شدند.');
-  };
-
   const handleExportBackup = () => {
     const payload = {
       version: 2,
@@ -942,50 +932,50 @@ export const Settings = ({
                 </div>
               )}
 
-              <IOSGroupedSection header={t.libraryOverviewSection || 'وضعیت کلی کتابخانه'} theme={theme}>
-                <IOSRow
+              <SettingsSection header={t.libraryOverviewSection || 'وضعیت کلی کتابخانه'} theme={theme}>
+                <SettingsRow
                   theme={theme}
-                  icon={<IOSSquircleIcon color="#FF2D55" gradientTo="#FF375F"><Music size={16} /></IOSSquircleIcon>}
+                  icon={<SettingsIconBadge color="#FF2D55" gradientTo="#FF375F"><Music size={16} /></SettingsIconBadge>}
                   title={t.totalLibraryTracks || 'کل آهنگ‌های کتابخانه'}
                   valueText={`${songs.length}`}
                 />
-                <IOSRow
+                <SettingsRow
                   theme={theme}
-                  icon={<IOSSquircleIcon color="#34C759" gradientTo="#30D158"><Folder size={16} /></IOSSquircleIcon>}
+                  icon={<SettingsIconBadge color="#34C759" gradientTo="#30D158"><Folder size={16} /></SettingsIconBadge>}
                   title={t.directLinkedTracks || 'آهنگ‌های متصل مستقیم به هارد (بدون کپی)'}
                   valueText={`${directLinkedCount}`}
                 />
-                <IOSRow
+                <SettingsRow
                   theme={theme}
-                  icon={<IOSSquircleIcon color="#007AFF" gradientTo="#5AC8FA"><HardDrive size={16} /></IOSSquircleIcon>}
+                  icon={<SettingsIconBadge color="#007AFF" gradientTo="#5AC8FA"><HardDrive size={16} /></SettingsIconBadge>}
                   title={t.offlineStoredAudio || 'فایل‌های کپی‌شده در حافظه داخلی'}
                   valueText={`${storageStats.count} (${formatBytes(storageStats.totalBytes)})`}
                 />
-                <IOSRow
+                <SettingsRow
                   theme={theme}
-                  icon={<IOSSquircleIcon color="#34C759" gradientTo="#30D158"><Database size={16} /></IOSSquircleIcon>}
+                  icon={<SettingsIconBadge color="#34C759" gradientTo="#30D158"><Database size={16} /></SettingsIconBadge>}
                   title={t.localDbRecords || 'رکوردهای دیتابیس محلی (IndexedDB)'}
                   valueText={localDbStats.supported ? `${localDbStats.recordCount}` : '—'}
                   isLast={quotaUsed === null}
                 />
                 {quotaUsed !== null && (
-                  <IOSRow
+                  <SettingsRow
                     theme={theme}
                     isLast
-                    icon={<IOSSquircleIcon color="#5856D6" gradientTo="#AF52DE"><HardDrive size={16} /></IOSSquircleIcon>}
+                    icon={<SettingsIconBadge color="#5856D6" gradientTo="#AF52DE"><HardDrive size={16} /></SettingsIconBadge>}
                     title={t.browserQuotaUsed || 'فضای اشغال‌شده'}
                     valueText={formatBytes(quotaUsed)}
                   />
                 )}
-              </IOSGroupedSection>
+              </SettingsSection>
 
               {(isDesktopApp || linkedFolders.length > 0) && (
-                <IOSGroupedSection header={t.linkedFoldersSection || 'پوشه‌های متصل موسیقی (پایش لحظه‌ای و بدون کپی)'} theme={theme}>
+                <SettingsSection header={t.linkedFoldersSection || 'پوشه‌های متصل موسیقی (پایش لحظه‌ای و بدون کپی)'} theme={theme}>
                   {isDesktopApp && (
-                    <IOSRow
+                    <SettingsRow
                       theme={theme}
                       isLast={linkedFolders.length === 0}
-                      icon={<IOSSquircleIcon color="#0A84FF" gradientTo="#5AC8FA"><FolderUp size={16} /></IOSSquircleIcon>}
+                      icon={<SettingsIconBadge color="#0A84FF" gradientTo="#5AC8FA"><FolderUp size={16} /></SettingsIconBadge>}
                       title={t.linkFolderBtn || 'اتصال پوشه جدید'}
                       subtitle={
                         linkedFolders.length === 0
@@ -1068,11 +1058,11 @@ export const Settings = ({
                     />
                   )}
                   {linkedFolders.map((folder, idx) => (
-                    <IOSRow
+                    <SettingsRow
                       key={folder.id}
                       theme={theme}
                       isLast={idx === linkedFolders.length - 1}
-                      icon={<IOSSquircleIcon color="#30B0C7" gradientTo="#34C759"><Folder size={16} /></IOSSquircleIcon>}
+                      icon={<SettingsIconBadge color="#30B0C7" gradientTo="#34C759"><Folder size={16} /></SettingsIconBadge>}
                       title={folder.name}
                       subtitle={
                         <span dir="ltr" style={{ display: 'inline-block', unicodeBidi: 'plaintext' }}>
@@ -1151,13 +1141,13 @@ export const Settings = ({
                       }
                     />
                   ))}
-                </IOSGroupedSection>
+                </SettingsSection>
               )}
 
-              <IOSGroupedSection header={t.importSectionTitle || 'افزودن موسیقی'} theme={theme}>
-                <IOSRow
+              <SettingsSection header={t.importSectionTitle || 'افزودن موسیقی'} theme={theme}>
+                <SettingsRow
                   theme={theme}
-                  icon={<IOSSquircleIcon color="#34C759" gradientTo="#30D158"><Upload size={16} /></IOSSquircleIcon>}
+                  icon={<SettingsIconBadge color="#34C759" gradientTo="#30D158"><Upload size={16} /></SettingsIconBadge>}
                   title={t.selectFiles || 'انتخاب فایل‌های موسیقی'}
                   subtitle={isDesktopApp ? (t.directDiskBadge || 'اتصال مستقیم هارد') : undefined}
                   trailing={
@@ -1199,10 +1189,10 @@ export const Settings = ({
                     )
                   }
                 />
-                <IOSRow
+                <SettingsRow
                   theme={theme}
                   isLast
-                  icon={<IOSSquircleIcon color="#30B0C7" gradientTo="#0A84FF"><FolderUp size={16} /></IOSSquircleIcon>}
+                  icon={<SettingsIconBadge color="#30B0C7" gradientTo="#0A84FF"><FolderUp size={16} /></SettingsIconBadge>}
                   title={t.importFolderBtn || 'انتخاب پوشه کامل'}
                   subtitle={isDesktopApp ? (t.directDiskBadge || 'اتصال مستقیم هارد') : undefined}
                   trailing={
@@ -1245,62 +1235,53 @@ export const Settings = ({
                     )
                   }
                 />
-              </IOSGroupedSection>
+              </SettingsSection>
 
-              <IOSGroupedSection header={t.maintenanceSection || 'بهینه‌سازی و پاک‌سازی'} theme={theme}>
-                <IOSRow
+              <SettingsSection header={t.maintenanceSection || 'بهینه‌سازی و پاک‌سازی'} theme={theme}>
+                <SettingsRow
                   theme={theme}
                   onClick={handleRemoveDuplicates}
-                  icon={<IOSSquircleIcon color="#FF9500" gradientTo="#FFCC00"><CopyCheck size={16} /></IOSSquircleIcon>}
+                  icon={<SettingsIconBadge color="#FF9500" gradientTo="#FFCC00"><CopyCheck size={16} /></SettingsIconBadge>}
                   title={t.removeDuplicatesBtn || 'پاک‌سازی آهنگ‌های تکراری'}
                   subtitle={t.removeDuplicatesDesc}
                   valueText={duplicateCount > 0 ? `${duplicateCount}` : '0'}
                   showChevron
                   isRtl={isRTL}
                 />
-                <IOSRow
+                <SettingsRow
                   theme={theme}
                   onClick={handleCleanOrphanBlobs}
-                  icon={<IOSSquircleIcon color="#5AC8FA" gradientTo="#007AFF"><Trash2 size={16} /></IOSSquircleIcon>}
+                  icon={<SettingsIconBadge color="#5AC8FA" gradientTo="#007AFF"><Trash2 size={16} /></SettingsIconBadge>}
                   title={t.cleanOrphanBlobsBtn || 'پاک‌سازی فایل‌های رهاشده حافظه'}
                   subtitle={t.cleanOrphanBlobsDesc}
                   showChevron
                   isRtl={isRTL}
                 />
-                <IOSRow
-                  theme={theme}
-                  onClick={handleRestoreDemoTracks}
-                  icon={<IOSSquircleIcon color="#AF52DE" gradientTo="#FF2D55"><Sparkles size={16} /></IOSSquircleIcon>}
-                  title={t.restoreDemoBtn || 'بازیابی آهنگ‌های نمونه'}
-                  subtitle={t.restoreDemoDesc}
-                  showChevron
-                  isRtl={isRTL}
-                />
-                <IOSRow
+                <SettingsRow
                   theme={theme}
                   isLast
                   destructive
                   onClick={() => setConfirmAction('resetStats')}
-                  icon={<IOSSquircleIcon color="#FF3B30" gradientTo="#FF453A"><RotateCcw size={16} /></IOSSquircleIcon>}
+                  icon={<SettingsIconBadge color="#FF3B30" gradientTo="#FF453A"><RotateCcw size={16} /></SettingsIconBadge>}
                   title={t.resetPlayStatsBtn || 'صفر کردن آمار پخش'}
                   subtitle={t.resetPlayStatsDesc}
                 />
-              </IOSGroupedSection>
+              </SettingsSection>
 
-              <IOSGroupedSection header={t.backupSectionTitle || 'پشتیبان‌گیری و بازیابی'} theme={theme}>
-                <IOSRow
+              <SettingsSection header={t.backupSectionTitle || 'پشتیبان‌گیری و بازیابی'} theme={theme}>
+                <SettingsRow
                   theme={theme}
                   onClick={handleExportBackup}
-                  icon={<IOSSquircleIcon color="#34C759" gradientTo="#00C7BE"><FileDown size={16} /></IOSSquircleIcon>}
+                  icon={<SettingsIconBadge color="#34C759" gradientTo="#00C7BE"><FileDown size={16} /></SettingsIconBadge>}
                   title={t.exportBackupBtn || 'خروجی پشتیبان (JSON)'}
                   subtitle={t.exportBackupDesc}
                   showChevron
                   isRtl={isRTL}
                 />
-                <IOSRow
+                <SettingsRow
                   theme={theme}
                   isLast
-                  icon={<IOSSquircleIcon color="#007AFF" gradientTo="#5856D6"><FileUp size={16} /></IOSSquircleIcon>}
+                  icon={<SettingsIconBadge color="#007AFF" gradientTo="#5856D6"><FileUp size={16} /></SettingsIconBadge>}
                   title={t.importBackupBtn || 'بازیابی از فایل پشتیبان'}
                   subtitle={t.importBackupDesc}
                   trailing={
@@ -1321,7 +1302,7 @@ export const Settings = ({
                     </label>
                   }
                 />
-              </IOSGroupedSection>
+              </SettingsSection>
             </div>
           </motion.div>
         ) : subPage === 'shortcuts' ? (
@@ -1368,25 +1349,25 @@ export const Settings = ({
                 <div style={{ width: '72px' }} />
               </div>
 
-              <IOSGroupedSection header={t.shortcutsPlaybackSection || 'کنترل پخش و صدا'} theme={theme}>
-                <IOSRow theme={theme} title={t.shortcutPlayPause || 'پخش / توقف'} trailing={<KbdBadge theme={theme}>Space / K</KbdBadge>} />
-                <IOSRow theme={theme} title={t.shortcutPrevNext || 'آهنگ قبلی / بعدی'} trailing={<KbdBadge theme={theme}>Ctrl + ← / →</KbdBadge>} />
-                <IOSRow theme={theme} title={t.shortcutSeek || 'جلو / عقب رفتن'} trailing={<KbdBadge theme={theme}>← / →</KbdBadge>} />
-                <IOSRow theme={theme} title={t.shortcutSeekFast || 'پرش سریع ۳ برابری'} trailing={<KbdBadge theme={theme}>Shift + ← / →</KbdBadge>} />
-                <IOSRow theme={theme} title={t.shortcutVolume || 'افزایش / کاهش صدا'} trailing={<KbdBadge theme={theme}>+ / - · Ctrl + ↑ / ↓</KbdBadge>} />
-                <IOSRow theme={theme} title={t.shortcutMute || 'قطع / وصل صدا'} trailing={<KbdBadge theme={theme}>M</KbdBadge>} />
-                <IOSRow theme={theme} title={t.shortcutShuffle || 'روشن / خاموش کردن شافل'} trailing={<KbdBadge theme={theme}>S</KbdBadge>} />
-                <IOSRow theme={theme} title={t.shortcutRepeat || 'تغییر حالت تکرار'} trailing={<KbdBadge theme={theme}>R</KbdBadge>} />
-                <IOSRow theme={theme} isLast title={t.shortcutFavorite || 'افزودن / حذف از محبوب‌ها'} trailing={<KbdBadge theme={theme}>L</KbdBadge>} />
-              </IOSGroupedSection>
+              <SettingsSection header={t.shortcutsPlaybackSection || 'کنترل پخش و صدا'} theme={theme}>
+                <SettingsRow theme={theme} title={t.shortcutPlayPause || 'پخش / توقف'} trailing={<KbdBadge theme={theme}>Space / K</KbdBadge>} />
+                <SettingsRow theme={theme} title={t.shortcutPrevNext || 'آهنگ قبلی / بعدی'} trailing={<KbdBadge theme={theme}>Ctrl + ← / →</KbdBadge>} />
+                <SettingsRow theme={theme} title={t.shortcutSeek || 'جلو / عقب رفتن'} trailing={<KbdBadge theme={theme}>← / →</KbdBadge>} />
+                <SettingsRow theme={theme} title={t.shortcutSeekFast || 'پرش سریع ۳ برابری'} trailing={<KbdBadge theme={theme}>Shift + ← / →</KbdBadge>} />
+                <SettingsRow theme={theme} title={t.shortcutVolume || 'افزایش / کاهش صدا'} trailing={<KbdBadge theme={theme}>+ / - · Ctrl + ↑ / ↓</KbdBadge>} />
+                <SettingsRow theme={theme} title={t.shortcutMute || 'قطع / وصل صدا'} trailing={<KbdBadge theme={theme}>M</KbdBadge>} />
+                <SettingsRow theme={theme} title={t.shortcutShuffle || 'روشن / خاموش کردن شافل'} trailing={<KbdBadge theme={theme}>S</KbdBadge>} />
+                <SettingsRow theme={theme} title={t.shortcutRepeat || 'تغییر حالت تکرار'} trailing={<KbdBadge theme={theme}>R</KbdBadge>} />
+                <SettingsRow theme={theme} isLast title={t.shortcutFavorite || 'افزودن / حذف از محبوب‌ها'} trailing={<KbdBadge theme={theme}>L</KbdBadge>} />
+              </SettingsSection>
 
-              <IOSGroupedSection header={t.shortcutsNavSection || 'ناوبری و پنجره‌ها'} theme={theme}>
-                <IOSRow theme={theme} title={t.shortcutQueue || 'باز / بسته کردن صف پخش'} trailing={<KbdBadge theme={theme}>Q</KbdBadge>} />
-                <IOSRow theme={theme} title={t.shortcutFullscreen || 'پخش‌کننده تمام‌صفحه'} trailing={<KbdBadge theme={theme}>F</KbdBadge>} />
-                <IOSRow theme={theme} title={t.shortcutSearch || 'باز کردن جستجوی هوشمند'} trailing={<KbdBadge theme={theme}>Ctrl + K / F / /</KbdBadge>} />
-                <IOSRow theme={theme} title={t.shortcutSettings || 'باز کردن تنظیمات'} trailing={<KbdBadge theme={theme}>Ctrl + ,</KbdBadge>} />
-                <IOSRow theme={theme} isLast title={t.shortcutTabs || 'جابه‌جایی مستقیم بین تب‌ها'} trailing={<KbdBadge theme={theme}>Alt + 1..6</KbdBadge>} />
-              </IOSGroupedSection>
+              <SettingsSection header={t.shortcutsNavSection || 'ناوبری و پنجره‌ها'} theme={theme}>
+                <SettingsRow theme={theme} title={t.shortcutQueue || 'باز / بسته کردن صف پخش'} trailing={<KbdBadge theme={theme}>Q</KbdBadge>} />
+                <SettingsRow theme={theme} title={t.shortcutFullscreen || 'پخش‌کننده تمام‌صفحه'} trailing={<KbdBadge theme={theme}>F</KbdBadge>} />
+                <SettingsRow theme={theme} title={t.shortcutSearch || 'باز کردن جستجوی هوشمند'} trailing={<KbdBadge theme={theme}>Ctrl + K / F / /</KbdBadge>} />
+                <SettingsRow theme={theme} title={t.shortcutSettings || 'باز کردن تنظیمات'} trailing={<KbdBadge theme={theme}>Ctrl + ,</KbdBadge>} />
+                <SettingsRow theme={theme} isLast title={t.shortcutTabs || 'جابه‌جایی مستقیم بین تب‌ها'} trailing={<KbdBadge theme={theme}>Alt + 1..6</KbdBadge>} />
+              </SettingsSection>
             </div>
           </motion.div>
         ) : (
@@ -1443,17 +1424,17 @@ export const Settings = ({
               )}
 
               {/* بخش ۱: ظاهر، صدا و زبان */}
-              <IOSGroupedSection theme={theme}>
-                <IOSRow
+              <SettingsSection theme={theme}>
+                <SettingsRow
                   theme={theme}
                   icon={
-                    <IOSSquircleIcon color="#007AFF" gradientTo="#5856D6">
+                    <SettingsIconBadge color="#007AFF" gradientTo="#5856D6">
                       <Globe size={16} />
-                    </IOSSquircleIcon>
+                    </SettingsIconBadge>
                   }
                   title={t.language}
                   trailing={
-                    <IOSSegmentedControl<'fa' | 'en'>
+                    <SettingsSegmentedControl<'fa' | 'en'>
                       groupId="settings-language"
                       compact
                       theme={theme}
@@ -1467,12 +1448,12 @@ export const Settings = ({
                   }
                 />
 
-                <IOSRow
+                <SettingsRow
                   theme={theme}
                   icon={
-                    <IOSSquircleIcon color="#007AFF" gradientTo="#32ADE6">
+                    <SettingsIconBadge color="#007AFF" gradientTo="#32ADE6">
                       <Compass size={16} />
-                    </IOSSquircleIcon>
+                    </SettingsIconBadge>
                   }
                   title={t.defaultTabLabel || 'تب پیش‌فرض برنامه'}
                   subtitle={t.defaultTabDesc}
@@ -1506,47 +1487,47 @@ export const Settings = ({
                       );
                     })}
                   </div>
-                </IOSRow>
+                </SettingsRow>
 
-                <IOSRow
+                <SettingsRow
                   theme={theme}
                   onClick={() => setSubPage('display')}
                   showChevron
                   isRtl={isRTL}
                   icon={
-                    <IOSSquircleIcon color="#5856D6" gradientTo="#AF52DE">
+                    <SettingsIconBadge color="#5856D6" gradientTo="#AF52DE">
                       <Monitor size={16} />
-                    </IOSSquircleIcon>
+                    </SettingsIconBadge>
                   }
                   title={t.displayMenuTitle || 'ظاهر و نمایش (Display)'}
                   subtitle={displaySubtitleText}
                 />
 
-                <IOSRow
+                <SettingsRow
                   theme={theme}
                   isLast
                   onClick={() => setSubPage('sound')}
                   showChevron
                   isRtl={isRTL}
                   icon={
-                    <IOSSquircleIcon color="#FF2D55" gradientTo="#FF375F">
+                    <SettingsIconBadge color="#FF2D55" gradientTo="#FF375F">
                       <Volume2 size={16} />
-                    </IOSSquircleIcon>
+                    </SettingsIconBadge>
                   }
                   title={t.soundMenuTitle || 'صدا و افکت‌های صوتی'}
                   subtitle={soundSummaryText}
                   valueText={equalizerSettings.enabled ? 'EQ' : undefined}
                 />
-              </IOSGroupedSection>
+              </SettingsSection>
 
               {/* بخش ۲: پخش، تایمر و رفتار هوشمند */}
-              <IOSGroupedSection header={t.playbackBehaviorSection || 'پخش و رفتار هوشمند'} theme={theme}>
-                <IOSRow
+              <SettingsSection header={t.playbackBehaviorSection || 'پخش و رفتار هوشمند'} theme={theme}>
+                <SettingsRow
                   theme={theme}
                   icon={
-                    <IOSSquircleIcon color="#5E5CE6" gradientTo="#32ADE6">
+                    <SettingsIconBadge color="#5E5CE6" gradientTo="#32ADE6">
                       <Timer size={16} />
-                    </IOSSquircleIcon>
+                    </SettingsIconBadge>
                   }
                   title={t.sleepTimer || 'تایمر خواب'}
                   subtitle={t.sleepTimerDesc}
@@ -1605,19 +1586,19 @@ export const Settings = ({
                       );
                     })}
                   </div>
-                </IOSRow>
+                </SettingsRow>
 
-                <IOSRow
+                <SettingsRow
                   theme={theme}
                   icon={
-                    <IOSSquircleIcon color="#FF9500" gradientTo="#FFCC00">
+                    <SettingsIconBadge color="#FF9500" gradientTo="#FFCC00">
                       <SkipForward size={16} />
-                    </IOSSquircleIcon>
+                    </SettingsIconBadge>
                   }
                   title={t.seekStepLabel || 'گام جلو و عقب'}
                   subtitle={t.seekStepDesc}
                   trailing={
-                    <IOSSegmentedControl<SeekStepSeconds>
+                    <SettingsSegmentedControl<SeekStepSeconds>
                       groupId="settings-seek-step"
                       compact
                       theme={theme}
@@ -1632,17 +1613,17 @@ export const Settings = ({
                   }
                 />
 
-                <IOSRow
+                <SettingsRow
                   theme={theme}
                   icon={
-                    <IOSSquircleIcon color="#34C759" gradientTo="#30D158">
+                    <SettingsIconBadge color="#34C759" gradientTo="#30D158">
                       <Play size={16} />
-                    </IOSSquircleIcon>
+                    </SettingsIconBadge>
                   }
                   title={t.autoPlayOnImportLabel || 'پخش خودکار پس از افزودن'}
                   subtitle={t.autoPlayOnImportDesc}
                   trailing={
-                    <IOSSwitch
+                    <SettingsSwitch
                       checked={playbackPrefs.autoPlayOnImport}
                       onChange={(v) => updatePref('autoPlayOnImport', v)}
                       theme={theme}
@@ -1651,17 +1632,17 @@ export const Settings = ({
                   }
                 />
 
-                <IOSRow
+                <SettingsRow
                   theme={theme}
                   icon={
-                    <IOSSquircleIcon color="#007AFF" gradientTo="#30B0C7">
+                    <SettingsIconBadge color="#007AFF" gradientTo="#30B0C7">
                       <Bookmark size={16} />
-                    </IOSSquircleIcon>
+                    </SettingsIconBadge>
                   }
                   title={t.rememberPlaybackLabel || 'ذخیره آخرین موقعیت پخش'}
                   subtitle={t.rememberPlaybackDesc}
                   trailing={
-                    <IOSSwitch
+                    <SettingsSwitch
                       checked={playbackPrefs.rememberPlaybackPosition}
                       onChange={(v) => updatePref('rememberPlaybackPosition', v)}
                       theme={theme}
@@ -1670,17 +1651,17 @@ export const Settings = ({
                   }
                 />
 
-                <IOSRow
+                <SettingsRow
                   theme={theme}
                   icon={
-                    <IOSSquircleIcon color="#32ADE6" gradientTo="#007AFF">
+                    <SettingsIconBadge color="#32ADE6" gradientTo="#007AFF">
                       <CopyCheck size={16} />
-                    </IOSSquircleIcon>
+                    </SettingsIconBadge>
                   }
                   title={t.skipDuplicatesLabel || 'جلوگیری از آهنگ‌های تکراری'}
                   subtitle={t.skipDuplicatesDesc}
                   trailing={
-                    <IOSSwitch
+                    <SettingsSwitch
                       checked={playbackPrefs.skipDuplicatesOnImport}
                       onChange={(v) => updatePref('skipDuplicatesOnImport', v)}
                       theme={theme}
@@ -1689,18 +1670,18 @@ export const Settings = ({
                   }
                 />
 
-                <IOSRow
+                <SettingsRow
                   theme={theme}
                   isLast
                   icon={
-                    <IOSSquircleIcon color="#FF3B30" gradientTo="#FF9500">
+                    <SettingsIconBadge color="#FF3B30" gradientTo="#FF9500">
                       <ShieldAlert size={16} />
-                    </IOSSquircleIcon>
+                    </SettingsIconBadge>
                   }
                   title={t.confirmBeforeDeleteLabel || 'تاییدیه پیش از حذف'}
                   subtitle={t.confirmBeforeDeleteDesc}
                   trailing={
-                    <IOSSwitch
+                    <SettingsSwitch
                       checked={playbackPrefs.confirmBeforeDelete}
                       onChange={(v) => updatePref('confirmBeforeDelete', v)}
                       theme={theme}
@@ -1708,51 +1689,63 @@ export const Settings = ({
                     />
                   }
                 />
-              </IOSGroupedSection>
+              </SettingsSection>
 
               {/* بخش ۳: کتابخانه، ذخیره‌سازی و راهنما */}
-              <IOSGroupedSection theme={theme}>
-                <IOSRow
+              <SettingsSection theme={theme}>
+                <SettingsRow
                   theme={theme}
                   onClick={() => setSubPage('library')}
                   showChevron
                   isRtl={isRTL}
                   icon={
-                    <IOSSquircleIcon color="#0A84FF" gradientTo="#30B0C7">
+                    <SettingsIconBadge color="#0A84FF" gradientTo="#30B0C7">
                       <HardDrive size={16} />
-                    </IOSSquircleIcon>
+                    </SettingsIconBadge>
                   }
                   title={t.libraryStorageTitle || 'کتابخانه، حافظه و پشتیبان‌گیری'}
                   subtitle={t.libraryStorageSubtitle}
                   valueText={`${songs.length} ${t.songs || 'آهنگ'}`}
                 />
 
-                <IOSRow
+                <SettingsRow
                   theme={theme}
                   isLast
                   onClick={() => setSubPage('shortcuts')}
                   showChevron
                   isRtl={isRTL}
                   icon={
-                    <IOSSquircleIcon color="#636366" gradientTo="#48484A">
+                    <SettingsIconBadge color="#636366" gradientTo="#48484A">
                       <Keyboard size={16} />
-                    </IOSSquircleIcon>
+                    </SettingsIconBadge>
                   }
                   title={t.shortcutsMenuTitle || 'میانبرهای کیبورد'}
                   subtitle={t.shortcutsMenuSubtitle}
                 />
-              </IOSGroupedSection>
+              </SettingsSection>
 
               {/* بخش ۴: ارتباط و بازنشانی */}
-              <IOSGroupedSection header={t.aboutSectionTitle || 'درباره برنامه'} theme={theme}>
-                <IOSRow
+              <SettingsSection header={t.aboutSectionTitle || 'درباره برنامه'} theme={theme}>
+                <SettingsRow
+                  theme={theme}
+                  icon={<AppLogo theme={theme} size={34} />}
+                  title="Prism Music"
+                  subtitle={
+                    isRTL
+                      ? 'پخش‌کننده موسیقی با موتور اکولایزر DSP'
+                      : 'Music Player with Web Audio DSP Equalizer'
+                  }
+                  valueText="v1.0.0"
+                />
+
+                <SettingsRow
                   theme={theme}
                   icon={
-                    <IOSSquircleIcon color="#2AABEE" gradientTo="#229ED9">
+                    <SettingsIconBadge color="#2AABEE" gradientTo="#229ED9">
                       <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                         <path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z" />
                       </svg>
-                    </IOSSquircleIcon>
+                    </SettingsIconBadge>
                   }
                   title={t.telegramLabel || 'تلگرام'}
                   subtitle={
@@ -1823,14 +1816,14 @@ export const Settings = ({
                   }
                 />
 
-                <IOSRow
+                <SettingsRow
                   theme={theme}
                   icon={
-                    <IOSSquircleIcon color="#32383F" gradientTo="#1B1F23">
+                    <SettingsIconBadge color="#32383F" gradientTo="#1B1F23">
                       <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                         <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" />
                       </svg>
-                    </IOSSquircleIcon>
+                    </SettingsIconBadge>
                   }
                   title={t.githubLabel || 'گیت‌هاب'}
                   subtitle={
@@ -1901,26 +1894,26 @@ export const Settings = ({
                   }
                 />
 
-                <IOSRow
+                <SettingsRow
                   theme={theme}
                   isLast
                   destructive
                   onClick={() => setConfirmAction('resetAll')}
                   icon={
-                    <IOSSquircleIcon color="#FF3B30" gradientTo="#FF453A">
+                    <SettingsIconBadge color="#FF3B30" gradientTo="#FF453A">
                       <RotateCcw size={16} />
-                    </IOSSquircleIcon>
+                    </SettingsIconBadge>
                   }
                   title={t.resetAllSettingsBtn || 'بازگردانی تمام تنظیمات به پیش‌فرض'}
                   subtitle={t.resetAllSettingsDesc}
                 />
-              </IOSGroupedSection>
+              </SettingsSection>
             </div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      <IOSConfirmDialog
+      <ConfirmDialog
         isOpen={confirmAction !== null}
         title={
           confirmAction === 'resetAll'

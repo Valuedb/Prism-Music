@@ -53,6 +53,22 @@ export interface DesktopFolderScanResult {
   missing?: boolean;
 }
 
+export interface WriteSongTagsPayload {
+  filePath: string;
+  title?: string;
+  artist?: string;
+  album?: string;
+  year?: string;
+  lyrics?: string;
+  coverDataUrl?: string;
+}
+
+export interface WriteSongTagsResult {
+  ok: boolean;
+  code?: string;
+  error?: string;
+}
+
 export interface DesktopRuntimeAPI {
   platform: string;
   isDesktop: boolean;
@@ -63,6 +79,7 @@ export interface DesktopRuntimeAPI {
   watchFolders?: (paths: string[]) => Promise<void>;
   onFolderChanged?: (callback: (scan: DesktopFolderScanResult) => void) => () => void;
   readFileBytes?: (filePath: string) => Promise<Uint8Array | null>;
+  writeSongTags?: (payload: WriteSongTagsPayload) => Promise<WriteSongTagsResult>;
   checkPathsExist?: (paths: string[]) => Promise<Record<string, boolean>>;
   showItemInFolder?: (filePath: string) => Promise<boolean>;
   openFolder?: (folderPath: string) => Promise<boolean>;

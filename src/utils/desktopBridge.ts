@@ -6,6 +6,7 @@ import {
   normalizeDiskPath,
   type FolderSyncDelta,
 } from './desktopPaths';
+import { assignBatchAddedAt } from './smartPlaylists';
 
 export {
   buildDesktopMediaUrl,
@@ -162,7 +163,7 @@ export const extractDiskSongsBatched = async (
       if (s) results.push(s);
     }
   }
-  return results;
+  return assignBatchAddedAt(results);
 };
 
 /**

@@ -2,12 +2,30 @@ import { useEffect, useRef, useState } from 'react';
 import { readJSON, writeJSON } from '../storage/safeStorage';
 import { dbReadValue, dbWriteValue } from '../storage/kvDatabase';
 
+const LOCAL_STORAGE_MAX_ARRAY_ITEMS = 200;
+
 const persistEverywhere = (key: string, value: unknown) => {
+  // در کتابخانه‌های بزرگ (مثل چند هزار آهنگ) سریالایز هم‌زمان برای localStorage ترد اصلی را مسدود می‌کند؛
+  // در این حالت مستقیم و غیرمسدودکننده فقط در IndexedDB ذخیره می‌کنیم.
+  const bypassLocalStorage = Array.isArray(value) && value.length > LOCAL_STORAGE_MAX_ARRAY_ITEMS;
+
+  if (bypassLocalStorage) {
+    try {
+      localStorage.removeItem(key);
+      localStorage.setItem(`${key}.idbOnly`, '1');
+    } catch {
+      // نادیده گرفتن محدودیت localStorage؛ IndexedDB منبع اصلی است
+    }
+    void dbWriteValue(key, value);
+    return;
+  }
+
   const localOk = writeJSON(key, value);
   try {
     if (localOk) {
       localStorage.removeItem(`${key}.idbOnly`);
     } else {
+      localStorage.removeItem(key);
       localStorage.setItem(`${key}.idbOnly`, '1');
     }
   } catch {
@@ -19,7 +37,7 @@ const persistEverywhere = (key: string, value: unknown) => {
 /**
  * هوک ذخیره‌سازی دوگانه (IndexedDB + localStorage):
  * - خواندن هم‌زمان از localStorage برای باز شدن فوری بدون پرش تصویر
- * - همگام‌سازی خودکار با دیتابیس IndexedDB برای نگهداری مطمئن پلی‌لیست‌ها، کتابخانه‌های حجیم و تنظیمات روی ویندوز
+ * - همگام‌سازی خودکار با دیتابیس IndexedDB برای نگهداری مطمئن پلی‌لیست‌ها و کتابخانه‌های چند هزار آهنگی بدون کندی رابط کاربری
  */
 export const usePersistentState = <T>(
   key: string,
@@ -55,7 +73,9 @@ export const usePersistentState = <T>(
       if (dbValue !== undefined && (!isValid || isValid(dbValue))) {
         if (idbOnly) {
           setValue(dbValue as T);
-          writeJSON(key, dbValue);
+          if (!Array.isArray(dbValue) || dbValue.length <= LOCAL_STORAGE_MAX_ARRAY_ITEMS) {
+            writeJSON(key, dbValue);
+          }
         }
       } else {
         // اولین اجرا یا مهاجرت داده‌ی فعلی به IndexedDB
@@ -88,7 +108,7 @@ export const usePersistentState = <T>(
         dirtyRef.current = false;
         persistEverywhere(latestRef.current.key, latestRef.current.value);
       }
-    }, 180);
+    }, 320);
 
     return () => {
       if (timerRef.current) {

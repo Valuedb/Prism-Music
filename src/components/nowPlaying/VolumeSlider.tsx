@@ -8,7 +8,7 @@ interface VolumeSliderProps {
 }
 
 /**
- * اسلایدر ولوم افقی با آیکون‌های استاندارد iOS و پشتیبانی از Mute سریع
+ * اسلایدر ولوم افقی با پشتیبانی از Mute سریع
  */
 export const VolumeSlider = memo(({
   volume,

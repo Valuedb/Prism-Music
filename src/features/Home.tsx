@@ -23,7 +23,7 @@ import type { HomeLayoutStyle, Playlist, SleepTimerState, Song } from '../types'
 import type { SearchNavigateTarget } from '../components/SearchBar';
 import { CoverImage } from '../components/CoverImage';
 import { MarqueeText } from '../components/MarqueeText';
-import { IOSSquircleIcon } from '../components/IOSSettingsPrimitives';
+import { SettingsIconBadge } from '../components/SettingsPrimitives';
 import { audioEffects } from '../player/audioEffects';
 import { getBidiTruncateStyle } from '../utils/bidi';
 import { withAlpha } from '../utils/color';
@@ -90,7 +90,7 @@ interface TopArtistEntry {
 
 const WAVE_REST_PROFILE = [0.24, 0.4, 0.58, 0.78, 0.94, 0.78, 0.58, 0.4, 0.24] as const;
 const WAVE_ACTIVE_ENVELOPE = [0.46, 0.66, 0.82, 0.94, 1.0, 0.94, 0.82, 0.66, 0.46] as const;
-const IOS_EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
+const MOTION_EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
 export const Home: React.FC<HomeProps> = ({
   songs,
@@ -489,7 +489,7 @@ export const Home: React.FC<HomeProps> = ({
       : {
           initial: { opacity: 0, y: 10 },
           animate: { opacity: 1, y: 0 },
-          transition: { duration: 0.26, delay, ease: IOS_EASE },
+          transition: { duration: 0.26, delay, ease: MOTION_EASE },
         };
 
   // کارت دسترسی سریع (مشترک در هر دو چیدمان)
@@ -1186,9 +1186,9 @@ export const Home: React.FC<HomeProps> = ({
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '10px' : '12px', minWidth: 0 }}>
-                  <IOSSquircleIcon color={row.color} gradientTo={row.gradientTo} size={30}>
+                  <SettingsIconBadge color={row.color} gradientTo={row.gradientTo} size={30}>
                     {row.icon}
-                  </IOSSquircleIcon>
+                  </SettingsIconBadge>
                   <span
                     style={{
                       fontSize: '0.9063rem',
@@ -1428,7 +1428,7 @@ export const Home: React.FC<HomeProps> = ({
             initial={reduceMotion ? false : { opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -8 }}
-            transition={{ duration: 0.22, ease: IOS_EASE }}
+            transition={{ duration: 0.22, ease: MOTION_EASE }}
           >
             {/* کارت پهن Continue Listening / Now Playing */}
             <div
@@ -1695,7 +1695,7 @@ export const Home: React.FC<HomeProps> = ({
             initial={reduceMotion ? false : { opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -8 }}
-            transition={{ duration: 0.22, ease: IOS_EASE }}
+            transition={{ duration: 0.22, ease: MOTION_EASE }}
           >
             {/* ردیف ۱: ویجت مدرن در یک سمت + کنترل‌های سریع، دسترسی سریع و آرتیست‌های برتر در سمت دیگر */}
             <div
@@ -1949,7 +1949,7 @@ export const Home: React.FC<HomeProps> = ({
                         initial={reduceMotion ? false : { opacity: 0, scale: 0.72, y: 4 }}
                         animate={{ opacity: 1, scale: 1, y: 0 }}
                         exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.72, y: -4 }}
-                        transition={{ duration: 0.16, ease: IOS_EASE }}
+                        transition={{ duration: 0.16, ease: MOTION_EASE }}
                         style={{
                           display: 'inline-flex',
                           alignItems: 'center',

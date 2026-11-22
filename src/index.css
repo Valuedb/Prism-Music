@@ -27,7 +27,7 @@ body {
   overscroll-behavior-y: none;
 }
 
-/* اسکرول‌بار باریک و ظریف مشابه macOS / iPadOS */
+/* اسکرول‌بار باریک و ظریف */
 * {
   scrollbar-width: thin;
   scrollbar-color: rgba(128, 128, 140, 0.28) transparent;

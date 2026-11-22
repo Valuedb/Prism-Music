@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, lazy, Suspense, useRef } from 'react';
 import { motion, AnimatePresence, MotionConfig } from 'framer-motion';
 import { Upload } from 'lucide-react';
-import { DEMO_SONGS } from './player/demoSongs';
 import { PlayerBar } from './components/PlayerBar';
 import { TopBar } from './components/TopBar';
 import { SideBar } from './components/SideBar';
@@ -52,6 +51,10 @@ import {
   syncDesktopFolderResult,
 } from './utils/desktopBridge';
 import { extractDominantHex } from './utils/artworkColor';
+
+const isLegacyDemoTrack = (song: Song) =>
+  (song.id === 'demo-1' || song.id === 'demo-2' || song.id === 'demo-3') &&
+  song.fileUrl.startsWith('data:audio/wav;base64,');
 
 // بارگذاری تنبل صفحات غیر اول برای سرعت بالای راه‌اندازی روی ویندوز
 const AllSongs = lazy(() => import('./features/AllSongs').then((m) => ({ default: m.AllSongs })));
@@ -160,7 +163,13 @@ function App() {
     return () => window.removeEventListener('touchstart', handleTouchStart);
   }, []);
 
-  const [songs, setSongs] = usePersistentState<Song[]>(STORAGE_KEYS.library, DEMO_SONGS, isSongList);
+  const [songs, setSongs] = usePersistentState<Song[]>(STORAGE_KEYS.library, [], isSongList);
+
+  useEffect(() => {
+    if (songs.some(isLegacyDemoTrack)) {
+      setSongs((prev) => prev.filter((song) => !isLegacyDemoTrack(song)));
+    }
+  }, [songs, setSongs]);
   const [playlists, setPlaylists] = usePersistentState<Playlist[]>(STORAGE_KEYS.playlists, [], isPlaylistList);
   const [customFolders, setCustomFolders] = usePersistentState<string[]>(
     STORAGE_KEYS.folders,
@@ -676,41 +685,61 @@ function App() {
     displaySettings.reduceMotion,
   ]);
 
+  const markSongStarted = useCallback(
+    (id: string) => {
+      const now = Date.now();
+      const target = songsRef.current.find((s) => s.id === id);
+      setSongs((prev) =>
+        prev.map((s) => (s.id === id ? { ...s, lastPlayedAt: now } : s))
+      );
+      setPlaylists((prev) =>
+        prev.map((p) => ({
+          ...p,
+          songs: p.songs.map((s) => (s.id === id ? { ...s, lastPlayedAt: now } : s)),
+        }))
+      );
+      if (target && player.currentSong?.id === id) {
+        player.syncSong({ ...target, lastPlayedAt: now });
+      }
+    },
+    [player, setPlaylists, setSongs]
+  );
+
   /** ثبت خودکار زمان آخرین پخش برای تغییر ترک از طریق صف، کراس‌فید، گپ‌لس یا میانبرها */
   useEffect(() => {
     const currentId = player.currentSong?.id;
     if (player.playToken <= 0 || !currentId) return;
-    const now = Date.now();
-    setSongs((prev) =>
-      prev.map((s) => (s.id === currentId ? { ...s, lastPlayedAt: now } : s))
-    );
-    setPlaylists((prev) =>
-      prev.map((p) => ({
-        ...p,
-        songs: p.songs.map((s) => (s.id === currentId ? { ...s, lastPlayedAt: now } : s)),
-      }))
-    );
-  }, [player.playToken, player.currentSong?.id, setPlaylists, setSongs]);
+    markSongStarted(currentId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [player.playToken, player.currentSong?.id]);
 
   /** وقتی یک پخش «واقعی» حساب شد، شمارنده‌ی پخش زیاد می‌شه و تاریخ پخش ثبت می‌شه */
   const handleSongPlayed = useCallback(
     (id: string) => {
       const now = Date.now();
+      const existing = songsRef.current.find((s) => s.id === id);
       setSongs((prev) =>
         prev.map((s) =>
-          s.id === id ? { ...s, playCount: s.playCount + 1, lastPlayedAt: now } : s
+          s.id === id ? { ...s, playCount: (s.playCount || 0) + 1, lastPlayedAt: now } : s
         )
       );
       setPlaylists((prev) =>
         prev.map((p) => ({
           ...p,
           songs: p.songs.map((s) =>
-            s.id === id ? { ...s, playCount: s.playCount + 1, lastPlayedAt: now } : s
+            s.id === id ? { ...s, playCount: (s.playCount || 0) + 1, lastPlayedAt: now } : s
           ),
         }))
       );
+      if (existing && player.currentSong?.id === id) {
+        player.syncSong({
+          ...existing,
+          playCount: (existing.playCount || 0) + 1,
+          lastPlayedAt: now,
+        });
+      }
     },
-    [setPlaylists, setSongs]
+    [player, setPlaylists, setSongs]
   );
 
   /** تغییر وضعیت آهنگ محبوب (Favorite) */
@@ -748,12 +777,9 @@ function App() {
   /** پخش یک آهنگ از لیست و به‌روزرسانی تاریخچه پخش */
   const handlePlaySongFromList = useCallback(
     (song: Song, list: Song[]) => {
-      setSongs((prev) =>
-        prev.map((s) => (s.id === song.id ? { ...s, lastPlayedAt: Date.now() } : s))
-      );
       player.playSongFromList(song, list);
     },
-    [player, setSongs]
+    [player]
   );
 
   const handleShuffleAll = useCallback(() => {
@@ -1607,6 +1633,7 @@ function App() {
           setIsShuffle={player.setShuffle}
           playToken={player.playToken}
           onSongPlayed={handleSongPlayed}
+          onSongStarted={markSongStarted}
           onToggleFavorite={toggleFavoriteSong}
           onUpdateSong={updateSong}
           t={t}

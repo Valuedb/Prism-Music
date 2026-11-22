@@ -20,7 +20,7 @@ import { QueueDrawer } from './QueueDrawer';
 import { MarqueeText } from './MarqueeText';
 import { SongInfoModal } from './SongInfoModal';
 import { EditSongModal } from './EditSongModal';
-import { IOSConfirmDialog } from './IOSSettingsPrimitives';
+import { ConfirmDialog } from './SettingsPrimitives';
 import { ProgressScrubber } from './ProgressScrubber';
 import { audioEffects } from '../player/audioEffects';
 
@@ -71,6 +71,7 @@ interface FullScreenPlayerProps {
   currentTime: number;
   duration: number;
   onSeek: (time: number) => void;
+  getLiveTime?: () => { currentTime: number; duration: number } | null;
   volume: number;
   maxVolFactor?: number;
   onVolumeChange: (newVol: number) => void;
@@ -243,6 +244,7 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
   currentTime,
   duration,
   onSeek,
+  getLiveTime,
   volume,
   maxVolFactor = 1,
   onVolumeChange,
@@ -277,6 +279,15 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
   const [lyricsDraft, setLyricsDraft] = useState('');
   const [isHoveringVolume, setIsHoveringVolume] = useState(false);
   const [isHeartPopping, setIsHeartPopping] = useState(false);
+  const heartTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (heartTimerRef.current) {
+        window.clearTimeout(heartTimerRef.current);
+      }
+    };
+  }, []);
   const [coverError, setCoverError] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [hoveredMenuItem, setHoveredMenuItem] = useState<'info' | 'playlist' | 'settings' | 'delete' | null>(null);
@@ -559,6 +570,8 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
                 backgroundSize: 'cover',
                 backgroundPosition: 'center',
                 filter: 'blur(85px) brightness(0.35) saturate(1.7)',
+                willChange: 'transform, opacity',
+                contain: 'layout paint',
                 pointerEvents: 'none',
               }}
             />
@@ -597,7 +610,7 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
               maxWidth: showLyrics
                 ? isMobile
                   ? '460px'
-                  : '880px'
+                  : '780px'
                 : isMobile
                 ? '420px'
                 : '540px',
@@ -692,19 +705,19 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', zIndex: 2 }}>
                   {onToggleFavorite && (
                     <motion.button
-                      whileTap={{ scale: 0.88 }}
-                      whileHover={{ opacity: 0.82 }}
-                      animate={
-                        isHeartPopping
-                          ? { scale: [1, 1.35, 0.9, 1.12, 1] }
-                          : { scale: 1 }
-                      }
-                      transition={{ duration: 0.32, ease: 'easeOut' }}
+                      whileTap={{ scale: 0.9 }}
+                      whileHover={{ opacity: 0.84 }}
                       onClick={(e) => {
                         e.stopPropagation();
                         onToggleFavorite(currentSong.id);
+                        if (heartTimerRef.current) {
+                          window.clearTimeout(heartTimerRef.current);
+                        }
                         setIsHeartPopping(true);
-                        setTimeout(() => setIsHeartPopping(false), 450);
+                        heartTimerRef.current = window.setTimeout(() => {
+                          setIsHeartPopping(false);
+                          heartTimerRef.current = null;
+                        }, 170);
                       }}
                       title={
                         currentSong.isFavorite
@@ -725,12 +738,24 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
                           : 'none',
                       }}
                     >
-                      <Heart
-                        size={19}
-                        fill={currentSong.isFavorite ? '#ff3b30' : 'none'}
-                        color={currentSong.isFavorite ? '#ff3b30' : '#ffffff'}
-                        strokeWidth={currentSong.isFavorite ? 0 : 2}
-                      />
+                      <motion.span
+                        initial={false}
+                        animate={{ scale: isHeartPopping ? 1.18 : 1 }}
+                        transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          willChange: 'transform',
+                        }}
+                      >
+                        <Heart
+                          size={19}
+                          fill={currentSong.isFavorite ? '#ff3b30' : 'none'}
+                          color={currentSong.isFavorite ? '#ff3b30' : '#ffffff'}
+                          strokeWidth={2}
+                        />
+                      </motion.span>
                     </motion.button>
                   )}
 
@@ -1510,7 +1535,15 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
                 transition: { duration: 0.18, ease: [0.32, 0.72, 0, 1] },
               }}
               transition={{ duration: 0.38, delay: 0.1, ease: [0.22, 1, 0.36, 1] }}
-              style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: isMobile ? '10px' : '14px', flexShrink: 0 }}
+              style={{
+                width: '100%',
+                maxWidth: isMobile ? '420px' : '540px',
+                margin: '0 auto',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: isMobile ? '10px' : '14px',
+                flexShrink: 0,
+              }}
             >
               {/* دکمه‌های متن ترانه (چپ) و صف پخش (راست) دقیقاً بالای نوار پیشرفت */}
               <div
@@ -1585,14 +1618,14 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
                 currentTime={currentTime}
                 duration={duration}
                 onSeek={onSeek}
+                isPlaying={isPlaying}
+                getLiveTime={getLiveTime}
                 primaryColor={primaryColor}
                 trackBgColor="rgba(255, 255, 255, 0.22)"
                 timeTextColor={artistColor}
                 glowColor={glowColor}
                 isDarkSurface
-                tooltipBgColor="rgba(20, 20, 28, 0.94)"
                 tooltipTextColor="#ffffff"
-                tooltipBorderColor="rgba(255, 255, 255, 0.18)"
                 variant="fullscreen"
               />
 
@@ -1803,10 +1836,15 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
                         position: 'absolute',
                         left: 0,
                         right: 0,
-                        height: isHoveringVolume ? '5px' : '3px',
+                        height: '5px',
                         backgroundColor: 'rgba(255, 255, 255, 0.2)',
                         borderRadius: '999px',
-                        transition: 'height 0.15s ease',
+                        transformOrigin: 'center center',
+                        transform: isHoveringVolume ? 'scaleY(1)' : 'scaleY(0.6)',
+                        transition: 'transform 0.18s cubic-bezier(0.22, 1, 0.36, 1)',
+                        willChange: 'transform',
+                        overflow: 'hidden',
+                        pointerEvents: 'none',
                       }}
                     >
                       <div
@@ -1814,7 +1852,7 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
                           width: `${volumePercent}%`,
                           height: '100%',
                           backgroundColor: primaryColor,
-                          borderRadius: '999px',
+                          borderRadius: 0,
                         }}
                       />
                     </div>
@@ -2084,7 +2122,7 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
               document.body
             )}
 
-          <IOSConfirmDialog
+          <ConfirmDialog
             isOpen={pendingDeleteConfirm}
             title={t.deleteSong || 'حذف آهنگ'}
             message={t.deleteConfirm}

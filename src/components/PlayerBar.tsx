@@ -50,6 +50,7 @@ interface PlayerBarProps {
   setIsShuffle: (val: boolean) => void;
   playToken: number;
   onSongPlayed: (id: string) => void;
+  onSongStarted?: (id: string) => void;
   onToggleFavorite?: (id: string) => void;
   t: any;
   theme: any;
@@ -85,7 +86,10 @@ const applyDeckPlaybackParams = (
   preservePitch: boolean
 ) => {
   if (!audio) return;
-  audio.volume = vol;
+  const targetElementVol = audioEffects.isDeckAttached(audio) ? 1 : vol;
+  if (Math.abs(audio.volume - targetElementVol) > 1e-4) {
+    audio.volume = targetElementVol;
+  }
   const clampedRate = Math.max(0.5, Math.min(2, speed || 1));
   if (audio.playbackRate !== clampedRate) {
     audio.playbackRate = clampedRate;
@@ -110,6 +114,7 @@ export const PlayerBar = ({
   setIsShuffle,
   playToken,
   onSongPlayed,
+  onSongStarted,
   onToggleFavorite,
   t,
   theme,
@@ -165,6 +170,15 @@ export const PlayerBar = ({
   const [isHoveringVolume, setIsHoveringVolume] = useState(false);
   const [isNowPlayingOpen, setIsNowPlayingOpen] = useState(false);
   const [isHeartPopping, setIsHeartPopping] = useState(false);
+  const heartTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (heartTimerRef.current) {
+        window.clearTimeout(heartTimerRef.current);
+      }
+    };
+  }, []);
 
   const maxVolFactor = Math.max(0.2, Math.min(1, (soundSettings.maxVolumeLimit ?? 100) / 100));
   const effectiveVolume = Math.min(volume, maxVolFactor);
@@ -176,6 +190,7 @@ export const PlayerBar = ({
   const lastPlaybackSaveRef = useRef(0);
   const pendingResumeTimeRef = useRef<number | null>(null);
   const pauseFadeTimerRef = useRef<number | null>(null);
+  const suppressNextPauseSyncRef = useRef(false);
   const crossfadingToIdRef = useRef<string | null>(null);
   const crossfadeCleanupTimerRef = useRef<number | null>(null);
   const preloadedRef = useRef<{ songId: string; url: string } | null>(null);
@@ -187,6 +202,7 @@ export const PlayerBar = ({
   const playPrevRef = useRef(playPrev);
   const peekNextRef = useRef(peekNext);
   const onToggleFavoriteRef = useRef(onToggleFavorite);
+  const onSongStartedRef = useRef(onSongStarted);
   const songDurationRef = useRef<number>(currentSong?.duration || 0);
 
   useEffect(() => {
@@ -194,11 +210,28 @@ export const PlayerBar = ({
     playPrevRef.current = playPrev;
     peekNextRef.current = peekNext;
     onToggleFavoriteRef.current = onToggleFavorite;
+    onSongStartedRef.current = onSongStarted;
     songDurationRef.current = currentSong?.duration || 0;
   });
 
-  // همگام‌سازی ولوم ایمن، سرعت پخش و حفظ زیر و بمی روی هر دو دک صوتی
+  const getLivePlaybackTime = useCallback(() => {
+    const audio = getActiveAudio();
+    if (!audio) return null;
+    const liveDur =
+      Number.isFinite(audio.duration) && audio.duration > 0
+        ? audio.duration
+        : songDurationRef.current > 0
+        ? songDurationRef.current
+        : 0;
+    return {
+      currentTime: Number.isFinite(audio.currentTime) ? audio.currentTime : 0,
+      duration: liveDur,
+    };
+  }, [getActiveAudio]);
+
+  // همگام‌سازی ولوم ایمن (با رمپ ضدخش Web Audio)، سرعت پخش و حفظ زیر و بمی روی هر دو دک صوتی
   useEffect(() => {
+    audioEffects.setMasterVolume(effectiveVolume);
     applyDeckPlaybackParams(
       audioRefA.current,
       effectiveVolume,
@@ -348,6 +381,7 @@ export const PlayerBar = ({
 
     setCurrentTime(0);
     pendingResumeTimeRef.current = null;
+    suppressNextPauseSyncRef.current = false;
     audioEffects.resumeContext();
     audioEffects.setDeckGain(audio, 0.001, 0);
     audio
@@ -365,11 +399,16 @@ export const PlayerBar = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [songUrl, playToken, handlePlayState]);
 
-  // ذخیره زمان فعلی پخش هنگام بستن پنجره ویندوز
+  const currentTimeRef = useRef(currentTime);
+  useEffect(() => {
+    currentTimeRef.current = currentTime;
+  }, [currentTime]);
+
+  // ذخیره زمان فعلی پخش هنگام بستن پنجره ویندوز (بدون ثبت مجدد لیسنر در هر تیک پخش)
   useEffect(() => {
     const savePlaybackPosition = () => {
       if (!currentSong) return;
-      const tPos = getActiveAudio()?.currentTime ?? currentTime;
+      const tPos = getActiveAudio()?.currentTime ?? currentTimeRef.current;
       writeJSON(STORAGE_KEYS.lastPlayback, { songId: currentSong.id, currentTime: tPos });
     };
     window.addEventListener('beforeunload', savePlaybackPosition);
@@ -378,17 +417,21 @@ export const PlayerBar = ({
       window.removeEventListener('beforeunload', savePlaybackPosition);
       window.removeEventListener('pagehide', savePlaybackPosition);
     };
-  }, [currentSong, currentTime, getActiveAudio]);
+  }, [currentSong, getActiveAudio]);
 
   const handleTimeUpdate = (deck: 'A' | 'B') => {
     if (deck !== activeDeckRef.current) return;
+    if (pauseFadeTimerRef.current) return;
     const audio = getActiveAudio();
-    if (!audio) return;
-    if (!isPlaying && !audio.paused && !pauseFadeTimerRef.current) {
+    if (!audio || audio.paused) return;
+    if (!isPlaying) {
       handlePlayState(true);
     }
     const nowTime = audio.currentTime;
-    const totalDur = audio.duration || 0;
+    const totalDur =
+      Number.isFinite(audio.duration) && audio.duration > 0
+        ? audio.duration
+        : songDurationRef.current || 0;
     setCurrentTime(nowTime);
     setDuration(totalDur);
 
@@ -403,7 +446,13 @@ export const PlayerBar = ({
     }
 
     if (currentSong && !countedRef.current) {
-      const threshold = Math.min(PLAY_COUNT_THRESHOLD_SECONDS, (audio.duration || Infinity) / 2);
+      const effectiveDur =
+        Number.isFinite(totalDur) && totalDur > 0
+          ? totalDur
+          : songDurationRef.current > 0
+          ? songDurationRef.current
+          : Infinity;
+      const threshold = Math.min(PLAY_COUNT_THRESHOLD_SECONDS, effectiveDur / 2);
       if (nowTime >= threshold) {
         countedRef.current = true;
         onSongPlayed(currentSong.id);
@@ -505,11 +554,14 @@ export const PlayerBar = ({
         onAfterPause?.();
         return;
       }
-      const fadeSec = soundSettings.fadeOnPlayPause ? 0.16 : 0.026;
-      const waitMs = soundSettings.fadeOnPlayPause ? 185 : 34;
+      const fadeSec = soundSettings.fadeOnPlayPause ? 0.06 : 0.018;
+      const waitMs = soundSettings.fadeOnPlayPause ? 68 : 24;
+      const snapTime = Number.isFinite(audio.currentTime) ? audio.currentTime : 0;
+      setCurrentTime(snapTime);
       audioEffects.setDeckGain(audio, 0, fadeSec);
       handlePlayState(false);
       pauseFadeTimerRef.current = window.setTimeout(() => {
+        suppressNextPauseSyncRef.current = true;
         audio.pause();
         // گین را در 0 نگه می‌داریم و به 1 برنمی‌گردانیم تا هیچ تیک صوتی در لحظه توقف رخ ندهد
         audioEffects.setDeckGain(audio, 0, 0);
@@ -529,24 +581,29 @@ export const PlayerBar = ({
     if (pauseFadeTimerRef.current) {
       window.clearTimeout(pauseFadeTimerRef.current);
       pauseFadeTimerRef.current = null;
-      audioEffects.setDeckGain(audio, 1, soundSettings.fadeOnPlayPause ? 0.16 : 0.022);
+      suppressNextPauseSyncRef.current = false;
+      audioEffects.setDeckGain(audio, 1, soundSettings.fadeOnPlayPause ? 0.14 : 0.022);
       handlePlayState(true);
       return;
     }
 
     if (audio.paused) {
+      suppressNextPauseSyncRef.current = false;
       audioEffects.setDeckGain(audio, 0.001, 0);
       audio
         .play()
         .then(() => {
-          audioEffects.setDeckGain(audio, 1, soundSettings.fadeOnPlayPause ? 0.2 : 0.022);
+          audioEffects.setDeckGain(audio, 1, soundSettings.fadeOnPlayPause ? 0.18 : 0.022);
           handlePlayState(true);
+          if (playToken === 0) {
+            onSongStartedRef.current?.(currentSong.id);
+          }
         })
         .catch(console.error);
     } else {
       fadeOutAndPauseDeck(audio);
     }
-  }, [currentSong, fadeOutAndPauseDeck, getActiveAudio, handlePlayState, soundSettings.fadeOnPlayPause]);
+  }, [currentSong, fadeOutAndPauseDeck, getActiveAudio, handlePlayState, playToken, soundSettings.fadeOnPlayPause]);
 
   useEffect(() => {
     const handleExternalToggle = () => {
@@ -593,6 +650,7 @@ export const PlayerBar = ({
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const vol = Math.min(maxVolFactor, Number(e.target.value));
     setVolume(vol);
+    audioEffects.setMasterVolume(vol);
     applyDeckPlaybackParams(audioRefA.current, vol, soundSettings.playbackSpeed, soundSettings.preservePitch);
     applyDeckPlaybackParams(audioRefB.current, vol, soundSettings.playbackSpeed, soundSettings.preservePitch);
   };
@@ -619,6 +677,7 @@ export const PlayerBar = ({
     (newVol: number) => {
       const clamped = Math.max(0, Math.min(maxVolFactor, Math.round(newVol * 100) / 100));
       setVolume(clamped);
+      audioEffects.setMasterVolume(clamped);
       applyDeckPlaybackParams(
         audioRefA.current,
         clamped,
@@ -700,9 +759,28 @@ export const PlayerBar = ({
     });
   }, [currentSong, isPlaying, fadeOutAndPauseDeck, getActiveAudio, handlePlayState, soundSettings.fadeOnPlayPause]);
 
+  const handleDurationSync = (deck: 'A' | 'B') => {
+    if (deck !== activeDeckRef.current) return;
+    const audio = getActiveAudio();
+    if (!audio) return;
+    if (Number.isFinite(audio.duration) && audio.duration > 0) {
+      setDuration(audio.duration);
+    }
+  };
+
   const handleSongEnd = (deck: 'A' | 'B') => {
     if (deck !== activeDeckRef.current) return;
+    if (currentSong && !countedRef.current) {
+      countedRef.current = true;
+      onSongPlayed(currentSong.id);
+    }
     if (sleepTimer?.mode === 'songEnd') {
+      const active = getActiveAudio();
+      const endDur =
+        active && Number.isFinite(active.duration) && active.duration > 0
+          ? active.duration
+          : duration;
+      if (endDur > 0) setCurrentTime(endDur);
       handlePlayState(false);
       onClearSleepTimer?.();
       return;
@@ -712,6 +790,8 @@ export const PlayerBar = ({
       if (audio) {
         countedRef.current = false;
         audio.currentTime = 0;
+        setCurrentTime(0);
+        if (currentSong) onSongStartedRef.current?.(currentSong.id);
         audio.play().catch(console.error);
       }
       return;
@@ -761,7 +841,15 @@ export const PlayerBar = ({
       }
     }
 
-    if (!playNext()) handlePlayState(false);
+    if (!playNext()) {
+      const active = getActiveAudio();
+      const endDur =
+        active && Number.isFinite(active.duration) && active.duration > 0
+          ? active.duration
+          : duration;
+      if (endDur > 0) setCurrentTime(endDur);
+      handlePlayState(false);
+    }
   };
 
   // بازیابی خودکار از IndexedDB برای ترک‌های کپی‌شده، یا علامت‌گذاری فایل مفقود برای ترک‌های متصل به هارد
@@ -970,17 +1058,14 @@ export const PlayerBar = ({
               currentTime={currentTime}
               duration={duration}
               onSeek={handleSeek}
+              isPlaying={isPlaying}
+              getLiveTime={getLivePlaybackTime}
               primaryColor={theme.colors.primary}
               trackBgColor={theme.isDark ? 'rgba(255, 255, 255, 0.18)' : 'rgba(0, 0, 0, 0.1)'}
               timeTextColor={artistColor}
               glowColor={glowColor}
               isDarkSurface={theme.isDark}
-              tooltipBgColor={withAlpha(
-                theme.colors.surfaceSolid || theme.colors.background,
-                theme.isDark ? 0.94 : 0.96
-              )}
               tooltipTextColor={theme.colors.textPrimary}
-              tooltipBorderColor={theme.colors.border}
               variant="bar"
               seekStepSeconds={playbackPrefs.seekStepSeconds}
             />
@@ -1271,16 +1356,20 @@ export const PlayerBar = ({
           </div>
 
           {currentSong && onToggleFavorite && (
-            <motion.button
+            <button
               type="button"
               className="pb-btn"
-              animate={isHeartPopping ? { scale: [1, 1.32, 0.92, 1.08, 1] } : { scale: 1 }}
-              transition={{ duration: 0.3, ease: 'easeOut' }}
               onClick={(e) => {
                 e.stopPropagation();
                 onToggleFavorite(currentSong.id);
+                if (heartTimerRef.current) {
+                  window.clearTimeout(heartTimerRef.current);
+                }
                 setIsHeartPopping(true);
-                setTimeout(() => setIsHeartPopping(false), 400);
+                heartTimerRef.current = window.setTimeout(() => {
+                  setIsHeartPopping(false);
+                  heartTimerRef.current = null;
+                }, 170);
               }}
               title={
                 currentSong.isFavorite
@@ -1296,13 +1385,25 @@ export const PlayerBar = ({
                 flexShrink: 0,
               }}
             >
-              <Heart
-                size={18}
-                fill={currentSong.isFavorite ? '#ff3b30' : 'none'}
-                color={currentSong.isFavorite ? '#ff3b30' : iconInactiveColor}
-                strokeWidth={currentSong.isFavorite ? 0 : 2}
-              />
-            </motion.button>
+              <motion.span
+                initial={false}
+                animate={{ scale: isHeartPopping ? 1.18 : 1 }}
+                transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  willChange: 'transform',
+                }}
+              >
+                <Heart
+                  size={18}
+                  fill={currentSong.isFavorite ? '#ff3b30' : 'none'}
+                  color={currentSong.isFavorite ? '#ff3b30' : iconInactiveColor}
+                  strokeWidth={2}
+                />
+              </motion.span>
+            </button>
           )}
 
           <button
@@ -1329,6 +1430,8 @@ export const PlayerBar = ({
       )}
       <audio
         ref={audioRefA}
+        onLoadedMetadata={() => handleDurationSync('A')}
+        onDurationChange={() => handleDurationSync('A')}
         onTimeUpdate={() => handleTimeUpdate('A')}
         onEnded={() => handleSongEnd('A')}
         onPlay={() => {
@@ -1340,14 +1443,23 @@ export const PlayerBar = ({
           if (activeDeckRef.current === 'A') handlePlayState(true);
         }}
         onPause={() => {
-          if (activeDeckRef.current === 'A' && !pauseFadeTimerRef.current) {
+          if (activeDeckRef.current !== 'A' || pauseFadeTimerRef.current) return;
+          if (suppressNextPauseSyncRef.current) {
+            suppressNextPauseSyncRef.current = false;
             handlePlayState(false);
+            return;
           }
+          if (audioRefA.current && isPlaying) {
+            setCurrentTime(audioRefA.current.currentTime || 0);
+          }
+          handlePlayState(false);
         }}
         onError={() => handleAudioError('A')}
       />
       <audio
         ref={audioRefB}
+        onLoadedMetadata={() => handleDurationSync('B')}
+        onDurationChange={() => handleDurationSync('B')}
         onTimeUpdate={() => handleTimeUpdate('B')}
         onEnded={() => handleSongEnd('B')}
         onPlay={() => {
@@ -1359,9 +1471,16 @@ export const PlayerBar = ({
           if (activeDeckRef.current === 'B') handlePlayState(true);
         }}
         onPause={() => {
-          if (activeDeckRef.current === 'B' && !pauseFadeTimerRef.current) {
+          if (activeDeckRef.current !== 'B' || pauseFadeTimerRef.current) return;
+          if (suppressNextPauseSyncRef.current) {
+            suppressNextPauseSyncRef.current = false;
             handlePlayState(false);
+            return;
           }
+          if (audioRefB.current && isPlaying) {
+            setCurrentTime(audioRefB.current.currentTime || 0);
+          }
+          handlePlayState(false);
         }}
         onError={() => handleAudioError('B')}
       />
@@ -1377,6 +1496,7 @@ export const PlayerBar = ({
         currentTime={currentTime}
         duration={duration}
         onSeek={handleSeek}
+        getLiveTime={getLivePlaybackTime}
         volume={effectiveVolume}
         maxVolFactor={maxVolFactor}
         onVolumeChange={handleDirectVolumeChange}

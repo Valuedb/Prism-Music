@@ -1,4 +1,4 @@
-import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   clampTooltipCenterPx,
   computeScrubPosition,
@@ -16,13 +16,13 @@ export interface ProgressScrubberProps {
   timeTextColor: string;
   glowColor?: string;
   isDarkSurface?: boolean;
-  tooltipBgColor?: string;
   tooltipTextColor?: string;
-  tooltipBorderColor?: string;
   variant?: 'bar' | 'fullscreen';
   negativeRemaining?: boolean;
   seekStepSeconds?: number;
   ariaLabel?: string;
+  isPlaying?: boolean;
+  getLiveTime?: () => { currentTime: number; duration: number } | null;
 }
 
 interface HoverState {
@@ -45,23 +45,31 @@ export const ProgressScrubber = memo(({
   timeTextColor,
   glowColor,
   isDarkSurface = true,
-  tooltipBgColor,
   tooltipTextColor,
-  tooltipBorderColor,
   variant = 'bar',
   negativeRemaining = false,
   seekStepSeconds = 5,
   ariaLabel = 'Seek track position',
+  isPlaying = false,
+  getLiveTime,
 }: ProgressScrubberProps) => {
   const trackRef = useRef<HTMLDivElement>(null);
+  const fillRef = useRef<HTMLDivElement>(null);
+  const elapsedTextRef = useRef<HTMLSpanElement>(null);
+  const remainingTextRef = useRef<HTMLSpanElement>(null);
   const dragPointerIdRef = useRef<number | null>(null);
   const latestDragRef = useRef<DragState | null>(null);
   const onSeekRef = useRef(onSeek);
+  const getLiveTimeRef = useRef(getLiveTime);
   const activeSongKey = songKey || 'none';
 
   useEffect(() => {
     onSeekRef.current = onSeek;
   }, [onSeek]);
+
+  useEffect(() => {
+    getLiveTimeRef.current = getLiveTime;
+  }, [getLiveTime]);
 
   const [isHovering, setIsHovering] = useState(false);
   const [hoverState, setHoverState] = useState<HoverState | null>(null);
@@ -81,6 +89,96 @@ export const ProgressScrubber = memo(({
   const displayTime = isDraggingForCurrentSong ? dragState.time : safeCurrent;
   const progressPercent =
     safeDuration > 0 ? Math.min(100, Math.max(0, (displayTime / safeDuration) * 100)) : 0;
+  const progressRatio = progressPercent / 100;
+
+  const isLivePlaybackActive = isPlaying && !isDraggingForCurrentSong && Boolean(getLiveTime);
+  const safeDurationRef = useRef(safeDuration);
+  const negativeRemainingRef = useRef(negativeRemaining);
+
+  useEffect(() => {
+    safeDurationRef.current = safeDuration;
+  }, [safeDuration]);
+
+  useEffect(() => {
+    negativeRemainingRef.current = negativeRemaining;
+  }, [negativeRemaining]);
+
+  // همگام‌سازی فوری استاتیک نوار پیشرفت قبل از رندر فریم (بدون پرش هنگام توقف یا کشیدن)
+  useLayoutEffect(() => {
+    if (isLivePlaybackActive) return;
+    if (fillRef.current) {
+      fillRef.current.style.transform = `scaleX(${progressRatio})`;
+    }
+    if (elapsedTextRef.current) {
+      const nextElapsed = formatTrackTime(displayTime);
+      if (elapsedTextRef.current.textContent !== nextElapsed) {
+        elapsedTextRef.current.textContent = nextElapsed;
+      }
+    }
+    if (remainingTextRef.current) {
+      const nextRemaining = negativeRemaining
+        ? `-${formatTrackTime(Math.max(0, safeDuration - displayTime))}`
+        : formatTrackTime(safeDuration);
+      if (remainingTextRef.current.textContent !== nextRemaining) {
+        remainingTextRef.current.textContent = nextRemaining;
+      }
+    }
+  }, [
+    isLivePlaybackActive,
+    progressRatio,
+    displayTime,
+    safeDuration,
+    negativeRemaining,
+    activeSongKey,
+  ]);
+
+  // همگام‌سازی نرم ۶۰fps روی GPU هنگام پخش بدون ری‌استارت‌شدن در تیک‌های timeupdate
+  useEffect(() => {
+    if (!isLivePlaybackActive) return;
+
+    let rafId = 0;
+    const tick = () => {
+      const live = getLiveTimeRef.current?.();
+      if (live) {
+        const fallbackDur = safeDurationRef.current;
+        const liveDur =
+          Number.isFinite(live.duration) && live.duration > 0 ? live.duration : fallbackDur;
+        const rawCur = Number.isFinite(live.currentTime) && live.currentTime > 0 ? live.currentTime : 0;
+        const liveCur = liveDur > 0 ? Math.min(liveDur, rawCur) : rawCur;
+        const ratio = liveDur > 0 ? Math.min(1, Math.max(0, liveCur / liveDur)) : 0;
+
+        if (fillRef.current) {
+          fillRef.current.style.transform = `scaleX(${ratio})`;
+        }
+        if (elapsedTextRef.current) {
+          const nextElapsed = formatTrackTime(liveCur);
+          if (elapsedTextRef.current.textContent !== nextElapsed) {
+            elapsedTextRef.current.textContent = nextElapsed;
+          }
+        }
+        if (remainingTextRef.current) {
+          const nextRemaining = negativeRemainingRef.current
+            ? `-${formatTrackTime(Math.max(0, liveDur - liveCur))}`
+            : formatTrackTime(liveDur);
+          if (remainingTextRef.current.textContent !== nextRemaining) {
+            remainingTextRef.current.textContent = nextRemaining;
+          }
+        }
+        if (trackRef.current) {
+          const rounded = String(Math.round(liveCur));
+          if (trackRef.current.getAttribute('aria-valuenow') !== rounded) {
+            trackRef.current.setAttribute('aria-valuenow', rounded);
+          }
+        }
+      }
+      rafId = window.requestAnimationFrame(tick);
+    };
+
+    rafId = window.requestAnimationFrame(tick);
+    return () => {
+      window.cancelAnimationFrame(rafId);
+    };
+  }, [isLivePlaybackActive, activeSongKey]);
 
   const measurePointer = useCallback(
     (clientX: number): { ratio: number; time: number; trackWidth: number } | null => {
@@ -233,20 +331,14 @@ export const ProgressScrubber = memo(({
     ? activeHover.ratio * safeDuration
     : 0;
   const hoverTimeFormatted = formatTrackTime(hoverTime);
-  const halfBubbleEstimate = hoverTimeFormatted.length >= 6 ? 26 : 21;
+  const halfBubbleEstimate = hoverTimeFormatted.length >= 6 ? 22 : 15;
   const tooltipCenterPx = activeHover
     ? clampTooltipCenterPx(activeHover.ratio, activeHover.trackWidth, halfBubbleEstimate)
     : 0;
 
   const isFullscreen = variant === 'fullscreen';
-  const trackThickness = showHoverUi ? 6 : isFullscreen ? 4 : 3;
-  const resolvedTooltipBg =
-    tooltipBgColor ||
-    (isDarkSurface ? 'rgba(20, 20, 28, 0.94)' : 'rgba(255, 255, 255, 0.96)');
+  const restScaleY = isFullscreen ? 4 / 6 : 3 / 6;
   const resolvedTooltipText = tooltipTextColor || (isDarkSurface ? '#ffffff' : '#111827');
-  const resolvedTooltipBorder =
-    tooltipBorderColor ||
-    (isDarkSurface ? 'rgba(255, 255, 255, 0.16)' : 'rgba(15, 23, 42, 0.12)');
   const ghostHoverColor = withAlpha(primaryColor, isDarkSurface ? 0.34 : 0.28);
 
   const rightTimeLabel = negativeRemaining
@@ -265,6 +357,7 @@ export const ProgressScrubber = memo(({
       }}
     >
       <span
+        ref={elapsedTextRef}
         style={{
           fontSize: isFullscreen ? '0.7188rem' : '0.625rem',
           color: timeTextColor,
@@ -304,27 +397,23 @@ export const ProgressScrubber = memo(({
           outline: 'none',
         }}
       >
-        {/* تولتیپ زمان دقیق قسمت هاور شده */}
+        {/* نمایش زمان دقیق قسمت هاور شده به صورت متن ساده بدون کادر */}
         {showHoverUi && activeHover && (
           <div
             aria-hidden="true"
             style={{
               position: 'absolute',
-              bottom: isFullscreen ? 'calc(100% + 6px)' : 'calc(100% + 8px)',
-              left: `${tooltipCenterPx}px`,
-              transform: 'translateX(-50%)',
-              padding: '3px 7px',
-              borderRadius: '7px',
-              backgroundColor: resolvedTooltipBg,
+              bottom: isFullscreen ? 'calc(100% + 4px)' : 'calc(100% + 5px)',
+              left: 0,
+              transform: `translate3d(${Math.round(tooltipCenterPx)}px, 0, 0) translateX(-50%)`,
               color: resolvedTooltipText,
-              border: `1px solid ${resolvedTooltipBorder}`,
-              boxShadow: '0 6px 18px rgba(0, 0, 0, 0.32)',
-              backdropFilter: 'blur(12px)',
-              WebkitBackdropFilter: 'blur(12px)',
-              fontSize: '0.6875rem',
+              textShadow: isDarkSurface
+                ? '0 1px 6px rgba(0, 0, 0, 0.72)'
+                : '0 1px 4px rgba(255, 255, 255, 0.85)',
+              fontSize: isFullscreen ? '0.75rem' : '0.6875rem',
               fontWeight: 700,
               fontVariantNumeric: 'tabular-nums',
-              lineHeight: 1.25,
+              lineHeight: 1.1,
               whiteSpace: 'nowrap',
               pointerEvents: 'none',
               zIndex: 40,
@@ -334,16 +423,18 @@ export const ProgressScrubber = memo(({
           </div>
         )}
 
-        {/* خط پس‌زمینه و پرشدگی پیشرفت */}
+        {/* خط پس‌زمینه و پرشدگی پیشرفت با بزرگنمایی نرم روی GPU بدون لرزش */}
         <div
           style={{
             position: 'relative',
             width: '100%',
-            height: `${trackThickness}px`,
+            height: '6px',
             backgroundColor: trackBgColor,
-            backdropFilter: 'blur(10px)',
             borderRadius: '999px',
-            transition: 'height 0.15s ease',
+            transformOrigin: 'center center',
+            transform: showHoverUi ? 'scaleY(1)' : `scaleY(${restScaleY})`,
+            transition: 'transform 0.18s cubic-bezier(0.22, 1, 0.36, 1)',
+            willChange: 'transform',
             overflow: 'hidden',
             pointerEvents: 'none',
           }}
@@ -358,20 +449,23 @@ export const ProgressScrubber = memo(({
                 left: 0,
                 width: `${hoverPercent}%`,
                 backgroundColor: ghostHoverColor,
-                borderRadius: '999px',
+                borderRadius: 0,
               }}
             />
           )}
 
-          {/* خط پیشرفت پخش واقعی */}
+          {/* خط پیشرفت پخش واقعی با لبه پیشروی تیز و رندر نرم ۶۰fps */}
           <div
+            ref={fillRef}
             style={{
               position: 'relative',
-              width: `${progressPercent}%`,
+              width: '100%',
               height: '100%',
               backgroundColor: primaryColor,
-              borderRadius: '999px',
+              borderRadius: 0,
               boxShadow: glowColor,
+              transformOrigin: 'left center',
+              willChange: 'transform',
             }}
           />
         </div>
@@ -384,7 +478,7 @@ export const ProgressScrubber = memo(({
               position: 'absolute',
               left: `${hoverPercent}%`,
               top: '50%',
-              transform: 'translate(-50%, -50%)',
+              transform: 'translate3d(-50%, -50%, 0)',
               width: '2px',
               height: isFullscreen ? '12px' : '10px',
               borderRadius: '2px',
@@ -395,35 +489,10 @@ export const ProgressScrubber = memo(({
             }}
           />
         )}
-
-        {/* دستگیره دایره‌ای موقعیت فعلی هنگام هاور یا کشیدن */}
-        {canInteract && (
-          <div
-            aria-hidden="true"
-            style={{
-              position: 'absolute',
-              left: `${progressPercent}%`,
-              top: '50%',
-              width: isDraggingForCurrentSong ? '13px' : '11px',
-              height: isDraggingForCurrentSong ? '13px' : '11px',
-              borderRadius: '50%',
-              backgroundColor: '#ffffff',
-              border: `2px solid ${primaryColor}`,
-              boxShadow: '0 2px 8px rgba(0, 0, 0, 0.42)',
-              transform: showHoverUi
-                ? 'translate(-50%, -50%) scale(1)'
-                : 'translate(-50%, -50%) scale(0)',
-              opacity: showHoverUi ? 1 : 0,
-              transition: isDraggingForCurrentSong
-                ? 'transform 0.1s ease, opacity 0.12s ease'
-                : 'transform 0.16s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.16s ease',
-              pointerEvents: 'none',
-            }}
-          />
-        )}
       </div>
 
       <span
+        ref={remainingTextRef}
         style={{
           fontSize: isFullscreen ? '0.7188rem' : '0.625rem',
           color: timeTextColor,

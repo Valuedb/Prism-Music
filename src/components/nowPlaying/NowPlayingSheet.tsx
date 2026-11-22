@@ -129,7 +129,7 @@ export const NowPlayingSheet = memo(({
                 position: 'relative',
               }}
             >
-              {/* دستگیره سوایپ به پایین (iOS Drag Pill) */}
+              {/* دستگیره سوایپ به پایین */}
               <div
                 style={{
                   width: '40px',

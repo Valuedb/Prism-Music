@@ -124,9 +124,7 @@ export const SongInfoModal: React.FC<SongInfoModalProps> = ({
           : {
               icon: HardDrive,
               label: t.fileStorageSourceLabel || 'محل نگهداری',
-              value: song.fileUrl.startsWith('blob:')
-                ? t.storedInAppMemory || 'حافظه داخلی برنامه'
-                : t.builtInDemoTrack || 'فایل نمونه داخلی',
+              value: t.storedInAppMemory || 'حافظه داخلی برنامه',
             },
       ]
     : [];

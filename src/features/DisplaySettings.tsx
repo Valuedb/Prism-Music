@@ -6,6 +6,7 @@ import {
   Disc3,
   Eye,
   Image as ImageIcon,
+  ImageOff,
   Layers,
   LayoutGrid,
   LayoutTemplate,
@@ -36,13 +37,13 @@ import type {
 } from '../types';
 import { DEFAULT_DISPLAY_SETTINGS, type PaletteType, type ThemeMode } from '../theme';
 import {
-  IOSGroupedSection,
-  IOSRow,
-  IOSSegmentedControl,
-  IOSSlider,
-  IOSSquircleIcon,
-  IOSSwitch,
-} from '../components/IOSSettingsPrimitives';
+  SettingsSection,
+  SettingsRow,
+  SettingsSegmentedControl,
+  SettingsSlider,
+  SettingsIconBadge,
+  SettingsSwitch,
+} from '../components/SettingsPrimitives';
 
 interface DisplaySettingsProps {
   displaySettings: DisplaySettingsType;
@@ -81,7 +82,7 @@ const PALETTES: { id: PaletteType; labelFa: string; labelEn: string; color: stri
   { id: 'mint', labelFa: 'فیروزه و نعنا', labelEn: 'Mint', color: '#2DD4BF', secondaryColor: '#99F6E4' },
 ];
 
-const makeMeshWallpaper = (c1: string, c2: string, c3: string, c4: string): string => {
+const makeMatteSilkWallpaper = (c1: string, c2: string, c3: string, c4: string): string => {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
     <defs>
       <radialGradient id="g1" cx="20%" cy="20%" r="65%"><stop offset="0%" stop-color="${c2}" stop-opacity="0.9"/><stop offset="100%" stop-color="${c1}" stop-opacity="0"/></radialGradient>
@@ -96,14 +97,16 @@ const makeMeshWallpaper = (c1: string, c2: string, c3: string, c4: string): stri
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 };
 
-/** والپیپرهای آفلاین و بومی با گرادیان مش رنگی */
-const WALLPAPER_PRESETS = [
-  { id: 'midnight', labelFa: 'شفق نیلی', labelEn: 'Midnight Indigo', url: makeMeshWallpaper('#090D1F', '#1D4ED8', '#7C3AED', '#0EA5E9') },
-  { id: 'aurora', labelFa: 'شفق قطبی', labelEn: 'Aurora Borealis', url: makeMeshWallpaper('#061A1E', '#10B981', '#06B6D4', '#3B82F6') },
-  { id: 'velvet', labelFa: 'مخمل غروب', labelEn: 'Velvet Dusk', url: makeMeshWallpaper('#1A0918', '#EC4899', '#8B5CF6', '#F97316') },
-  { id: 'obsidian', labelFa: 'ابسیدین دودی', labelEn: 'Obsidian Silk', url: makeMeshWallpaper('#0B0B10', '#334155', '#64748B', '#1E293B') },
-  { id: 'sunrise', labelFa: 'سپیده روشن', labelEn: 'Soft Sunrise', url: makeMeshWallpaper('#F5EFE6', '#FBBF24', '#FB7185', '#38BDF8') },
-  { id: 'glacier-light', labelFa: 'نسیم قطبی', labelEn: 'Glacier Mist', url: makeMeshWallpaper('#ECF5FF', '#60A5FA', '#A78BFA', '#34D399') },
+/** والپیپرهای پیش‌فرض: حالت بدون تصویر، تیره مات و روشن مات */
+const WALLPAPER_PRESETS: Array<{
+  id: string;
+  labelFa: string;
+  labelEn: string;
+  url: string | null;
+}> = [
+  { id: 'none', labelFa: 'پیش‌فرض (بدون تصویر)', labelEn: 'Default (No Image)', url: null },
+  { id: 'obsidian', labelFa: 'تیره مات', labelEn: 'Matte Dark', url: makeMatteSilkWallpaper('#0B0B10', '#334155', '#64748B', '#1E293B') },
+  { id: 'silver-silk', labelFa: 'روشن مات', labelEn: 'Matte Light', url: makeMatteSilkWallpaper('#DFE3E8', '#F4F6F8', '#BFC6CF', '#D2D8E0') },
 ];
 
 export const DisplaySettings: React.FC<DisplaySettingsProps> = ({
@@ -146,7 +149,7 @@ export const DisplaySettings: React.FC<DisplaySettingsProps> = ({
     setGlassCardCovers?.(true);
   };
 
-  const handleApplyCustomWallpaper = (dataUrl: string) => {
+  const handleApplyCustomWallpaper = (dataUrl: string | null) => {
     if (displaySettings.adaptiveArtworkWallpaper) {
       updateDisplay('adaptiveArtworkWallpaper', false);
     }
@@ -270,14 +273,14 @@ export const DisplaySettings: React.FC<DisplaySettingsProps> = ({
         </div>
 
         {/* کارت خلاصه تم فعال */}
-        <IOSGroupedSection theme={theme}>
-          <IOSRow
+        <SettingsSection theme={theme}>
+          <SettingsRow
             theme={theme}
             isLast
             icon={
-              <IOSSquircleIcon color={theme.colors.primary} gradientTo={theme.colors.accent || theme.colors.secondary} size={36}>
+              <SettingsIconBadge color={theme.colors.primary} gradientTo={theme.colors.accent || theme.colors.secondary} size={36}>
                 <Disc3 size={20} />
-              </IOSSquircleIcon>
+              </SettingsIconBadge>
             }
             title={
               (isRTL ? theme.name : (theme.nameEn || theme.name)) ||
@@ -307,21 +310,21 @@ export const DisplaySettings: React.FC<DisplaySettingsProps> = ({
               </div>
             }
           />
-        </IOSGroupedSection>
+        </SettingsSection>
 
         {/* بخش ۱: تم و رنگ‌بندی هوشمند */}
-        <IOSGroupedSection header={t.displaySectionTheme || 'تم و رنگ‌بندی هوشمند'} theme={theme}>
-          <IOSRow
+        <SettingsSection header={t.displaySectionTheme || 'تم و رنگ‌بندی هوشمند'} theme={theme}>
+          <SettingsRow
             theme={theme}
             icon={
-              <IOSSquircleIcon color="#5856D6" gradientTo="#7C3AED">
+              <SettingsIconBadge color="#5856D6" gradientTo="#7C3AED">
                 {themeMode === 'dark' ? <Moon size={16} /> : themeMode === 'light' ? <Sun size={16} /> : <Smartphone size={16} />}
-              </IOSSquircleIcon>
+              </SettingsIconBadge>
             }
             title={t.theme || 'تم برنامه'}
             subtitle={themeMode === 'system' ? t.system || 'پیش‌فرض سیستم' : themeMode === 'dark' ? t.dark : t.light}
           >
-            <IOSSegmentedControl<ThemeMode>
+            <SettingsSegmentedControl<ThemeMode>
               groupId="display-theme-mode"
               fullWidth
               theme={theme}
@@ -333,19 +336,19 @@ export const DisplaySettings: React.FC<DisplaySettingsProps> = ({
                 { value: 'dark', label: <><Moon size={13} /><span>{t.dark || 'تیره'}</span></> },
               ]}
             />
-          </IOSRow>
+          </SettingsRow>
 
-          <IOSRow
+          <SettingsRow
             theme={theme}
             icon={
-              <IOSSquircleIcon color="#1C1C1E" gradientTo="#3A3A3C">
+              <SettingsIconBadge color="#1C1C1E" gradientTo="#3A3A3C">
                 <Moon size={16} />
-              </IOSSquircleIcon>
+              </SettingsIconBadge>
             }
             title={t.oledPureBlackLabel || 'حالت مشکی مطلق (OLED)'}
             subtitle={t.oledPureBlackDesc || 'استفاده از پس‌زمینه تمام‌مشکی در تم تیره برای کنتراست بیشتر'}
             trailing={
-              <IOSSwitch
+              <SettingsSwitch
                 checked={displaySettings.oledPureBlack}
                 onChange={(next) => updateDisplay('oledPureBlack', next)}
                 theme={theme}
@@ -354,12 +357,12 @@ export const DisplaySettings: React.FC<DisplaySettingsProps> = ({
             }
           />
 
-          <IOSRow
+          <SettingsRow
             theme={theme}
             icon={
-              <IOSSquircleIcon color="#FF2D55" gradientTo="#FF9500">
+              <SettingsIconBadge color="#FF2D55" gradientTo="#FF9500">
                 <Palette size={16} />
-              </IOSSquircleIcon>
+              </SettingsIconBadge>
             }
             title={t.colorPalette || 'پالت رنگی'}
           >
@@ -409,19 +412,19 @@ export const DisplaySettings: React.FC<DisplaySettingsProps> = ({
                 );
               })}
             </div>
-          </IOSRow>
+          </SettingsRow>
 
-          <IOSRow
+          <SettingsRow
             theme={theme}
             icon={
-              <IOSSquircleIcon color="#AF52DE" gradientTo="#5856D6">
+              <SettingsIconBadge color="#AF52DE" gradientTo="#5856D6">
                 <Sparkles size={16} />
-              </IOSSquircleIcon>
+              </SettingsIconBadge>
             }
             title={t.adaptiveAccentLabel || 'رنگ تاکیدی هوشمند از کاور'}
             subtitle={t.adaptiveAccentDesc || 'استخراج خودکار رنگ غالب کاور آهنگ فعلی'}
             trailing={
-              <IOSSwitch
+              <SettingsSwitch
                 checked={displaySettings.adaptiveArtworkAccent}
                 onChange={(next) => updateDisplay('adaptiveArtworkAccent', next)}
                 theme={theme}
@@ -430,18 +433,18 @@ export const DisplaySettings: React.FC<DisplaySettingsProps> = ({
             }
           />
 
-          <IOSRow
+          <SettingsRow
             theme={theme}
             isLast
             icon={
-              <IOSSquircleIcon color="#32ADE6" gradientTo="#007AFF">
+              <SettingsIconBadge color="#32ADE6" gradientTo="#007AFF">
                 <Sparkles size={16} />
-              </IOSSquircleIcon>
+              </SettingsIconBadge>
             }
             title={t.ambientGlowLabel || 'هاله‌های نورانی پس‌زمینه'}
             subtitle={t.ambientGlowDesc || 'نمایش گرادیان‌های رنگی نرم در پشت صفحات برنامه'}
             trailing={
-              <IOSSwitch
+              <SettingsSwitch
                 checked={displaySettings.ambientGlow}
                 onChange={(next) => updateDisplay('ambientGlow', next)}
                 theme={theme}
@@ -449,21 +452,21 @@ export const DisplaySettings: React.FC<DisplaySettingsProps> = ({
               />
             }
           />
-        </IOSGroupedSection>
+        </SettingsSection>
 
         {/* بخش ۲: پس‌زمینه و متریال شیشه‌ای */}
-        <IOSGroupedSection header={t.displaySectionBackdrop || 'پس‌زمینه و متریال شیشه‌ای'} theme={theme}>
-          <IOSRow
+        <SettingsSection header={t.displaySectionBackdrop || 'پس‌زمینه و متریال شیشه‌ای'} theme={theme}>
+          <SettingsRow
             theme={theme}
             icon={
-              <IOSSquircleIcon color="#FF9500" gradientTo="#FF3B30">
+              <SettingsIconBadge color="#FF9500" gradientTo="#FF3B30">
                 <ImageIcon size={16} />
-              </IOSSquircleIcon>
+              </SettingsIconBadge>
             }
             title={t.adaptiveWallpaperLabel || 'والپیپر پویا با کاور آهنگ'}
             subtitle={t.adaptiveWallpaperDesc || 'تبدیل خودکار کاور تار شده آهنگ فعلی به پس‌زمینه کل برنامه'}
             trailing={
-              <IOSSwitch
+              <SettingsSwitch
                 checked={displaySettings.adaptiveArtworkWallpaper}
                 onChange={(next) => updateDisplay('adaptiveArtworkWallpaper', next)}
                 theme={theme}
@@ -472,7 +475,7 @@ export const DisplaySettings: React.FC<DisplaySettingsProps> = ({
             }
           />
 
-          <IOSRow
+          <SettingsRow
             theme={theme}
             title={t.customBackground || 'پس‌زمینه دلخواه برنامه'}
             subtitle={t.selectWallpaperHint}
@@ -532,7 +535,10 @@ export const DisplaySettings: React.FC<DisplaySettingsProps> = ({
           >
             <div style={{ display: 'flex', gap: '10px', overflowX: 'auto', paddingBottom: '4px' }}>
               {WALLPAPER_PRESETS.map((preset) => {
-                const isSelected = !displaySettings.adaptiveArtworkWallpaper && customBackground === preset.url;
+                const isDefaultNone = preset.url === null;
+                const isSelected = isDefaultNone
+                  ? !displaySettings.adaptiveArtworkWallpaper && !customBackground
+                  : !displaySettings.adaptiveArtworkWallpaper && customBackground === preset.url;
                 return (
                   <button
                     key={preset.id}
@@ -541,24 +547,48 @@ export const DisplaySettings: React.FC<DisplaySettingsProps> = ({
                     title={isRTL ? preset.labelFa : preset.labelEn}
                     style={{
                       position: 'relative',
-                      width: '76px',
-                      height: '52px',
+                      width: '82px',
+                      height: '54px',
                       borderRadius: '11px',
                       overflow: 'hidden',
                       border: isSelected
                         ? `2.5px solid ${theme.colors.primary}`
                         : `1px solid ${theme.colors.border}`,
+                      backgroundColor: isDefaultNone ? theme.colors.background : 'transparent',
                       cursor: 'pointer',
                       padding: 0,
                       flexShrink: 0,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '3px',
                     }}
                   >
-                    <img
-                      src={preset.url}
-                      alt={isRTL ? preset.labelFa : preset.labelEn}
-                      style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-                    />
-                    {isSelected && (
+                    {preset.url ? (
+                      <img
+                        src={preset.url}
+                        alt={isRTL ? preset.labelFa : preset.labelEn}
+                        style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                      />
+                    ) : (
+                      <div
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '3px',
+                          color: isSelected ? theme.colors.primary : theme.colors.textSecondary,
+                        }}
+                      >
+                        <ImageOff size={15} />
+                        <span style={{ fontSize: '0.625rem', fontWeight: 700, lineHeight: 1 }}>
+                          {isRTL ? 'بدون تصویر' : 'Default'}
+                        </span>
+                      </div>
+                    )}
+                    {isSelected && preset.url && (
                       <div
                         style={{
                           position: 'absolute',
@@ -591,30 +621,30 @@ export const DisplaySettings: React.FC<DisplaySettingsProps> = ({
                     <span>{t.wallpaperBlur || 'میزان تاری'}</span>
                     <span style={{ fontWeight: 700, color: theme.colors.primary, fontVariantNumeric: 'tabular-nums' }}>{customBgBlur}px</span>
                   </div>
-                  <IOSSlider value={customBgBlur} min={0} max={36} step={1} onChange={(v) => setCustomBgBlur?.(v)} theme={theme} />
+                  <SettingsSlider value={customBgBlur} min={0} max={36} step={1} onChange={(v) => setCustomBgBlur?.(v)} theme={theme} />
                 </div>
                 <div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: theme.colors.textSecondary, marginBottom: '6px' }}>
                     <span>{t.wallpaperDim || 'تیرگی لایه محافظ'}</span>
                     <span style={{ fontWeight: 700, color: theme.colors.primary, fontVariantNumeric: 'tabular-nums' }}>{customBgDim}%</span>
                   </div>
-                  <IOSSlider value={customBgDim} min={0} max={85} step={1} onChange={(v) => setCustomBgDim?.(v)} theme={theme} />
+                  <SettingsSlider value={customBgDim} min={0} max={85} step={1} onChange={(v) => setCustomBgDim?.(v)} theme={theme} />
                 </div>
               </div>
             )}
-          </IOSRow>
+          </SettingsRow>
 
-          <IOSRow
+          <SettingsRow
             theme={theme}
             icon={
-              <IOSSquircleIcon color="#007AFF" gradientTo="#30B0C7">
+              <SettingsIconBadge color="#007AFF" gradientTo="#30B0C7">
                 <Layers size={16} />
-              </IOSSquircleIcon>
+              </SettingsIconBadge>
             }
             title={t.glassCardCovers || 'کاور شیشه‌ای روی کارت آهنگ‌ها'}
             subtitle={t.glassCardCoversDesc}
             trailing={
-              <IOSSwitch
+              <SettingsSwitch
                 checked={glassCardCovers}
                 onChange={(next) => setGlassCardCovers?.(next)}
                 theme={theme}
@@ -623,28 +653,28 @@ export const DisplaySettings: React.FC<DisplaySettingsProps> = ({
             }
           />
 
-          <IOSRow
+          <SettingsRow
             theme={theme}
             title={t.glassOpacityLabel || 'شفافیت لایه‌های شیشه‌ای'}
             valueText={`${Math.round(displaySettings.glassOpacity * 100)}%`}
           >
-            <IOSSlider
+            <SettingsSlider
               value={Math.round(displaySettings.glassOpacity * 100)}
               min={25}
               max={95}
-              step={5}
+              step={1}
               onChange={(val) => updateDisplay('glassOpacity', val / 100)}
               theme={theme}
             />
-          </IOSRow>
+          </SettingsRow>
 
-          <IOSRow
+          <SettingsRow
             theme={theme}
             isLast
             title={t.glassBlurLabel || 'میزان بلور شیشه'}
             valueText={`${displaySettings.glassBlur}px`}
           >
-            <IOSSlider
+            <SettingsSlider
               value={displaySettings.glassBlur}
               min={0}
               max={36}
@@ -652,22 +682,22 @@ export const DisplaySettings: React.FC<DisplaySettingsProps> = ({
               onChange={(val) => updateDisplay('glassBlur', val)}
               theme={theme}
             />
-          </IOSRow>
-        </IOSGroupedSection>
+          </SettingsRow>
+        </SettingsSection>
 
         {/* بخش ۳: فونت، چیدمان و انیمیشن */}
-        <IOSGroupedSection header={t.displaySectionTypography || 'فونت، چیدمان و انیمیشن'} theme={theme}>
-          <IOSRow
+        <SettingsSection header={t.displaySectionTypography || 'فونت، چیدمان و انیمیشن'} theme={theme}>
+          <SettingsRow
             theme={theme}
             icon={
-              <IOSSquircleIcon color="#0A84FF" gradientTo="#5856D6">
+              <SettingsIconBadge color="#0A84FF" gradientTo="#5856D6">
                 <LayoutGrid size={16} />
-              </IOSSquircleIcon>
+              </SettingsIconBadge>
             }
             title={t.homeLayoutLabel || 'چیدمان صفحه خانه'}
             subtitle={t.homeLayoutDesc || 'انتخاب بین نمای پهن کلاسیک (نوع اول) یا نمای ویجتی مدرن (نوع دوم)'}
           >
-            <IOSSegmentedControl<HomeLayoutStyle>
+            <SettingsSegmentedControl<HomeLayoutStyle>
               groupId="display-home-layout"
               fullWidth
               theme={theme}
@@ -694,19 +724,19 @@ export const DisplaySettings: React.FC<DisplaySettingsProps> = ({
                 },
               ]}
             />
-          </IOSRow>
+          </SettingsRow>
 
-          <IOSRow
+          <SettingsRow
             theme={theme}
             icon={
-              <IOSSquircleIcon color="#5856D6" gradientTo="#007AFF">
+              <SettingsIconBadge color="#5856D6" gradientTo="#007AFF">
                 <PanelLeft size={16} />
-              </IOSSquircleIcon>
+              </SettingsIconBadge>
             }
             title={t.navigationLayoutLabel || 'محل قرارگیری منوی تب‌ها'}
             subtitle={t.navigationLayoutDesc || 'جابه‌جایی تب‌های اصلی بین نوار بالای صفحه و سایدبار سمت چپ'}
           >
-            <IOSSegmentedControl<NavigationLayoutStyle>
+            <SettingsSegmentedControl<NavigationLayoutStyle>
               groupId="display-navigation-layout"
               fullWidth
               theme={theme}
@@ -733,19 +763,19 @@ export const DisplaySettings: React.FC<DisplaySettingsProps> = ({
                 },
               ]}
             />
-          </IOSRow>
+          </SettingsRow>
 
-          <IOSRow
+          <SettingsRow
             theme={theme}
             icon={
-              <IOSSquircleIcon color="#34C759" gradientTo="#30D158">
+              <SettingsIconBadge color="#34C759" gradientTo="#30D158">
                 <Type size={16} />
-              </IOSSquircleIcon>
+              </SettingsIconBadge>
             }
             title={t.fontFamilyLabel || 'فونت برنامه'}
             subtitle={t.fontFamilyDesc}
           >
-            <IOSSegmentedControl<FontChoice>
+            <SettingsSegmentedControl<FontChoice>
               groupId="display-font-family"
               fullWidth
               theme={theme}
@@ -757,15 +787,15 @@ export const DisplaySettings: React.FC<DisplaySettingsProps> = ({
                 { value: 'editorial', label: t.fontEditorial || 'ادیتوریال' },
               ]}
             />
-          </IOSRow>
+          </SettingsRow>
 
-          <IOSRow
+          <SettingsRow
             theme={theme}
             title={t.fontScaleLabel || 'مقیاس و اندازه متن'}
             subtitle={t.fontScaleDesc}
             valueText={`${Math.round(displaySettings.fontScale * 100)}%`}
           >
-            <IOSSlider
+            <SettingsSlider
               value={Math.round(displaySettings.fontScale * 100)}
               min={80}
               max={125}
@@ -773,14 +803,14 @@ export const DisplaySettings: React.FC<DisplaySettingsProps> = ({
               onChange={(val) => updateDisplay('fontScale', val / 100)}
               theme={theme}
             />
-          </IOSRow>
+          </SettingsRow>
 
-          <IOSRow
+          <SettingsRow
             theme={theme}
             title={t.cornerStyleLabel || 'فرم گوشه‌ها'}
             subtitle={t.cornerStyleDesc}
           >
-            <IOSSegmentedControl<CornerStyle>
+            <SettingsSegmentedControl<CornerStyle>
               groupId="display-corner-style"
               fullWidth
               theme={theme}
@@ -792,14 +822,14 @@ export const DisplaySettings: React.FC<DisplaySettingsProps> = ({
                 { value: 'pill', label: t.cornerPill || 'بسیار گرد' },
               ]}
             />
-          </IOSRow>
+          </SettingsRow>
 
-          <IOSRow
+          <SettingsRow
             theme={theme}
             title={t.listDensityLabel || 'تراکم لیست‌ها'}
             subtitle={t.listDensityDesc}
           >
-            <IOSSegmentedControl<ListDensity>
+            <SettingsSegmentedControl<ListDensity>
               groupId="display-list-density"
               fullWidth
               theme={theme}
@@ -811,20 +841,20 @@ export const DisplaySettings: React.FC<DisplaySettingsProps> = ({
                 { value: 'spacious', label: t.densitySpacious || 'باز و راحت' },
               ]}
             />
-          </IOSRow>
+          </SettingsRow>
 
-          <IOSRow
+          <SettingsRow
             theme={theme}
             isLast
             icon={
-              <IOSSquircleIcon color="#8E8E93" gradientTo="#636366">
+              <SettingsIconBadge color="#8E8E93" gradientTo="#636366">
                 <Eye size={16} />
-              </IOSSquircleIcon>
+              </SettingsIconBadge>
             }
             title={t.reduceMotionLabel || 'کاهش انیمیشن‌ها'}
             subtitle={t.reduceMotionDesc}
             trailing={
-              <IOSSwitch
+              <SettingsSwitch
                 checked={displaySettings.reduceMotion}
                 onChange={(next) => updateDisplay('reduceMotion', next)}
                 theme={theme}
@@ -832,21 +862,21 @@ export const DisplaySettings: React.FC<DisplaySettingsProps> = ({
               />
             }
           />
-        </IOSGroupedSection>
+        </SettingsSection>
 
         {/* بخش ۴: ظاهر پخش‌کننده و تمام‌صفحه */}
-        <IOSGroupedSection header={t.displaySectionPlayer || 'ظاهر پخش‌کننده و تمام‌صفحه'} theme={theme}>
-          <IOSRow
+        <SettingsSection header={t.displaySectionPlayer || 'ظاهر پخش‌کننده و تمام‌صفحه'} theme={theme}>
+          <SettingsRow
             theme={theme}
             icon={
-              <IOSSquircleIcon color="#0A84FF" gradientTo="#5E5CE6">
+              <SettingsIconBadge color="#0A84FF" gradientTo="#5E5CE6">
                 <Monitor size={16} />
-              </IOSSquircleIcon>
+              </SettingsIconBadge>
             }
             title={t.playerBarStyleLabel || 'استایل نوار پلیر پایین'}
             subtitle={t.playerBarStyleDesc}
           >
-            <IOSSegmentedControl<PlayerBarStyle>
+            <SettingsSegmentedControl<PlayerBarStyle>
               groupId="display-player-bar"
               fullWidth
               theme={theme}
@@ -857,31 +887,31 @@ export const DisplaySettings: React.FC<DisplaySettingsProps> = ({
                 { value: 'docked', label: t.playerBarDocked || 'تمام‌عرض' },
               ]}
             />
-          </IOSRow>
+          </SettingsRow>
 
-          <IOSRow
+          <SettingsRow
             theme={theme}
             title={t.playerBarOpacityLabel || 'شفافیت شیشه‌ای نوار پخش'}
             subtitle={t.playerBarOpacityDesc}
             valueText={`${Math.round((displaySettings.playerBarOpacity ?? 0.56) * 100)}%`}
           >
-            <IOSSlider
+            <SettingsSlider
               value={Math.round((displaySettings.playerBarOpacity ?? 0.56) * 100)}
               min={15}
               max={95}
-              step={5}
+              step={1}
               onChange={(val) => updateDisplay('playerBarOpacity', val / 100)}
               theme={theme}
             />
-          </IOSRow>
+          </SettingsRow>
 
-          <IOSRow
+          <SettingsRow
             theme={theme}
             title={t.playerBarBlurLabel || 'شدت بلور شیشه‌ای نوار پخش'}
             subtitle={t.playerBarBlurDesc}
             valueText={`${displaySettings.playerBarBlur ?? 28}px`}
           >
-            <IOSSlider
+            <SettingsSlider
               value={displaySettings.playerBarBlur ?? 28}
               min={0}
               max={44}
@@ -889,19 +919,19 @@ export const DisplaySettings: React.FC<DisplaySettingsProps> = ({
               onChange={(val) => updateDisplay('playerBarBlur', val)}
               theme={theme}
             />
-          </IOSRow>
+          </SettingsRow>
 
-          <IOSRow
+          <SettingsRow
             theme={theme}
             icon={
-              <IOSSquircleIcon color="#FF375F" gradientTo="#FF2D55">
+              <SettingsIconBadge color="#FF375F" gradientTo="#FF2D55">
                 <Disc3 size={16} />
-              </IOSSquircleIcon>
+              </SettingsIconBadge>
             }
             title={t.artworkStyleLabel || 'سبک کاور در تمام‌صفحه'}
             subtitle={t.artworkStyleDesc}
           >
-            <IOSSegmentedControl<ArtworkStyle>
+            <SettingsSegmentedControl<ArtworkStyle>
               groupId="display-artwork-style"
               fullWidth
               theme={theme}
@@ -912,20 +942,20 @@ export const DisplaySettings: React.FC<DisplaySettingsProps> = ({
                 { value: 'vinyl', label: t.artworkVinyl || 'صفحه وینیل' },
               ]}
             />
-          </IOSRow>
+          </SettingsRow>
 
-          <IOSRow
+          <SettingsRow
             theme={theme}
             isLast
             icon={
-              <IOSSquircleIcon color="#5AC8FA" gradientTo="#007AFF">
+              <SettingsIconBadge color="#5AC8FA" gradientTo="#007AFF">
                 <Sliders size={16} />
-              </IOSSquircleIcon>
+              </SettingsIconBadge>
             }
             title={t.visualizerStyleLabel || 'استایل ویژوالایزر'}
             subtitle={t.visualizerStyleDesc}
           >
-            <IOSSegmentedControl<VisualizerStyle>
+            <SettingsSegmentedControl<VisualizerStyle>
               groupId="display-visualizer-style"
               fullWidth
               theme={theme}
@@ -937,8 +967,8 @@ export const DisplaySettings: React.FC<DisplaySettingsProps> = ({
                 { value: 'ring', label: t.vizRing || 'هاله دور کاور' },
               ]}
             />
-          </IOSRow>
-        </IOSGroupedSection>
+          </SettingsRow>
+        </SettingsSection>
       </div>
     </div>
   );

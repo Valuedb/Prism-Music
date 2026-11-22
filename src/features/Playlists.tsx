@@ -21,6 +21,11 @@ import {
 } from 'lucide-react';
 import { CoverImage } from '../components/CoverImage';
 import { AllSongs } from './AllSongs';
+import {
+  getMostPlayedSongs,
+  getRecentlyAddedSongs,
+  getRecentlyPlayedSongs,
+} from '../utils/smartPlaylists';
 
 interface PlaylistsProps {
   playlists: Playlist[];
@@ -1071,21 +1076,9 @@ export const Playlists = ({
     }
   }, [initialPlaylist]);
 
-  const recentlyAdded = useMemo(
-    () => [...allSongs].sort((a, b) => b.addedAt - a.addedAt),
-    [allSongs]
-  );
-  const mostPlayed = useMemo(
-    () => [...allSongs].sort((a, b) => (b.playCount || 0) - (a.playCount || 0)),
-    [allSongs]
-  );
-  const recentlyPlayed = useMemo(
-    () =>
-      [...allSongs]
-        .filter((s) => (s.lastPlayedAt && s.lastPlayedAt > 0) || (s.playCount && s.playCount > 0))
-        .sort((a, b) => (b.lastPlayedAt || 0) - (a.lastPlayedAt || 0)),
-    [allSongs]
-  );
+  const recentlyAdded = useMemo(() => getRecentlyAddedSongs(allSongs), [allSongs]);
+  const mostPlayed = useMemo(() => getMostPlayedSongs(allSongs), [allSongs]);
+  const recentlyPlayed = useMemo(() => getRecentlyPlayedSongs(allSongs), [allSongs]);
   const favouriteSongs = useMemo(
     () => allSongs.filter((s) => s.isFavorite === true),
     [allSongs]
@@ -1174,7 +1167,7 @@ export const Playlists = ({
         mostPlayed: {
           title: t.mostPlayed || 'پرتکرارترین‌ها',
           list: mostPlayed,
-          empty: t.noSongs || 'هنوز پخشی ثبت نشده است.',
+          empty: t.noMostPlayed || 'هنوز هیچ آهنگی پخش نشده است.',
         },
         recentlyPlayed: {
           title: t.recentlyPlayed || 'اخیراً پخش شده',
@@ -1223,6 +1216,7 @@ export const Playlists = ({
               glassCardCovers={glassCardCovers}
               onBulkDeleteSongs={onBulkDeleteSongs}
               confirmBeforeDelete={confirmBeforeDelete}
+              defaultSortBy="default"
             />
           </motion.div>
         ) : activePlaylist ? (
@@ -1268,6 +1262,7 @@ export const Playlists = ({
               emptyMessage={t.noSongs || '—'}
               glassCardCovers={glassCardCovers}
               confirmBeforeDelete={confirmBeforeDelete}
+              defaultSortBy="default"
               headerActions={
                 <button
                   onClick={() => {
@@ -1366,7 +1361,7 @@ export const Playlists = ({
             iconBg="rgba(255, 149, 0, 0.15)"
             iconColor="#ff9500"
             songs={mostPlayed}
-            emptyText={t.noSongs || 'آهنگی موجود نیست'}
+            emptyText={t.noMostPlayed || 'هنوز هیچ آهنگی پخش نشده است.'}
             onClick={() => setActiveSmartList('mostPlayed')}
             onQuickPlay={() =>
               mostPlayed.length > 0 && onPlaySongFromList(mostPlayed[0], mostPlayed)

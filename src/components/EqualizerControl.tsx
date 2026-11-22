@@ -7,7 +7,7 @@ import {
   EQ10_BAND_LABELS,
   EQ10_PRESETS,
 } from '../player/audioEffects';
-import { IOSSegmentedControl, IOSSwitch } from './IOSSettingsPrimitives';
+import { SettingsSegmentedControl, SettingsSwitch } from './SettingsPrimitives';
 import { withAlpha } from '../utils/color';
 
 interface EqualizerControlProps {
@@ -146,7 +146,7 @@ export const EqualizerControl: React.FC<EqualizerControlProps> = ({
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
           {enabled && onChangeEqMode && (
-            <IOSSegmentedControl<EqBandMode>
+            <SettingsSegmentedControl<EqBandMode>
               groupId="eq-band-mode"
               compact
               theme={theme}
@@ -159,7 +159,7 @@ export const EqualizerControl: React.FC<EqualizerControlProps> = ({
             />
           )}
 
-          <IOSSwitch
+          <SettingsSwitch
             checked={enabled}
             onChange={() => handleToggleEnabled()}
             theme={theme}

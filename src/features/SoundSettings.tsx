@@ -29,13 +29,13 @@ import {
   audioEffects,
 } from '../player/audioEffects';
 import {
-  IOSGroupedSection,
-  IOSRow,
-  IOSSegmentedControl,
-  IOSSlider,
-  IOSSquircleIcon,
-  IOSSwitch,
-} from '../components/IOSSettingsPrimitives';
+  SettingsSection,
+  SettingsRow,
+  SettingsSegmentedControl,
+  SettingsSlider,
+  SettingsIconBadge,
+  SettingsSwitch,
+} from '../components/SettingsPrimitives';
 
 interface SoundSettingsProps {
   soundSettings: SoundSettingsType;
@@ -275,7 +275,7 @@ export const SoundSettings: React.FC<SoundSettingsProps> = ({
       }}
     >
       <div style={{ width: '100%', maxWidth: '820px' }}>
-        {/* نوار ناوبری iOS */}
+        {/* نوار ناوبری بالا */}
         <div
           style={{
             display: 'flex',
@@ -341,20 +341,20 @@ export const SoundSettings: React.FC<SoundSettingsProps> = ({
         </div>
 
         {/* طیف زنده صدا */}
-        <IOSGroupedSection theme={theme}>
+        <SettingsSection theme={theme}>
           <div style={{ padding: '14px 18px' }}>
             <LiveSpectrumPreview enabled={soundSettings.liveVisualizer} theme={theme} />
           </div>
-        </IOSGroupedSection>
+        </SettingsSection>
 
         {/* بخش ۱: انتقال و پخش پیوسته */}
-        <IOSGroupedSection header={t.soundSectionTransitions || 'انتقال و پخش پیوسته'} theme={theme}>
-          <IOSRow
+        <SettingsSection header={t.soundSectionTransitions || 'انتقال و پخش پیوسته'} theme={theme}>
+          <SettingsRow
             theme={theme}
             icon={
-              <IOSSquircleIcon color="#FF2D55" gradientTo="#FF375F">
+              <SettingsIconBadge color="#FF2D55" gradientTo="#FF375F">
                 <Disc3 size={16} />
-              </IOSSquircleIcon>
+              </SettingsIconBadge>
             }
             title={t.crossfadeLabel || 'محو شدن بین آهنگ‌ها (Crossfade)'}
             subtitle={t.crossfadeDesc}
@@ -364,7 +364,7 @@ export const SoundSettings: React.FC<SoundSettingsProps> = ({
                 : `${soundSettings.crossfadeSeconds} ${t.secondsShort || 'ثانیه'}`
             }
           >
-            <IOSSlider
+            <SettingsSlider
               value={soundSettings.crossfadeSeconds}
               min={0}
               max={12}
@@ -372,14 +372,14 @@ export const SoundSettings: React.FC<SoundSettingsProps> = ({
               onChange={(val) => updateSound('crossfadeSeconds', val)}
               theme={theme}
             />
-          </IOSRow>
+          </SettingsRow>
 
-          <IOSRow
+          <SettingsRow
             theme={theme}
             title={t.fadePlayPauseLabel || 'نرم‌شدن شروع و توقف'}
             subtitle={t.fadePlayPauseDesc}
             trailing={
-              <IOSSwitch
+              <SettingsSwitch
                 checked={soundSettings.fadeOnPlayPause}
                 onChange={(next) => updateSound('fadeOnPlayPause', next)}
                 theme={theme}
@@ -388,13 +388,13 @@ export const SoundSettings: React.FC<SoundSettingsProps> = ({
             }
           />
 
-          <IOSRow
+          <SettingsRow
             theme={theme}
             isLast
             title={t.gaplessLabel || 'پخش بدون وقفه (Gapless)'}
             subtitle={t.gaplessDesc}
             trailing={
-              <IOSSwitch
+              <SettingsSwitch
                 checked={soundSettings.gaplessPlayback}
                 onChange={(next) => updateSound('gaplessPlayback', next)}
                 theme={theme}
@@ -402,16 +402,16 @@ export const SoundSettings: React.FC<SoundSettingsProps> = ({
               />
             }
           />
-        </IOSGroupedSection>
+        </SettingsSection>
 
         {/* بخش ۲: سرعت و فضای صدا */}
-        <IOSGroupedSection header={t.soundSectionAtmosphere || 'سرعت و فضای صدا'} theme={theme}>
-          <IOSRow
+        <SettingsSection header={t.soundSectionAtmosphere || 'سرعت و فضای صدا'} theme={theme}>
+          <SettingsRow
             theme={theme}
             icon={
-              <IOSSquircleIcon color="#FF9500" gradientTo="#FFCC00">
+              <SettingsIconBadge color="#FF9500" gradientTo="#FFCC00">
                 <Gauge size={16} />
-              </IOSSquircleIcon>
+              </SettingsIconBadge>
             }
             title={t.playbackSpeedLabel || 'سرعت پخش'}
             subtitle={t.playbackSpeedDesc}
@@ -442,7 +442,7 @@ export const SoundSettings: React.FC<SoundSettingsProps> = ({
                 </button>
               ))}
             </div>
-            <IOSSlider
+            <SettingsSlider
               value={soundSettings.playbackSpeed}
               min={0.5}
               max={2.0}
@@ -450,14 +450,14 @@ export const SoundSettings: React.FC<SoundSettingsProps> = ({
               onChange={(val) => updateSound('playbackSpeed', Number(val.toFixed(2)))}
               theme={theme}
             />
-          </IOSRow>
+          </SettingsRow>
 
-          <IOSRow
+          <SettingsRow
             theme={theme}
             title={t.preservePitchLabel || 'حفظ زیر و بمی صدا'}
             subtitle={t.preservePitchDesc}
             trailing={
-              <IOSSwitch
+              <SettingsSwitch
                 checked={soundSettings.preservePitch}
                 onChange={(next) => updateSound('preservePitch', next)}
                 theme={theme}
@@ -466,17 +466,17 @@ export const SoundSettings: React.FC<SoundSettingsProps> = ({
             }
           />
 
-          <IOSRow
+          <SettingsRow
             theme={theme}
             icon={
-              <IOSSquircleIcon color="#AF52DE" gradientTo="#5856D6">
+              <SettingsIconBadge color="#AF52DE" gradientTo="#5856D6">
                 <Waves size={16} />
-              </IOSSquircleIcon>
+              </SettingsIconBadge>
             }
             title={t.reverbRoomLabel || 'افکت فضا و ریورب'}
             subtitle={t.reverbRoomDesc}
           >
-            <IOSSegmentedControl<ReverbRoom>
+            <SettingsSegmentedControl<ReverbRoom>
               groupId="sound-reverb-room"
               fullWidth
               theme={theme}
@@ -497,7 +497,7 @@ export const SoundSettings: React.FC<SoundSettingsProps> = ({
                     {Math.round(soundSettings.reverbMix * 100)}%
                   </span>
                 </div>
-                <IOSSlider
+                <SettingsSlider
                   value={Math.round(soundSettings.reverbMix * 100)}
                   min={0}
                   max={100}
@@ -507,21 +507,21 @@ export const SoundSettings: React.FC<SoundSettingsProps> = ({
                 />
               </div>
             )}
-          </IOSRow>
+          </SettingsRow>
 
-          <IOSRow
+          <SettingsRow
             theme={theme}
             isLast
             icon={
-              <IOSSquircleIcon color="#007AFF" gradientTo="#32ADE6">
+              <SettingsIconBadge color="#007AFF" gradientTo="#32ADE6">
                 <Sparkles size={16} />
-              </IOSSquircleIcon>
+              </SettingsIconBadge>
             }
             title={t.spatialSurroundLabel || 'صدای سه‌بعدی (Surround)'}
             subtitle={t.spatialSurroundDesc}
             valueText={`${soundSettings.spatialSurround}%`}
           >
-            <IOSSlider
+            <SettingsSlider
               value={soundSettings.spatialSurround}
               min={0}
               max={100}
@@ -529,17 +529,17 @@ export const SoundSettings: React.FC<SoundSettingsProps> = ({
               onChange={(val) => updateSound('spatialSurround', val)}
               theme={theme}
             />
-          </IOSRow>
-        </IOSGroupedSection>
+          </SettingsRow>
+        </SettingsSection>
 
         {/* بخش ۳: تعادل و کیفیت خروجی */}
-        <IOSGroupedSection header={t.soundSectionDynamics || 'تعادل و کیفیت خروجی'} theme={theme}>
-          <IOSRow
+        <SettingsSection header={t.soundSectionDynamics || 'تعادل و کیفیت خروجی'} theme={theme}>
+          <SettingsRow
             theme={theme}
             title={t.volumeNormLabel || 'نرمال‌سازی بلندی صدا'}
             subtitle={t.volumeNormDesc}
             trailing={
-              <IOSSwitch
+              <SettingsSwitch
                 checked={soundSettings.volumeNormalization}
                 onChange={(next) => updateSound('volumeNormalization', next)}
                 theme={theme}
@@ -548,12 +548,12 @@ export const SoundSettings: React.FC<SoundSettingsProps> = ({
             }
           />
 
-          <IOSRow
+          <SettingsRow
             theme={theme}
             icon={
-              <IOSSquircleIcon color="#34C759" gradientTo="#30D158">
+              <SettingsIconBadge color="#34C759" gradientTo="#30D158">
                 <Volume2 size={16} />
-              </IOSSquircleIcon>
+              </SettingsIconBadge>
             }
             title={t.preampLabel || 'تقویت ورودی (Pre-Amp)'}
             subtitle={t.preampDesc}
@@ -576,7 +576,7 @@ export const SoundSettings: React.FC<SoundSettingsProps> = ({
               </button>
             }
           >
-            <IOSSlider
+            <SettingsSlider
               value={soundSettings.preampDb}
               min={-12}
               max={12}
@@ -585,9 +585,9 @@ export const SoundSettings: React.FC<SoundSettingsProps> = ({
               onChange={(val) => updateSound('preampDb', val)}
               theme={theme}
             />
-          </IOSRow>
+          </SettingsRow>
 
-          <IOSRow
+          <SettingsRow
             theme={theme}
             title={t.stereoBalanceLabel || 'بالانس چپ و راست'}
             subtitle={t.stereoBalanceDesc}
@@ -610,7 +610,7 @@ export const SoundSettings: React.FC<SoundSettingsProps> = ({
               </button>
             }
           >
-            <IOSSlider
+            <SettingsSlider
               value={Math.round(soundSettings.stereoBalance * 100)}
               min={-100}
               max={100}
@@ -619,14 +619,14 @@ export const SoundSettings: React.FC<SoundSettingsProps> = ({
               onChange={(val) => updateSound('stereoBalance', val / 100)}
               theme={theme}
             />
-          </IOSRow>
+          </SettingsRow>
 
-          <IOSRow
+          <SettingsRow
             theme={theme}
             title={t.monoAudioLabel || 'حالت مونو (Mono)'}
             subtitle={t.monoAudioDesc}
             trailing={
-              <IOSSwitch
+              <SettingsSwitch
                 checked={soundSettings.monoAudio}
                 onChange={(next) => updateSound('monoAudio', next)}
                 theme={theme}
@@ -635,19 +635,19 @@ export const SoundSettings: React.FC<SoundSettingsProps> = ({
             }
           />
 
-          <IOSRow
+          <SettingsRow
             theme={theme}
             isLast
             icon={
-              <IOSSquircleIcon color="#30B0C7" gradientTo="#32ADE6">
+              <SettingsIconBadge color="#30B0C7" gradientTo="#32ADE6">
                 <ShieldCheck size={16} />
-              </IOSSquircleIcon>
+              </SettingsIconBadge>
             }
             title={t.maxVolumeLimitLabel || 'سقف ایمن ولوم'}
             subtitle={t.maxVolumeLimitDesc}
             valueText={`${soundSettings.maxVolumeLimit}%`}
           >
-            <IOSSlider
+            <SettingsSlider
               value={soundSettings.maxVolumeLimit}
               min={20}
               max={100}
@@ -655,22 +655,22 @@ export const SoundSettings: React.FC<SoundSettingsProps> = ({
               onChange={(val) => updateSound('maxVolumeLimit', val)}
               theme={theme}
             />
-          </IOSRow>
-        </IOSGroupedSection>
+          </SettingsRow>
+        </SettingsSection>
 
         {/* بخش ۴: پروفایل خروجی و اکولایزر پیشرفته */}
-        <IOSGroupedSection header={t.soundSectionEqualizer || 'اکولایزر و پروفایل خروجی'} theme={theme}>
-          <IOSRow
+        <SettingsSection header={t.soundSectionEqualizer || 'اکولایزر و پروفایل خروجی'} theme={theme}>
+          <SettingsRow
             theme={theme}
             icon={
-              <IOSSquircleIcon color="#5856D6" gradientTo="#007AFF">
+              <SettingsIconBadge color="#5856D6" gradientTo="#007AFF">
                 <Sliders size={16} />
-              </IOSSquircleIcon>
+              </SettingsIconBadge>
             }
             title={t.outputProfileLabel || 'پروفایل خروجی صدا'}
             subtitle={t.outputProfileDesc}
           >
-            <IOSSegmentedControl<AudioOutputProfile>
+            <SettingsSegmentedControl<AudioOutputProfile>
               groupId="sound-output-profile"
               fullWidth
               theme={theme}
@@ -682,7 +682,7 @@ export const SoundSettings: React.FC<SoundSettingsProps> = ({
                 { value: 'speaker', label: <><Speaker size={13} /><span>{t.profileSpeaker || 'اسپیکر'}</span></> },
               ]}
             />
-          </IOSRow>
+          </SettingsRow>
 
           <div style={{ padding: '14px 18px', borderBottom: `1px solid ${theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(60,60,67,0.12)'}` }}>
             <EqualizerControl
@@ -698,18 +698,18 @@ export const SoundSettings: React.FC<SoundSettingsProps> = ({
             />
           </div>
 
-          <IOSRow
+          <SettingsRow
             theme={theme}
             isLast
             icon={
-              <IOSSquircleIcon color="#FF2D55" gradientTo="#AF52DE">
+              <SettingsIconBadge color="#FF2D55" gradientTo="#AF52DE">
                 <Activity size={16} />
-              </IOSSquircleIcon>
+              </SettingsIconBadge>
             }
             title={t.liveVisualizerLabel || 'واکنش‌گرای زنده صدا (Visualizer)'}
             subtitle={t.liveVisualizerDesc}
             trailing={
-              <IOSSwitch
+              <SettingsSwitch
                 checked={soundSettings.liveVisualizer}
                 onChange={(next) => updateSound('liveVisualizer', next)}
                 theme={theme}
@@ -717,7 +717,7 @@ export const SoundSettings: React.FC<SoundSettingsProps> = ({
               />
             }
           />
-        </IOSGroupedSection>
+        </SettingsSection>
       </div>
     </div>
   );

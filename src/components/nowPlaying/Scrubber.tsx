@@ -26,9 +26,7 @@ export const Scrubber = memo(({
       trackBgColor="rgba(255, 255, 255, 0.22)"
       timeTextColor="rgba(255, 255, 255, 0.68)"
       isDarkSurface
-      tooltipBgColor="rgba(20, 20, 28, 0.94)"
       tooltipTextColor="#ffffff"
-      tooltipBorderColor="rgba(255, 255, 255, 0.18)"
       variant="fullscreen"
       negativeRemaining
     />

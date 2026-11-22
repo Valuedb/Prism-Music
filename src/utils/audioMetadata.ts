@@ -1,5 +1,6 @@
 import type { Song } from '../types';
 import { saveAudioBlob } from '../storage/mediaStore';
+import { assignBatchAddedAt } from './smartPlaylists';
 
 /** تبدیل Blob تصویر کاور به Data URL فشرده (حداکثر ۳۶۰ پیکسل) برای ماندگاری همیشگی در localStorage */
 export const blobToCompactDataUrl = (blob: Blob): Promise<string> =>
@@ -225,7 +226,7 @@ export const extractSongsBatched = async (
       if (s) results.push(s);
     }
   }
-  return results;
+  return assignBatchAddedAt(results);
 };
 
 interface WebkitEntry {

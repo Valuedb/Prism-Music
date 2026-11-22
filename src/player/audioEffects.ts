@@ -122,7 +122,9 @@ class AudioEffectsManager {
   private normMakeupGain: GainNode | null = null;
   private balancePanner: StereoPannerNode | null = null;
   private analyser: AnalyserNode | null = null;
+  private masterVolumeGain: GainNode | null = null;
 
+  private currentMasterVolume = 1;
   private currentEqSettings: EqualizerSettings = { ...DEFAULT_EQ_SETTINGS };
   private currentSoundSettings: SoundSettings = { ...DEFAULT_SOUND_SETTINGS };
 
@@ -198,6 +200,9 @@ class AudioEffectsManager {
     this.analyser.maxDecibels = -18;
     this.analyser.smoothingTimeConstant = 0.36;
 
+    this.masterVolumeGain = ctx.createGain();
+    this.masterVolumeGain.gain.value = this.currentMasterVolume;
+
     // اتصال زنجیره: masterBus -> monoRouter -> preampNode -> bassFilter -> EQ5 -> EQ10
     let lastNode: AudioNode = this.masterBus;
     lastNode.connect(this.monoRouter);
@@ -242,7 +247,8 @@ class AudioEffectsManager {
     this.compressor.connect(this.normMakeupGain);
     this.normMakeupGain.connect(this.balancePanner);
     this.balancePanner.connect(this.analyser);
-    this.analyser.connect(ctx.destination);
+    this.analyser.connect(this.masterVolumeGain);
+    this.masterVolumeGain.connect(ctx.destination);
 
     this.syncGraphValues();
     return true;
@@ -281,6 +287,7 @@ class AudioEffectsManager {
     if (this.decks.has(audio)) return;
     try {
       if (!this.ensureGraph() || !this.audioCtx || !this.masterBus) return;
+      audio.volume = 1;
       const source = this.audioCtx.createMediaElementSource(audio);
       const deckGain = this.audioCtx.createGain();
       deckGain.gain.value = 1;
@@ -290,6 +297,22 @@ class AudioEffectsManager {
     } catch (err) {
       console.warn('[AudioEffects] اتصال به Web Audio API ناموفق بود:', err);
     }
+  }
+
+  public isDeckAttached(audio: HTMLAudioElement | null): boolean {
+    return Boolean(audio && this.decks.has(audio));
+  }
+
+  /** تنظیم نرم حجم خروجی اصلی با ضدخش (De-zippering) بدون دستکاری پله‌ای audio.volume */
+  public setMasterVolume(volume: number) {
+    const clamped = Math.max(0, Math.min(1, Number.isFinite(volume) ? volume : 1));
+    if (Math.abs(clamped - this.currentMasterVolume) < 1e-4 && this.masterVolumeGain) {
+      return;
+    }
+    this.currentMasterVolume = clamped;
+    if (!this.audioCtx || !this.masterVolumeGain) return;
+    const now = this.audioCtx.currentTime;
+    this.masterVolumeGain.gain.setTargetAtTime(clamped, now, 0.018);
   }
 
   /** فعال‌سازی مجدد کانتکست صوتی در صورت معلق شدن توسط مرورگر */
