@@ -74,3 +74,14 @@ test('removeIndicesFromQueue resets currentIndex to -1 if active track slot is r
   assert.equal(result.currentIndex, -1);
   assert.deepEqual(result.priorityIndices, [1]);
 });
+
+test('removeIndicesFromQueue removes active slot 0 cleanly without leaving the deleted element behind', () => {
+  const queue = ['song-1', 'song-2', 'song-3'];
+  const result = removeIndicesFromQueue(queue, [0], 0, [0, 2]);
+
+  assert.deepEqual(result.queue, ['song-2', 'song-3']);
+  assert.equal(result.queue.includes('song-1'), false);
+  assert.equal(result.currentIndex, -1);
+  assert.deepEqual(result.priorityIndices, [1]);
+});
+

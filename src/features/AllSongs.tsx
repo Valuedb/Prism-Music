@@ -142,6 +142,7 @@ export const AllSongs = ({
   // رفرنس‌ها
   const sortMenuRef = useRef<HTMLDivElement>(null);
   const bulkMenuRef = useRef<HTMLDivElement>(null);
+  const lastAnchorSongIdRef = useRef<string | null>(null);
   const songMenuRefs = useRef<{
     [key: string]: HTMLDivElement | null;
   }>({});
@@ -161,6 +162,14 @@ export const AllSongs = ({
       setIsBulkMenuOpen(false);
     }
   }, [isSelectMode, selectedSongs.length]);
+
+  const validSongIds = useMemo(() => new Set(songs.map((s) => s.id)), [songs]);
+  useEffect(() => {
+    setSelectedSongs((prev) => {
+      const pruned = prev.filter((id) => validSongIds.has(id));
+      return pruned.length === prev.length ? prev : pruned;
+    });
+  }, [validSongIds]);
 
   /** بستن منوها هنگام کلیک در بیرون */
   useEffect(() => {
@@ -357,19 +366,48 @@ export const AllSongs = ({
 
   // ================= توابع کنترلی =================
 
+  /** انتخاب تکی، بازه‌ای (Shift+Click) یا سریع (Ctrl/Cmd+Click) آهنگ */
+  const selectSongWithModifiers = (
+    id: string,
+    opts?: { shiftKey?: boolean; ctrlOrMeta?: boolean }
+  ) => {
+    if (opts?.shiftKey && lastAnchorSongIdRef.current) {
+      const anchorIdx = filteredAndSortedSongs.findIndex((s) => s.id === lastAnchorSongIdRef.current);
+      const targetIdx = filteredAndSortedSongs.findIndex((s) => s.id === id);
+      if (anchorIdx !== -1 && targetIdx !== -1) {
+        const start = Math.min(anchorIdx, targetIdx);
+        const end = Math.max(anchorIdx, targetIdx);
+        const rangeIds = filteredAndSortedSongs.slice(start, end + 1).map((s) => s.id);
+        setIsSelectMode(true);
+        setSelectedSongs((prev) => Array.from(new Set([...prev, ...rangeIds])));
+        lastAnchorSongIdRef.current = id;
+        return;
+      }
+    }
+
+    if (!isSelectMode && (opts?.ctrlOrMeta || opts?.shiftKey)) {
+      setIsSelectMode(true);
+      setIsSortMenuOpen(false);
+      setActiveMenuId(null);
+      setSelectedSongs([id]);
+      lastAnchorSongIdRef.current = id;
+      return;
+    }
+
+    if (!isSelectMode) return;
+    lastAnchorSongIdRef.current = id;
+    setSelectedSongs((prev) =>
+      prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]
+    );
+  };
+
   /** انتخاب یا لغو انتخاب یک آهنگ */
   const toggleSelect = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
-    if (!isSelectMode) return;
-    const isAlreadySelected = selectedSongs.includes(id);
-    const nextSelected = isAlreadySelected
-      ? selectedSongs.filter((s) => s !== id)
-      : [...selectedSongs, id];
-
-    setSelectedSongs(nextSelected);
-    if (isAlreadySelected && nextSelected.length === 0) {
-      setIsSelectMode(false);
-    }
+    selectSongWithModifiers(id, {
+      shiftKey: e.shiftKey,
+      ctrlOrMeta: e.ctrlKey || e.metaKey,
+    });
   };
 
   /** انتخاب همه یا لغو انتخاب همه */
@@ -392,6 +430,7 @@ export const AllSongs = ({
     } else {
       setIsSelectMode(true);
       setSelectedSongs([]);
+      lastAnchorSongIdRef.current = null;
       setIsSortMenuOpen(false);
       setActiveMenuId(null);
     }
@@ -401,6 +440,7 @@ export const AllSongs = ({
   const exitSelectMode = () => {
     setIsSelectMode(false);
     setSelectedSongs([]);
+    lastAnchorSongIdRef.current = null;
   };
 
   /** پخش آهنگ‌های انتخاب‌شده */
@@ -445,6 +485,46 @@ export const AllSongs = ({
     }
     setPendingDeleteIds([...selectedSongs]);
   };
+
+  /** میانبرهای کیبورد لیست: Ctrl+A انتخاب همه، Delete/Backspace حذف انتخاب‌شده‌ها، Escape خروج */
+  useEffect(() => {
+    if (filteredAndSortedSongs.length === 0) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (isEditModalOpen || isInfoModalOpen || isPlaylistModalOpen || pendingDeleteIds !== null) {
+        return;
+      }
+      if (document.querySelector('[role="dialog"], [data-modal-open="true"], [data-queue-drawer="true"]')) {
+        return;
+      }
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.code === 'KeyA' && !e.altKey) {
+        e.preventDefault();
+        setIsSelectMode(true);
+        setSelectedSongs(filteredAndSortedSongs.map((s) => s.id));
+        return;
+      }
+      if ((e.key === 'Delete' || e.key === 'Backspace') && isSelectMode && selectedSongs.length > 0) {
+        e.preventDefault();
+        handleBulkDelete();
+        return;
+      }
+      if (e.key === 'Escape' && isSelectMode) {
+        exitSelectMode();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  });
 
   /** پخش بعدی گروهی آهنگ‌های انتخاب شده */
   const handleBulkPlayNext = () => {
@@ -743,78 +823,79 @@ export const AllSongs = ({
           )}
 
           {isSelectMode && selectedSongs.length > 0 && isMobile && (
-            <div style={{ position: 'relative' }} ref={bulkMenuRef}>
+            <>
               <button
                 type="button"
-                aria-label={t.moreActions || 'Actions'}
-                onClick={() => setIsBulkMenuOpen((prev) => !prev)}
+                onClick={handleBulkDelete}
                 style={{
-                  ...styles.actionBtn(theme, isBulkMenuOpen),
+                  ...styles.actionBtn(theme, false),
                   padding: '6px 10px',
+                  color: theme.colors.danger || '#ff453a',
+                  borderColor: withAlpha(theme.colors.danger || '#ff453a', 0.35),
+                  backgroundColor: withAlpha(theme.colors.danger || '#ff453a', 0.12),
                 }}
               >
-                <MoreHorizontal size={17} />
+                <Trash2 size={15} />
+                <span>{deleteActionLabel || t.deleteSelectedShort || t.deleteShort || t.deleteSong}</span>
               </button>
-              {isBulkMenuOpen && (
-                <div style={styles.dropdown(theme, '190px')}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsBulkMenuOpen(false);
-                      handlePlaySelected();
-                    }}
-                    style={menuItemStyle(theme, false, hoveredDropdownItem === 'bulk-play')}
-                    onMouseEnter={() => setHoveredDropdownItem('bulk-play')}
-                    onMouseLeave={() => setHoveredDropdownItem(null)}
-                  >
-                    <Play size={15} />
-                    <span>{t.play || 'پخش'}</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsBulkMenuOpen(false);
-                      handleOpenPlaylistModal();
-                    }}
-                    style={menuItemStyle(theme, false, hoveredDropdownItem === 'bulk-playlist')}
-                    onMouseEnter={() => setHoveredDropdownItem('bulk-playlist')}
-                    onMouseLeave={() => setHoveredDropdownItem(null)}
-                  >
-                    <FolderPlus size={15} />
-                    <span>{t.addToPlaylist || 'افزودن به لیست'}</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsBulkMenuOpen(false);
-                      handleBulkPlayNext();
-                    }}
-                    style={menuItemStyle(theme, false, hoveredDropdownItem === 'bulk-next')}
-                    onMouseEnter={() => setHoveredDropdownItem('bulk-next')}
-                    onMouseLeave={() => setHoveredDropdownItem(null)}
-                  >
-                    <SkipForward size={15} />
-                    <span>{t.playNext || 'پخش بعدی'}</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsBulkMenuOpen(false);
-                      handleBulkDelete();
-                    }}
-                    style={{
-                      ...menuItemStyle(theme, false, hoveredDropdownItem === 'bulk-delete', true),
-                      color: theme.colors.danger || '#ff453a',
-                    }}
-                    onMouseEnter={() => setHoveredDropdownItem('bulk-delete')}
-                    onMouseLeave={() => setHoveredDropdownItem(null)}
-                  >
-                    <Trash2 size={15} />
-                    <span>{deleteActionLabel || t.deleteSong}</span>
-                  </button>
-                </div>
-              )}
-            </div>
+
+              <div style={{ position: 'relative' }} ref={bulkMenuRef}>
+                <button
+                  type="button"
+                  aria-label={t.moreActions || 'Actions'}
+                  onClick={() => setIsBulkMenuOpen((prev) => !prev)}
+                  style={{
+                    ...styles.actionBtn(theme, isBulkMenuOpen),
+                    padding: '6px 10px',
+                  }}
+                >
+                  <MoreHorizontal size={17} />
+                </button>
+                {isBulkMenuOpen && (
+                  <div style={styles.dropdown(theme, '190px')}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsBulkMenuOpen(false);
+                        handlePlaySelected();
+                      }}
+                      style={menuItemStyle(theme, false, hoveredDropdownItem === 'bulk-play')}
+                      onMouseEnter={() => setHoveredDropdownItem('bulk-play')}
+                      onMouseLeave={() => setHoveredDropdownItem(null)}
+                    >
+                      <Play size={15} />
+                      <span>{t.play || 'پخش'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsBulkMenuOpen(false);
+                        handleOpenPlaylistModal();
+                      }}
+                      style={menuItemStyle(theme, false, hoveredDropdownItem === 'bulk-playlist')}
+                      onMouseEnter={() => setHoveredDropdownItem('bulk-playlist')}
+                      onMouseLeave={() => setHoveredDropdownItem(null)}
+                    >
+                      <FolderPlus size={15} />
+                      <span>{t.addToPlaylist || 'افزودن به لیست'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsBulkMenuOpen(false);
+                        handleBulkPlayNext();
+                      }}
+                      style={menuItemStyle(theme, false, hoveredDropdownItem === 'bulk-next')}
+                      onMouseEnter={() => setHoveredDropdownItem('bulk-next')}
+                      onMouseLeave={() => setHoveredDropdownItem(null)}
+                    >
+                      <SkipForward size={15} />
+                      <span>{t.playNext || 'پخش بعدی'}</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            </>
           )}
 
           {songs.length > 0 && (
@@ -944,7 +1025,7 @@ export const AllSongs = ({
                 }}
                 onContextMenu={(e) => handleSongContextMenu(e, song.id)}
                 onClick={(e) =>
-                  isSelectMode
+                  isSelectMode || e.ctrlKey || e.metaKey || e.shiftKey
                     ? toggleSelect(e, song.id)
                     : onPlaySongFromList(
                         song,

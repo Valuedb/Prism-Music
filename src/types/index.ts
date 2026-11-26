@@ -37,6 +37,17 @@ export interface LinkedFolder {
   addedAt: number;
   lastSyncedAt?: number;
   fileCount?: number;
+  sourceType?: 'desktop' | 'browser-handle' | 'browser-folder';
+}
+
+export interface LibraryScanProgress {
+  phase: 'discovering' | 'analyzing';
+  folderName: string;
+  folderPath: string;
+  discoveredFiles: number;
+  analyzedFiles: number;
+  addedCount: number;
+  currentFileName?: string;
 }
 
 export interface DesktopPickedFile {
@@ -74,6 +85,7 @@ export interface DesktopRuntimeAPI {
   isDesktop: boolean;
   getPathForFile?: (file: File) => string;
   pickAudioFiles?: () => Promise<DesktopPickedFile[]>;
+  pickFolderPath?: () => Promise<{ path: string; name: string } | null>;
   pickMusicFolder?: () => Promise<DesktopFolderScanResult | null>;
   scanFolder?: (folderPath: string) => Promise<DesktopFolderScanResult | null>;
   watchFolders?: (paths: string[]) => Promise<void>;

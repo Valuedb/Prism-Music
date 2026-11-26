@@ -125,7 +125,8 @@ export const extractLyricsFromCommon = (rawLyrics: unknown): string | undefined 
 /** استخراج متادیتا و ساخت آبجکت Song از یک فایل صوتی همراه با بارگذاری تنبل کتابخانه متادیتا */
 export const extractSongFromFile = async (
   file: File,
-  fallbackFolder?: string
+  fallbackFolder?: string,
+  options?: { linkedFolderPath?: string; sourcePath?: string }
 ): Promise<Song | null> => {
   try {
     const { parseBlob } = await import('music-metadata');
@@ -162,14 +163,16 @@ export const extractSongFromFile = async (
     }
 
     const desktopApi = typeof window !== 'undefined' ? window.desktopRuntime : undefined;
-    const diskPath = desktopApi?.isDesktop
-      ? desktopApi.getPathForFile?.(file) ||
-        ((file as File & { path?: string }).path ?? '')
-      : '';
+    const diskPath =
+      options?.sourcePath ||
+      (desktopApi?.isDesktop
+        ? desktopApi.getPathForFile?.(file) ||
+          ((file as File & { path?: string }).path ?? '')
+        : '');
 
     const id = crypto.randomUUID();
     let finalFileUrl = '';
-    if (diskPath) {
+    if (diskPath && desktopApi?.isDesktop) {
       finalFileUrl = `media://local?path=${encodeURIComponent(diskPath)}`;
     } else {
       await saveAudioBlob(id, file);
@@ -190,6 +193,7 @@ export const extractSongFromFile = async (
       cover: coverUrl,
       fileUrl: finalFileUrl,
       sourcePath: diskPath || undefined,
+      linkedFolderPath: options?.linkedFolderPath,
       fileMissing: false,
       playCount: 0,
       addedAt: Date.now(),
@@ -204,30 +208,82 @@ export const extractSongFromFile = async (
 export interface AudioFileWithFolder {
   file: File;
   folder?: string;
+  relativePath?: string;
 }
+
+export interface SongStreamOptions {
+  fallbackFolder?: string;
+  linkedFolderPath?: string;
+  batchSize?: number;
+  onProgress?: (info: { processed: number; total: number; currentFile: string }) => void;
+  onBatch?: (songs: Song[]) => void;
+}
+
+/**
+ * آنالیز جریانی و غیرمسدودکننده فایل‌های صوتی: هم‌زمان با استخراج تگ‌ها و کاور،
+ * آهنگ‌ها به‌صورت دسته‌ای و زنده به کتابخانه اضافه می‌شوند.
+ */
+export const extractSongsStreaming = async (
+  items: (File | AudioFileWithFolder)[],
+  options?: SongStreamOptions
+): Promise<Song[]> => {
+  const normalized: AudioFileWithFolder[] = items
+    .map((item) => (item instanceof File ? { file: item } : item))
+    .filter((entry) => isAudioUploadFile(entry.file));
+
+  const batchSize = options?.batchSize ?? 4;
+  const results: Song[] = [];
+  const baseTs = Date.now();
+  let processed = 0;
+
+  for (let i = 0; i < normalized.length; i += batchSize) {
+    const slice = normalized.slice(i, i + batchSize);
+    const extracted = await Promise.all(
+      slice.map((entry) =>
+        extractSongFromFile(entry.file, entry.folder ?? options?.fallbackFolder, {
+          linkedFolderPath: options?.linkedFolderPath,
+          sourcePath: entry.relativePath && options?.linkedFolderPath
+            ? `${options.linkedFolderPath}/${entry.relativePath}`
+            : undefined,
+        })
+      )
+    );
+
+    const chunk: Song[] = [];
+    for (const s of extracted) {
+      if (s) {
+        const stamped: Song = { ...s, addedAt: baseTs + results.length };
+        results.push(stamped);
+        chunk.push(stamped);
+      }
+    }
+
+    processed += slice.length;
+    options?.onProgress?.({
+      processed: Math.min(normalized.length, processed),
+      total: normalized.length,
+      currentFile: slice[slice.length - 1]?.file.name || '',
+    });
+
+    if (chunk.length > 0) {
+      options?.onBatch?.(chunk);
+    }
+
+    if (i + batchSize < normalized.length) {
+      await new Promise((r) => setTimeout(r, 0));
+    }
+  }
+
+  return assignBatchAddedAt(results);
+};
 
 /** پردازش دسته‌ای و هم‌زمان فایل‌های صوتی برای جلوگیری از کندی هنگام ایمپورت پوشه‌های بزرگ ویندوز */
 export const extractSongsBatched = async (
   items: (File | AudioFileWithFolder)[],
   fallbackFolder?: string,
   batchSize = 4
-): Promise<Song[]> => {
-  const normalized: AudioFileWithFolder[] = items
-    .map((item) => (item instanceof File ? { file: item } : item))
-    .filter((entry) => isAudioUploadFile(entry.file));
-
-  const results: Song[] = [];
-  for (let i = 0; i < normalized.length; i += batchSize) {
-    const slice = normalized.slice(i, i + batchSize);
-    const extracted = await Promise.all(
-      slice.map((entry) => extractSongFromFile(entry.file, entry.folder ?? fallbackFolder))
-    );
-    for (const s of extracted) {
-      if (s) results.push(s);
-    }
-  }
-  return assignBatchAddedAt(results);
-};
+): Promise<Song[]> =>
+  extractSongsStreaming(items, { fallbackFolder, batchSize });
 
 interface WebkitEntry {
   isFile: boolean;

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, lazy, Suspense, useRef } from 'react';
 import { motion, AnimatePresence, MotionConfig } from 'framer-motion';
-import { Upload } from 'lucide-react';
+import { Upload, Sparkles } from 'lucide-react';
 import { PlayerBar } from './components/PlayerBar';
 import { TopBar } from './components/TopBar';
 import { SideBar } from './components/SideBar';
@@ -25,6 +25,7 @@ import type {
   DesktopPickedFile,
   DisplaySettings,
   EqualizerSettings,
+  LibraryScanProgress,
   LinkedFolder,
   PlaybackPreferences,
   Playlist,
@@ -38,9 +39,19 @@ import { translations, type Language } from './locales';
 import { DEFAULT_DISPLAY_SETTINGS, getTheme, type PaletteType, type ThemeMode } from './theme';
 import { getAudioBlobsBatch, deleteAudioBlob } from './storage/mediaStore';
 import {
+  collectAudioFilesFromDirectoryHandle,
+  deleteDirectoryHandle,
+  ensureDirectoryHandlePermission,
+  getDirectoryHandle,
+  pickBrowserDirectoryHandle,
+  saveDirectoryHandle,
+} from './storage/folderHandlesStore';
+import {
   extractDroppedAudioFiles,
   extractSongsBatched,
+  extractSongsStreaming,
   partitionDuplicateSongs,
+  type AudioFileWithFolder,
 } from './utils/audioMetadata';
 import {
   buildDesktopMediaUrl,
@@ -50,6 +61,10 @@ import {
   normalizeDiskPath,
   syncDesktopFolderResult,
 } from './utils/desktopBridge';
+import {
+  buildBrowserFolderLocationId,
+  inferFolderLocationNameFromFiles,
+} from './utils/smartLibraryScanner';
 import { extractDominantHex } from './utils/artworkColor';
 import {
   applyDesktopWebViewHardening,
@@ -233,6 +248,7 @@ function App() {
     [],
     isLinkedFolderList
   );
+  const [libraryScanProgress, setLibraryScanProgress] = useState<LibraryScanProgress | null>(null);
   const [adaptivePrimaryHex, setAdaptivePrimaryHex] = useState<string | null>(null);
   const player = usePlayer(songs);
 
@@ -271,6 +287,17 @@ function App() {
     return run;
   }, []);
 
+  const upsertLinkedFolder = useCallback(
+    (folder: LinkedFolder) => {
+      const targetKey = normalizeDiskPath(folder.path);
+      setLinkedFolders((prev) => [
+        ...prev.filter((item) => normalizeDiskPath(item.path) !== targetKey && item.id !== folder.id),
+        folder,
+      ]);
+    },
+    [setLinkedFolders]
+  );
+
   const applyDesktopFolderScan = useCallback(
     (
       scan: DesktopFolderScanResult,
@@ -280,104 +307,122 @@ function App() {
         const linkedItem = linkedFoldersRef.current.find(
           (item) => normalizeDiskPath(item.path) === normalizeDiskPath(scan.folderPath)
         );
-        const result = await syncDesktopFolderResult(
-          scan,
-          songsRef.current,
-          linkedItem?.name || scan.folderName
-        );
+        const locationName = linkedItem?.name || scan.folderName;
+        let streamedAddedCount = 0;
+        let firstAddedSong: Song | undefined;
 
-        let runningSongs = [...songsRef.current];
+        let result: Awaited<ReturnType<typeof syncDesktopFolderResult>>;
+        try {
+          result = await syncDesktopFolderResult(scan, songsRef.current, locationName, {
+            onProgress: ({ processed, total, currentFile }) => {
+              setLibraryScanProgress({
+                phase: 'analyzing',
+                folderName: locationName,
+                folderPath: scan.folderPath,
+                discoveredFiles: total,
+                analyzedFiles: processed,
+                addedCount: streamedAddedCount,
+                currentFileName: currentFile,
+              });
+            },
+            onBatch: (chunk) => {
+              setSongs((prev) => {
+                const filteredChunk = playbackPrefsRef.current.skipDuplicatesOnImport
+                  ? partitionDuplicateSongs(chunk, prev).unique
+                  : chunk;
+                if (filteredChunk.length === 0) return prev;
+                streamedAddedCount += filteredChunk.length;
+                if (!firstAddedSong) firstAddedSong = filteredChunk[0];
+                const next = [...prev, ...filteredChunk];
+                songsRef.current = next;
+                return next;
+              });
+            },
+          });
+        } finally {
+          setLibraryScanProgress(null);
+        }
+
         const removedSet = new Set(result.removedIds);
         const missingSet = new Set(result.missingIds);
-        let changedSongs = false;
+        const hasMetadataUpdates =
+          removedSet.size > 0 || result.restoredUpdates.size > 0 || missingSet.size > 0;
 
-        if (removedSet.size > 0) {
-          runningSongs = runningSongs.filter((s) => !removedSet.has(s.id));
-          changedSongs = true;
-        }
-
-        if (result.restoredUpdates.size > 0 || missingSet.size > 0) {
-          runningSongs = runningSongs.map((s) => {
-            const restore = result.restoredUpdates.get(s.id);
-            if (restore) {
-              changedSongs = true;
-              return {
-                ...s,
-                fileMissing: false,
-                fileUrl: restore.fileUrl,
-                linkedFolderPath: restore.linkedFolderPath,
-                folder: restore.folder || s.folder,
-              };
-            }
-            if (missingSet.has(s.id) && !s.fileMissing) {
-              changedSongs = true;
-              return { ...s, fileMissing: true };
-            }
-            return s;
-          });
-        }
-
-        const uniqueNewSongs =
-          result.newSongs.length > 0
-            ? playbackPrefsRef.current.skipDuplicatesOnImport
-              ? partitionDuplicateSongs(result.newSongs, runningSongs).unique
-              : result.newSongs
-            : [];
-
-        if (uniqueNewSongs.length > 0) {
-          runningSongs = [...runningSongs, ...uniqueNewSongs];
-          changedSongs = true;
-        }
-
-        if (changedSongs) {
-          songsRef.current = runningSongs;
-          setSongs(runningSongs);
-
-          if (removedSet.size > 0 || result.restoredUpdates.size > 0 || missingSet.size > 0) {
-            setPlaylists((prev) =>
-              prev.map((pl) => ({
-                ...pl,
-                songs: pl.songs
-                  .filter((s) => !removedSet.has(s.id))
-                  .map((s) => {
-                    const restore = result.restoredUpdates.get(s.id);
-                    if (restore) {
-                      return {
-                        ...s,
-                        fileMissing: false,
-                        fileUrl: restore.fileUrl,
-                        linkedFolderPath: restore.linkedFolderPath,
-                        folder: restore.folder || s.folder,
-                      };
-                    }
-                    if (missingSet.has(s.id) && !s.fileMissing) {
-                      return { ...s, fileMissing: true };
-                    }
-                    return s;
-                  }),
-              }))
-            );
-
-            for (const removedId of removedSet) {
-              player.removeSong(removedId);
-            }
-            for (const [id, restore] of result.restoredUpdates.entries()) {
-              const updatedTarget = runningSongs.find((s) => s.id === id);
-              if (updatedTarget) {
-                player.syncSong({
-                  ...updatedTarget,
+        if (hasMetadataUpdates) {
+          let snapshotAfterDelta = songsRef.current;
+          setSongs((prev) => {
+            let changed = false;
+            const filtered = removedSet.size > 0 ? prev.filter((s) => !removedSet.has(s.id)) : prev;
+            if (filtered.length !== prev.length) changed = true;
+            const mapped = filtered.map((s) => {
+              const restore = result.restoredUpdates.get(s.id);
+              if (restore) {
+                changed = true;
+                return {
+                  ...s,
                   fileMissing: false,
                   fileUrl: restore.fileUrl,
                   linkedFolderPath: restore.linkedFolderPath,
-                  folder: restore.folder || updatedTarget.folder,
-                });
+                  folder: restore.folder || s.folder,
+                };
               }
+              if (missingSet.has(s.id) && !s.fileMissing) {
+                changed = true;
+                return { ...s, fileMissing: true };
+              }
+              return s;
+            });
+            if (changed) {
+              songsRef.current = mapped;
+              snapshotAfterDelta = mapped;
+              return mapped;
             }
-            for (const missingId of missingSet) {
-              const updatedTarget = runningSongs.find((s) => s.id === missingId);
-              if (updatedTarget) {
-                player.syncSong({ ...updatedTarget, fileMissing: true });
-              }
+            return prev;
+          });
+
+          setPlaylists((prev) =>
+            prev.map((pl) => ({
+              ...pl,
+              songs: pl.songs
+                .filter((s) => !removedSet.has(s.id))
+                .map((s) => {
+                  const restore = result.restoredUpdates.get(s.id);
+                  if (restore) {
+                    return {
+                      ...s,
+                      fileMissing: false,
+                      fileUrl: restore.fileUrl,
+                      linkedFolderPath: restore.linkedFolderPath,
+                      folder: restore.folder || s.folder,
+                    };
+                  }
+                  if (missingSet.has(s.id) && !s.fileMissing) {
+                    return { ...s, fileMissing: true };
+                  }
+                  return s;
+                }),
+            }))
+          );
+
+          for (const removedId of removedSet) {
+            player.removeSong(removedId);
+          }
+          for (const [id, restore] of result.restoredUpdates.entries()) {
+            const updatedTarget = snapshotAfterDelta.find((s) => s.id === id);
+            if (updatedTarget) {
+              player.syncSong({
+                ...updatedTarget,
+                fileMissing: false,
+                fileUrl: restore.fileUrl,
+                linkedFolderPath: restore.linkedFolderPath,
+                folder: restore.folder || updatedTarget.folder,
+              });
+            }
+          }
+          for (const missingId of missingSet) {
+            const updatedTarget = snapshotAfterDelta.find((s) => s.id === missingId);
+            if (updatedTarget) {
+              player.syncSong({ ...updatedTarget, fileMissing: true });
             }
           }
         }
@@ -415,16 +460,16 @@ function App() {
           folderRetryTimersRef.current.set(rootKey, timerId);
         }
 
-        if (options?.allowAutoPlay && uniqueNewSongs.length > 0) {
+        if (options?.allowAutoPlay && firstAddedSong) {
           if (playbackPrefsRef.current.autoPlayOnImport || !player.currentSong) {
-            player.playSongFromList(uniqueNewSongs[0], runningSongs);
+            player.playSongFromList(firstAddedSong, songsRef.current);
           }
         }
 
         return {
-          addedCount: uniqueNewSongs.length,
+          addedCount: streamedAddedCount,
           removedCount: removedSet.size,
-          firstAdded: uniqueNewSongs[0],
+          firstAdded: firstAddedSong,
         };
       }),
     [enqueueDesktopTask, player, setLinkedFolders, setPlaylists, setSongs]
@@ -433,6 +478,395 @@ function App() {
   useEffect(() => {
     applyDesktopFolderScanRef.current = applyDesktopFolderScan;
   }, [applyDesktopFolderScan]);
+
+  const analyzeBrowserItemsIntoLocation = useCallback(
+    (params: {
+      files: AudioFileWithFolder[];
+      locationId: string;
+      locationName: string;
+      sourceType: 'browser-handle' | 'browser-folder';
+      fallbackFolder?: string;
+      allowAutoPlay?: boolean;
+    }): Promise<{ addedCount: number; firstAdded?: Song }> =>
+      enqueueDesktopTask(async () => {
+        const { files, locationId, locationName, sourceType, fallbackFolder, allowAutoPlay } = params;
+        const folderRecord: LinkedFolder = {
+          id: locationId,
+          path: locationId,
+          name: locationName,
+          addedAt: Date.now(),
+          lastSyncedAt: Date.now(),
+          fileCount: files.length,
+          sourceType,
+        };
+        upsertLinkedFolder(folderRecord);
+
+        if (files.length === 0) {
+          setLibraryScanProgress(null);
+          return { addedCount: 0 };
+        }
+
+        // اگر از handle پایدار مرورگر همگام‌سازی می‌شود، فقط فایل‌های جدید را آنالیز و فایل‌های حذف‌شده را پاک کن
+        let itemsToExtract = files;
+        if (sourceType === 'browser-handle') {
+          const incomingSources = new Set(
+            files.map((item) =>
+              item.relativePath ? `${locationId}/${item.relativePath}` : `${locationId}/${item.file.name}`
+            )
+          );
+          const existingForLocation = songsRef.current.filter(
+            (s) => s.linkedFolderPath === locationId && s.sourcePath
+          );
+          const existingSources = new Set(existingForLocation.map((s) => s.sourcePath!));
+          const removedIds = existingForLocation
+            .filter((s) => s.sourcePath && !incomingSources.has(s.sourcePath))
+            .map((s) => s.id);
+
+          if (removedIds.length > 0) {
+            const removedSet = new Set(removedIds);
+            setSongs((prev) => {
+              const next = prev.filter((s) => !removedSet.has(s.id));
+              songsRef.current = next;
+              return next;
+            });
+            removedIds.forEach((id) => {
+              player.removeSong(id);
+              void deleteAudioBlob(id);
+            });
+          }
+
+          itemsToExtract = files.filter((item) => {
+            const key = item.relativePath
+              ? `${locationId}/${item.relativePath}`
+              : `${locationId}/${item.file.name}`;
+            return !existingSources.has(key);
+          });
+        }
+
+        if (itemsToExtract.length === 0) {
+          setLibraryScanProgress(null);
+          return { addedCount: 0 };
+        }
+
+        let streamedAdded = 0;
+        let firstAdded: Song | undefined;
+        setLibraryScanProgress({
+          phase: 'analyzing',
+          folderName: locationName,
+          folderPath: locationId,
+          discoveredFiles: itemsToExtract.length,
+          analyzedFiles: 0,
+          addedCount: 0,
+        });
+
+        try {
+          await extractSongsStreaming(itemsToExtract, {
+            fallbackFolder: fallbackFolder || locationName,
+            linkedFolderPath: locationId,
+            onProgress: ({ processed, total, currentFile }) => {
+              setLibraryScanProgress({
+                phase: 'analyzing',
+                folderName: locationName,
+                folderPath: locationId,
+                discoveredFiles: total,
+                analyzedFiles: processed,
+                addedCount: streamedAdded,
+                currentFileName: currentFile,
+              });
+            },
+            onBatch: (chunk) => {
+              setSongs((prev) => {
+                const { unique, duplicates } = playbackPrefsRef.current.skipDuplicatesOnImport
+                  ? partitionDuplicateSongs(chunk, prev)
+                  : { unique: chunk, duplicates: [] as Song[] };
+                duplicates.forEach((dup) => {
+                  if (dup.fileUrl.startsWith('blob:')) URL.revokeObjectURL(dup.fileUrl);
+                  void deleteAudioBlob(dup.id);
+                });
+                if (unique.length === 0) return prev;
+                streamedAdded += unique.length;
+                if (!firstAdded) firstAdded = unique[0];
+                const next = [...prev, ...unique];
+                songsRef.current = next;
+                return next;
+              });
+            },
+          });
+        } finally {
+          setLibraryScanProgress(null);
+        }
+
+        upsertLinkedFolder({
+          ...folderRecord,
+          lastSyncedAt: Date.now(),
+          fileCount: files.length,
+        });
+
+        if (allowAutoPlay && firstAdded) {
+          if (playbackPrefsRef.current.autoPlayOnImport || !player.currentSong) {
+            player.playSongFromList(firstAdded, songsRef.current);
+          }
+        }
+
+        return { addedCount: streamedAdded, firstAdded };
+      }),
+    [enqueueDesktopTask, player, setSongs, upsertLinkedFolder]
+  );
+
+  const handleAddFolderLocation = useCallback(
+    async (options?: { allowAutoPlay?: boolean; fallbackFolder?: string }): Promise<
+      | { status: 'completed'; addedCount: number; folderName?: string }
+      | { status: 'cancelled' }
+      | { status: 'fallback-needed' }
+    > => {
+      const api = typeof window !== 'undefined' ? window.desktopRuntime : undefined;
+      const allowAutoPlay = options?.allowAutoPlay ?? true;
+
+      if (api?.isDesktop) {
+        if (api.pickFolderPath && api.scanFolder) {
+          const picked = await api.pickFolderPath();
+          if (!picked) return { status: 'cancelled' };
+
+          upsertLinkedFolder({
+            id: picked.path,
+            path: picked.path,
+            name: picked.name,
+            addedAt: Date.now(),
+            lastSyncedAt: Date.now(),
+            sourceType: 'desktop',
+          });
+          setLibraryScanProgress({
+            phase: 'discovering',
+            folderName: picked.name,
+            folderPath: picked.path,
+            discoveredFiles: 0,
+            analyzedFiles: 0,
+            addedCount: 0,
+          });
+          try {
+            const scan = await api.scanFolder(picked.path);
+            if (!scan) {
+              setLibraryScanProgress(null);
+              return { status: 'completed', addedCount: 0, folderName: picked.name };
+            }
+            const outcome = await applyDesktopFolderScan(scan, { allowAutoPlay });
+            return { status: 'completed', addedCount: outcome.addedCount, folderName: picked.name };
+          } catch {
+            setLibraryScanProgress(null);
+            return { status: 'completed', addedCount: 0, folderName: picked.name };
+          }
+        }
+
+        if (api.pickMusicFolder) {
+          const scan = await api.pickMusicFolder();
+          if (!scan) return { status: 'cancelled' };
+          upsertLinkedFolder({
+            id: scan.folderPath,
+            path: scan.folderPath,
+            name: scan.folderName,
+            addedAt: Date.now(),
+            lastSyncedAt: Date.now(),
+            fileCount: scan.files.length,
+            sourceType: 'desktop',
+          });
+          const outcome = await applyDesktopFolderScan(scan, { allowAutoPlay });
+          return {
+            status: 'completed',
+            addedCount: outcome.addedCount,
+            folderName: scan.folderName,
+          };
+        }
+      }
+
+      const picked = await pickBrowserDirectoryHandle();
+      if (picked.status === 'cancelled') return { status: 'cancelled' };
+      if (picked.status === 'unsupported') return { status: 'fallback-needed' };
+
+      const handle = picked.handle;
+      const locationId = buildBrowserFolderLocationId(handle.name);
+      await saveDirectoryHandle(locationId, handle);
+      upsertLinkedFolder({
+        id: locationId,
+        path: locationId,
+        name: handle.name,
+        addedAt: Date.now(),
+        lastSyncedAt: Date.now(),
+        sourceType: 'browser-handle',
+      });
+      setLibraryScanProgress({
+        phase: 'discovering',
+        folderName: handle.name,
+        folderPath: locationId,
+        discoveredFiles: 0,
+        analyzedFiles: 0,
+        addedCount: 0,
+      });
+
+      const collected = await collectAudioFilesFromDirectoryHandle(handle, (count) => {
+        setLibraryScanProgress((prev) =>
+          prev ? { ...prev, discoveredFiles: count } : prev
+        );
+      });
+
+      const outcome = await analyzeBrowserItemsIntoLocation({
+        files: collected,
+        locationId,
+        locationName: handle.name,
+        sourceType: 'browser-handle',
+        fallbackFolder: options?.fallbackFolder,
+        allowAutoPlay,
+      });
+      return {
+        status: 'completed',
+        addedCount: outcome.addedCount,
+        folderName: handle.name,
+      };
+    },
+    [analyzeBrowserItemsIntoLocation, applyDesktopFolderScan, upsertLinkedFolder]
+  );
+
+  const handleLinkDefaultMusicFolder = useCallback(async (): Promise<{
+    addedCount: number;
+    folderName?: string;
+  }> => {
+    const api = typeof window !== 'undefined' ? window.desktopRuntime : undefined;
+    if (!api?.isDesktop || !api.getDefaultMusicFolder || !api.scanFolder) {
+      return { addedCount: 0 };
+    }
+    const defaultFolder = await api.getDefaultMusicFolder();
+    if (!defaultFolder) return { addedCount: 0 };
+
+    upsertLinkedFolder({
+      id: defaultFolder.path,
+      path: defaultFolder.path,
+      name: defaultFolder.name,
+      addedAt: Date.now(),
+      lastSyncedAt: Date.now(),
+      sourceType: 'desktop',
+    });
+    setLibraryScanProgress({
+      phase: 'discovering',
+      folderName: defaultFolder.name,
+      folderPath: defaultFolder.path,
+      discoveredFiles: 0,
+      analyzedFiles: 0,
+      addedCount: 0,
+    });
+    try {
+      const scan = await api.scanFolder(defaultFolder.path);
+      if (!scan) {
+        setLibraryScanProgress(null);
+        return { addedCount: 0, folderName: defaultFolder.name };
+      }
+      const outcome = await applyDesktopFolderScan(scan, { allowAutoPlay: true });
+      return { addedCount: outcome.addedCount, folderName: defaultFolder.name };
+    } catch {
+      setLibraryScanProgress(null);
+      return { addedCount: 0, folderName: defaultFolder.name };
+    }
+  }, [applyDesktopFolderScan, upsertLinkedFolder]);
+
+  const handleImportBrowserDirectoryFiles = useCallback(
+    async (
+      files: File[],
+      fallbackFolder?: string,
+      allowAutoPlay = true
+    ): Promise<{ addedCount: number; folderName: string }> => {
+      const folderName = inferFolderLocationNameFromFiles(files) || fallbackFolder || 'Music Folder';
+      const locationId = buildBrowserFolderLocationId(folderName);
+      const items: AudioFileWithFolder[] = files.map((file) => {
+        const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath;
+        return {
+          file,
+          folder: fallbackFolder,
+          relativePath: rel || `${folderName}/${file.name}`,
+        };
+      });
+      const outcome = await analyzeBrowserItemsIntoLocation({
+        files: items,
+        locationId,
+        locationName: folderName,
+        sourceType: 'browser-folder',
+        fallbackFolder,
+        allowAutoPlay,
+      });
+      return { addedCount: outcome.addedCount, folderName };
+    },
+    [analyzeBrowserItemsIntoLocation]
+  );
+
+  const handleSyncLinkedFolder = useCallback(
+    async (folder: LinkedFolder): Promise<{ addedCount: number; missing?: boolean }> => {
+      const isDesktopFolder =
+        folder.sourceType === 'desktop' ||
+        (isDesktopRuntime() &&
+          Boolean(window.desktopRuntime?.scanFolder) &&
+          !folder.path.startsWith('browser-'));
+
+      if (isDesktopFolder && window.desktopRuntime?.scanFolder) {
+        setLibraryScanProgress({
+          phase: 'discovering',
+          folderName: folder.name,
+          folderPath: folder.path,
+          discoveredFiles: 0,
+          analyzedFiles: 0,
+          addedCount: 0,
+        });
+        const scan = await window.desktopRuntime.scanFolder(folder.path);
+        if (!scan || scan.missing) {
+          await applyDesktopFolderScan({
+            folderPath: folder.path,
+            folderName: folder.name,
+            files: [],
+            missing: true,
+          });
+          return { addedCount: 0, missing: true };
+        }
+        const outcome = await applyDesktopFolderScan(scan, { allowAutoPlay: false });
+        return { addedCount: outcome.addedCount };
+      }
+
+      const handle = await getDirectoryHandle(folder.id || folder.path);
+      if (handle && (await ensureDirectoryHandlePermission(handle))) {
+        setLibraryScanProgress({
+          phase: 'discovering',
+          folderName: folder.name,
+          folderPath: folder.path,
+          discoveredFiles: 0,
+          analyzedFiles: 0,
+          addedCount: 0,
+        });
+        const collected = await collectAudioFilesFromDirectoryHandle(handle, (count) => {
+          setLibraryScanProgress((prev) =>
+            prev ? { ...prev, discoveredFiles: count } : prev
+          );
+        });
+        const outcome = await analyzeBrowserItemsIntoLocation({
+          files: collected,
+          locationId: folder.id || folder.path,
+          locationName: folder.name,
+          sourceType: 'browser-handle',
+          allowAutoPlay: false,
+        });
+        return { addedCount: outcome.addedCount };
+      }
+
+      const res = await handleAddFolderLocation({ allowAutoPlay: false });
+      return { addedCount: res.status === 'completed' ? res.addedCount : 0 };
+    },
+    [analyzeBrowserItemsIntoLocation, applyDesktopFolderScan, handleAddFolderLocation]
+  );
+
+  const handleUnlinkLinkedFolder = useCallback(
+    (folderPathOrId: string) => {
+      const key = normalizeDiskPath(folderPathOrId);
+      setLinkedFolders((prev) =>
+        prev.filter((item) => normalizeDiskPath(item.path) !== key && item.id !== folderPathOrId)
+      );
+      void deleteDirectoryHandle(folderPathOrId);
+    },
+    [setLinkedFolders]
+  );
 
   const handleOpenExternalFiles = useCallback(
     (pickedFiles: DesktopPickedFile[]) =>
@@ -491,7 +925,10 @@ function App() {
   // همگام‌سازی خودکار وضعیت پایش لحظه‌ای پوشه‌های متصل روی دیسک در پس‌زمینه
   useEffect(() => {
     if (!isDesktopRuntime() || !window.desktopRuntime?.watchFolders) return;
-    void window.desktopRuntime.watchFolders(linkedFolders.map((f) => f.path));
+    const diskFolderPaths = linkedFolders
+      .filter((f) => (!f.sourceType || f.sourceType === 'desktop') && !f.path.startsWith('browser-'))
+      .map((f) => f.path);
+    void window.desktopRuntime.watchFolders(diskFolderPaths);
   }, [linkedFolders]);
 
   // اعمال یکپارچه‌ی تمام تنظیمات صدا و اکولایزر روی موتور DSP خروجی صوتی
@@ -569,7 +1006,10 @@ function App() {
     const syncLinkedFolders = async () => {
       if (!isDesktopRuntime() || !window.desktopRuntime?.scanFolder) return;
       const api = window.desktopRuntime;
-      for (const folder of linkedFoldersRef.current) {
+      const diskFolders = linkedFoldersRef.current.filter(
+        (f) => (!f.sourceType || f.sourceType === 'desktop') && !f.path.startsWith('browser-')
+      );
+      for (const folder of diskFolders) {
         if (cancelled) return;
         const scan = await api.scanFolder!(folder.path);
         if (cancelled) return;
@@ -1392,6 +1832,12 @@ function App() {
           onPlayImported={handlePlaySongFromList}
           onDeleteSongsBatch={handleBulkDeleteSongs}
           onSyncDesktopFolderScan={applyDesktopFolderScan}
+          scanProgress={libraryScanProgress}
+          onAddFolderLocation={() => handleAddFolderLocation({ allowAutoPlay: true })}
+          onLinkDefaultMusicFolder={handleLinkDefaultMusicFolder}
+          onSyncLinkedFolder={handleSyncLinkedFolder}
+          onUnlinkLinkedFolder={handleUnlinkLinkedFolder}
+          onImportBrowserDirectoryFiles={handleImportBrowserDirectoryFiles}
           onCloseSettings={() => setIsSettingsOpen(false)}
           initialSubPage={settingsSubPage}
         />
@@ -1558,13 +2004,15 @@ function App() {
             initialFolder={
               navTarget?.tab === 'folders' ? { id: navTarget.key, token: navTarget.token } : null
             }
+            linkedFolders={linkedFolders}
+            scanProgress={libraryScanProgress}
+            onAddFolderLocation={handleAddFolderLocation}
+            onLinkDefaultMusicFolder={handleLinkDefaultMusicFolder}
+            onSyncLinkedFolder={handleSyncLinkedFolder}
+            onUnlinkLinkedFolder={handleUnlinkLinkedFolder}
+            onImportBrowserDirectoryFiles={handleImportBrowserDirectoryFiles}
             onLinkDesktopFolder={(folder) =>
-              setLinkedFolders((prev) => [
-                ...prev.filter(
-                  (item) => normalizeDiskPath(item.path) !== normalizeDiskPath(folder.path)
-                ),
-                folder,
-              ])
+              upsertLinkedFolder(folder)
             }
           />
         );
@@ -1891,6 +2339,69 @@ function App() {
           </>
         );
       })()}
+
+      {/* نشانگر شناور پیشرفت آنالیز هوشمند وقتی کاربر به تب دیگری جابه‌جا می‌شود */}
+      <AnimatePresence>
+        {libraryScanProgress && (currentTab !== 'folders' || isSettingsOpen) && (
+          <motion.div
+            key="smart-scan-floating-pill"
+            initial={{ opacity: 0, y: 14, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 12, scale: 0.96 }}
+            transition={{ duration: 0.2 }}
+            onClick={() => {
+              setIsSettingsOpen(false);
+              setTab('folders');
+            }}
+            style={{
+              position: 'fixed',
+              bottom: '110px',
+              insetInlineEnd: '20px',
+              zIndex: 118,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px',
+              padding: '9px 14px',
+              borderRadius: '14px',
+              backgroundColor: theme.colors.surfaceSolid || (theme.isDark ? '#18181c' : '#ffffff'),
+              border: `1px solid ${theme.colors.primary}55`,
+              boxShadow: '0 12px 28px rgba(0, 0, 0, 0.35)',
+              cursor: 'pointer',
+              maxWidth: '300px',
+              direction: language === 'fa' ? 'rtl' : 'ltr',
+            }}
+          >
+            <Sparkles size={16} color={theme.colors.primary} style={{ flexShrink: 0 }} />
+            <div style={{ minWidth: 0 }}>
+              <div
+                style={{
+                  fontSize: '0.7813rem',
+                  fontWeight: 700,
+                  color: theme.colors.textPrimary,
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+              >
+                {libraryScanProgress.phase === 'discovering'
+                  ? t.smartDiscoveringFiles || 'در حال یافتن فایل‌ها...'
+                  : `${t.smartAnalyzingTracks || 'آنالیز هوشمند'} (${libraryScanProgress.analyzedFiles}/${libraryScanProgress.discoveredFiles})`}
+              </div>
+              <div
+                style={{
+                  fontSize: '0.6875rem',
+                  color: theme.colors.textSecondary,
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+              >
+                {libraryScanProgress.currentFileName || libraryScanProgress.folderName}
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* راهنمای رها کردن فایل/پوشه فقط هنگام کشیدن فایل روی پنجره ویندوز */}
       {isDraggingFiles && (

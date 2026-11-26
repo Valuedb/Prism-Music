@@ -1,4 +1,5 @@
 import type { DesktopPickedFile, DesktopFolderScanResult } from '../types';
+import { isIgnoredFolderName } from './smartLibraryScanner';
 
 interface TauriFileFilter {
   name: string;
@@ -157,7 +158,7 @@ export const initTauriDesktopBridge = (): void => {
   const tauri = getTauriGlobal();
   const dialog = tauri?.dialog;
   const fs = tauri?.fs;
-  if (!dialog?.open || (!fs?.readFile && !fs?.readBinaryFile)) {
+  if (!dialog?.open || (!fs?.readDir && !fs?.readFile && !fs?.readBinaryFile)) {
     return;
   }
 
@@ -175,11 +176,32 @@ export const initTauriDesktopBridge = (): void => {
   const scanFolder = async (folderPath: string): Promise<DesktopFolderScanResult | null> => {
     if (!fs.readDir) return null;
     try {
+      if (fs.exists) {
+        try {
+          const exists = await fs.exists(folderPath);
+          if (!exists) {
+            return {
+              folderPath,
+              folderName: extractFileName(folderPath),
+              files: [],
+              missing: true,
+            };
+          }
+        } catch {
+          // ignore exists error and attempt readDir directly
+        }
+      }
+
       const files: DesktopPickedFile[] = [];
       const rootName = extractFileName(folderPath);
 
       const walk = async (dirPath: string, relFolder: string) => {
-        const entries = await fs.readDir!(dirPath);
+        let entries: TauriFsDirEntry[];
+        try {
+          entries = await fs.readDir!(dirPath);
+        } catch {
+          return;
+        }
         for (const entry of entries) {
           const name = entry.name || (entry.path ? extractFileName(entry.path) : '');
           if (!name) continue;
@@ -188,6 +210,7 @@ export const initTauriDesktopBridge = (): void => {
             entry.path || `${dirPath.replace(/[\\/]+$/, '')}${sep}${name}`;
           const isDir = Boolean(entry.isDirectory || Array.isArray(entry.children));
           if (isDir) {
+            if (isIgnoredFolderName(name)) continue;
             await walk(fullPath, relFolder ? `${relFolder}/${name}` : name);
           } else if (isAudioPath(name)) {
             files.push({
@@ -207,6 +230,51 @@ export const initTauriDesktopBridge = (): void => {
       };
     } catch {
       return null;
+    }
+  };
+
+  let watchedPaths: string[] = [];
+  const lastFingerprints = new Map<string, string>();
+  const folderChangeListeners = new Set<(scan: DesktopFolderScanResult) => void>();
+  let watchTimerId: number | null = null;
+  let watchBusy = false;
+
+  const computeFingerprint = (scan: DesktopFolderScanResult): string => {
+    if (scan.missing) return '__missing__';
+    return scan.files
+      .map((f) => f.path)
+      .sort()
+      .join('|');
+  };
+
+  const pollWatchedFolders = async () => {
+    if (watchBusy || watchedPaths.length === 0 || folderChangeListeners.size === 0) return;
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    watchBusy = true;
+    try {
+      for (const folderPath of watchedPaths) {
+        const scan = await scanFolder(folderPath);
+        if (!scan) continue;
+        const fp = computeFingerprint(scan);
+        const prev = lastFingerprints.get(folderPath);
+        lastFingerprints.set(folderPath, fp);
+        if (prev !== undefined && prev !== fp) {
+          folderChangeListeners.forEach((cb) => cb(scan));
+        }
+      }
+    } finally {
+      watchBusy = false;
+    }
+  };
+
+  const ensureWatchLoop = () => {
+    if (watchedPaths.length > 0 && watchTimerId === null) {
+      watchTimerId = window.setInterval(() => {
+        void pollWatchedFolders();
+      }, 5000);
+    } else if (watchedPaths.length === 0 && watchTimerId !== null) {
+      window.clearInterval(watchTimerId);
+      watchTimerId = null;
     }
   };
 
@@ -232,6 +300,17 @@ export const initTauriDesktopBridge = (): void => {
         name: extractFileName(p),
       }));
     },
+    pickFolderPath: async () => {
+      const selected = await dialog.open?.({
+        multiple: false,
+        directory: true,
+      });
+      if (!selected || Array.isArray(selected)) return null;
+      return {
+        path: selected,
+        name: extractFileName(selected),
+      };
+    },
     pickMusicFolder: async () => {
       const selected = await dialog.open?.({
         multiple: false,
@@ -241,6 +320,49 @@ export const initTauriDesktopBridge = (): void => {
       return scanFolder(selected);
     },
     scanFolder,
+    watchFolders: async (paths: string[]) => {
+      watchedPaths = Array.from(new Set(paths.filter(Boolean)));
+      for (const known of Array.from(lastFingerprints.keys())) {
+        if (!watchedPaths.includes(known)) {
+          lastFingerprints.delete(known);
+        }
+      }
+      for (const p of watchedPaths) {
+        if (!lastFingerprints.has(p)) {
+          const initialScan = await scanFolder(p);
+          if (initialScan) {
+            lastFingerprints.set(p, computeFingerprint(initialScan));
+          }
+        }
+      }
+      ensureWatchLoop();
+    },
+    onFolderChanged: (callback) => {
+      folderChangeListeners.add(callback);
+      return () => {
+        folderChangeListeners.delete(callback);
+      };
+    },
+    inspectPaths: async (paths: string[]) => {
+      const dirs: string[] = [];
+      const files: DesktopPickedFile[] = [];
+      for (const p of paths) {
+        if (!p) continue;
+        if (isAudioPath(p)) {
+          files.push({ path: p, name: extractFileName(p) });
+          continue;
+        }
+        if (fs.readDir) {
+          try {
+            await fs.readDir(p);
+            dirs.push(p);
+          } catch {
+            // not a readable directory
+          }
+        }
+      }
+      return { dirs, files };
+    },
     checkPathsExist: fs.exists
       ? async (paths: string[]) => {
           const out: Record<string, boolean> = {};

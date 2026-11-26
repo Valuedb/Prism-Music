@@ -95,23 +95,30 @@ export const extractSongFromDiskFile = async (
     let duration = 0;
 
     if (bytes && bytes.byteLength > 0) {
-      const { parseBuffer } = await import('music-metadata');
-      const metadata = await parseBuffer(bytes, { mimeType: getMimeFromFileName(picked.name) });
-      title = metadata.common.title || baseTitle;
-      artist = metadata.common.artist || 'Unknown';
-      album = metadata.common.album;
-      year = metadata.common.year ? String(metadata.common.year) : undefined;
-      lyrics = extractLyricsFromCommon(metadata.common.lyrics);
-      duration = metadata.format.duration || 0;
+      try {
+        const { parseBuffer } = await import('music-metadata');
+        const metadata = await parseBuffer(bytes, { mimeType: getMimeFromFileName(picked.name) });
+        title = metadata.common.title || baseTitle;
+        artist = metadata.common.artist || 'Unknown';
+        album = metadata.common.album;
+        year = metadata.common.year ? String(metadata.common.year) : undefined;
+        lyrics = extractLyricsFromCommon(metadata.common.lyrics);
+        duration = metadata.format.duration || 0;
 
-      const picture = metadata.common.picture?.[0];
-      if (picture) {
-        const blob = new Blob([picture.data as BlobPart], { type: picture.format || 'image/jpeg' });
-        coverUrl = await blobToCompactDataUrl(blob);
+        const picture = metadata.common.picture?.[0];
+        if (picture) {
+          const blob = new Blob([picture.data as BlobPart], { type: picture.format || 'image/jpeg' });
+          coverUrl = await blobToCompactDataUrl(blob);
+        }
+      } catch {
+        // Fallback to filename + probed media duration if tag header is malformed
       }
     } else if (api?.readFileBytes) {
-      // فایل هنوز توسط سیستم‌عامل قفل است یا خالی است؛ از ایندکس ناقص صرف‌نظر کن تا در تلاش مجدد خوانده شود
-      return null;
+      // اگر فایل وجود داشته باشد اما مجوز خواندن بافر تگ محدود باشد، با استریم صوتی و نام فایل آنالیز می‌کنیم
+      const existsMap = api.checkPathsExist ? await api.checkPathsExist([picked.path]) : null;
+      if (existsMap && existsMap[picked.path] === false) {
+        return null;
+      }
     }
 
     if (!coverUrl) {
@@ -145,12 +152,23 @@ export const extractSongFromDiskFile = async (
   }
 };
 
+export interface DiskScanBatchOptions {
+  fallbackFolder?: string;
+  linkedFolderPath?: string;
+  batchSize?: number;
+  onProgress?: (info: { processed: number; total: number; currentFile: string }) => void;
+  onBatch?: (batch: Song[]) => void;
+}
+
 export const extractDiskSongsBatched = async (
   files: DesktopPickedFile[],
-  options?: { fallbackFolder?: string; linkedFolderPath?: string; batchSize?: number }
+  options?: DiskScanBatchOptions
 ): Promise<Song[]> => {
   const batchSize = options?.batchSize ?? 4;
   const results: Song[] = [];
+  const baseTs = Date.now();
+  let processed = 0;
+
   for (let i = 0; i < files.length; i += batchSize) {
     const slice = files.slice(i, i + batchSize);
     const extracted = await Promise.all(
@@ -161,20 +179,41 @@ export const extractDiskSongsBatched = async (
         })
       )
     );
+    const batchSongs: Song[] = [];
     for (const s of extracted) {
-      if (s) results.push(s);
+      if (s) {
+        const stamped: Song = { ...s, addedAt: baseTs + results.length };
+        results.push(stamped);
+        batchSongs.push(stamped);
+      }
+    }
+    processed += slice.length;
+    options?.onProgress?.({
+      processed: Math.min(files.length, processed),
+      total: files.length,
+      currentFile: slice[slice.length - 1]?.name || '',
+    });
+    if (batchSongs.length > 0) {
+      options?.onBatch?.(batchSongs);
+    }
+    if (i + batchSize < files.length) {
+      await waitMs(0);
     }
   }
   return assignBatchAddedAt(results);
 };
 
 /**
- * همگام‌سازی کامل و دوطرفه یک پوشه متصل روی دیسک
+ * همگام‌سازی کامل و دوطرفه یک پوشه متصل روی دیسک با امکان گزارش پیشرفت لحظه‌ای
  */
 export const syncDesktopFolderResult = async (
   scan: DesktopFolderScanResult,
   existingSongs: readonly Song[],
-  fallbackFolder?: string
+  fallbackFolder?: string,
+  streamOptions?: {
+    onProgress?: (info: { processed: number; total: number; currentFile: string }) => void;
+    onBatch?: (batch: Song[]) => void;
+  }
 ): Promise<{
   newSongs: Song[];
   restoredUpdates: Map<string, { fileUrl: string; linkedFolderPath: string; folder?: string }>;
@@ -190,6 +229,8 @@ export const syncDesktopFolderResult = async (
       ? await extractDiskSongsBatched(delta.newEntries, {
           fallbackFolder: fallbackFolder || scan.folderName,
           linkedFolderPath: scan.folderPath,
+          onProgress: streamOptions?.onProgress,
+          onBatch: streamOptions?.onBatch,
         })
       : [];
 
@@ -207,6 +248,7 @@ export const syncDesktopFolderResult = async (
       addedAt: Date.now(),
       lastSyncedAt: Date.now(),
       fileCount: scan.files.length,
+      sourceType: 'desktop',
     },
   };
 };

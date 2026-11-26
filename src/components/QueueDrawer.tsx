@@ -105,6 +105,7 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
   } | null>(null);
   const activeDragRef = useRef<ActiveDragState | null>(null);
   const justDraggedRef = useRef(false);
+  const lastSelectedAnchorRef = useRef<number | null>(null);
   const queueLengthRef = useRef(queue.length);
   const onReorderQueueRef = useRef(onReorderQueue);
   const wasOpenRef = useRef(false);
@@ -222,33 +223,21 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
     }
   }, [confirmClear]);
 
+  // لیست نمایشی صف دقیقاً متناظر با آیتم‌های واقعی queue است تا حذف هر آهنگ (حتی آهنگ در حال پخش) باعث بازگشت شبحی آن نشود
+  const displayQueue = queue;
+
   const hasExactQueueMatch =
     Boolean(currentSong) &&
     currentQueueIndex >= 0 &&
     currentQueueIndex < queue.length &&
     queue[currentQueueIndex]?.id === currentSong?.id;
 
-  // اگر آهنگ جاری داخل صف نیست، برای نمایش یکپارچه در ابتدای لیست نمایشی قرار می‌گیرد
-  const hasVirtualCurrent = useMemo(
-    () => Boolean(currentSong && !hasExactQueueMatch && !queue.some((s) => s.id === currentSong.id)),
-    [queue, currentSong, hasExactQueueMatch]
-  );
-
-  const displayQueue = useMemo(() => {
-    const list = [...queue];
-    if (hasVirtualCurrent && currentSong) {
-      list.unshift(currentSong);
-    }
-    return list;
-  }, [queue, currentSong, hasVirtualCurrent]);
-
-  // ایندکس دقیق آهنگ جاری در لیست نمایشی
+  // ایندکس دقیق آهنگ جاری در صف (در صورت حضور)
   const currentDisplayIndex = useMemo(() => {
     if (!currentSong) return -1;
-    if (hasVirtualCurrent) return 0;
     if (hasExactQueueMatch) return currentQueueIndex;
     return displayQueue.findIndex((s) => s.id === currentSong.id);
-  }, [displayQueue, currentSong, hasVirtualCurrent, hasExactQueueMatch, currentQueueIndex]);
+  }, [displayQueue, currentSong, hasExactQueueMatch, currentQueueIndex]);
 
   // اسکرول خودکار به آهنگ در حال پخش فقط هنگام باز شدن پنل (نه بعد از جابه‌جایی آهنگ‌ها)
   useEffect(() => {
@@ -301,9 +290,9 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
     return displayQueue.map((song, displayIndex) => ({
       song,
       displayIndex,
-      queueIndex: hasVirtualCurrent ? displayIndex - 1 : displayIndex,
+      queueIndex: displayIndex,
     }));
-  }, [displayQueue, hasVirtualCurrent]);
+  }, [displayQueue]);
 
   const filteredList = useMemo(() => {
     if (!filterQuery.trim()) return indexedList;
@@ -574,14 +563,24 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
     selectableIndices.length > 0 &&
     selectableIndices.every((idx) => selectedSet.has(idx));
 
-  const toggleSelectIndex = useCallback((queueIndex: number) => {
+  const toggleSelectIndex = useCallback((queueIndex: number, shiftKey = false) => {
     if (queueIndex < 0) return;
+    if (shiftKey && lastSelectedAnchorRef.current !== null) {
+      const anchor = lastSelectedAnchorRef.current;
+      const start = Math.min(anchor, queueIndex);
+      const end = Math.max(anchor, queueIndex);
+      const range = selectableIndices.filter((idx) => idx >= start && idx <= end);
+      setSelectedQueueIndices((prev) => Array.from(new Set([...prev, ...range])));
+      lastSelectedAnchorRef.current = queueIndex;
+      return;
+    }
+    lastSelectedAnchorRef.current = queueIndex;
     setSelectedQueueIndices((prev) =>
       prev.includes(queueIndex)
         ? prev.filter((idx) => idx !== queueIndex)
         : [...prev, queueIndex]
     );
-  }, []);
+  }, [selectableIndices]);
 
   const handleDeleteSelected = useCallback(() => {
     if (selectedQueueIndices.length === 0) return;
@@ -592,15 +591,73 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
       sortedDesc.forEach((idx) => onRemoveFromQueue(idx));
     }
     setSelectedQueueIndices([]);
+    lastSelectedAnchorRef.current = null;
     setIsSelectMode(false);
   }, [selectedQueueIndices, onRemoveSelectedFromQueue, onRemoveFromQueue]);
 
+  // میانبرهای کیبورد صف پخش: Ctrl+A انتخاب همه، Delete/Backspace حذف انتخاب‌شده‌ها
+  useEffect(() => {
+    if (!isOpen || queue.length === 0) return;
+    const handleSelectionKeys = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.code === 'KeyA' && !e.altKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        setContextMenu(null);
+        setConfirmClear(false);
+        setIsSelectMode(true);
+        setSelectedQueueIndices(selectableIndices);
+        return;
+      }
+      if (
+        (e.key === 'Delete' || e.key === 'Backspace') &&
+        isSelectMode &&
+        selectedQueueIndices.length > 0
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        handleDeleteSelected();
+      }
+    };
+    window.addEventListener('keydown', handleSelectionKeys, true);
+    return () => window.removeEventListener('keydown', handleSelectionKeys, true);
+  }, [isOpen, queue.length, isSelectMode, selectedQueueIndices.length, selectableIndices, handleDeleteSelected]);
+
   const handleRowClick = useCallback(
-    (queueIndex: number) => {
+    (e: React.MouseEvent, queueIndex: number) => {
       if (justDraggedRef.current) return;
       if (queueIndex < 0) return;
+      if (!isSelectMode && (e.ctrlKey || e.metaKey)) {
+        setContextMenu(null);
+        setConfirmClear(false);
+        setIsSelectMode(true);
+        lastSelectedAnchorRef.current = queueIndex;
+        setSelectedQueueIndices([queueIndex]);
+        return;
+      }
+      if (e.shiftKey) {
+        setContextMenu(null);
+        setConfirmClear(false);
+        if (!isSelectMode) {
+          setIsSelectMode(true);
+          lastSelectedAnchorRef.current = queueIndex;
+          setSelectedQueueIndices([queueIndex]);
+        } else {
+          toggleSelectIndex(queueIndex, true);
+        }
+        return;
+      }
       if (isSelectMode) {
-        toggleSelectIndex(queueIndex);
+        toggleSelectIndex(queueIndex, false);
         return;
       }
       onPlaySong(queueIndex);
@@ -656,6 +713,7 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
         <motion.aside
           key="queue-panel"
           ref={containerRef}
+          data-queue-drawer="true"
           initial={{ x: '100%' }}
           animate={{ x: 0 }}
           exit={{ x: '100%' }}
@@ -695,9 +753,10 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
             .q-row { transition: background-color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease; }
             ${dragState ? '' : `.q-row:hover .q-del-btn { opacity: 1 !important; }
             .q-row:hover { background-color: ${withAlpha(primaryColor, theme.isDark ? 0.09 : 0.06)} !important; }`}
+            .q-del-btn:hover { color: #ef4444 !important; opacity: 1 !important; background-color: rgba(239, 68, 68, 0.12) !important; }
             .q-icon-btn { transition: opacity 0.15s ease, background-color 0.15s ease, transform 0.12s ease; }
-            .q-icon-btn:hover { opacity: 0.78; background-color: ${withAlpha(textPrimary, theme.isDark ? 0.08 : 0.06)} !important; }
-            .q-icon-btn:active { transform: scale(0.92); }
+            .q-icon-btn:hover { opacity: 0.85; background-color: ${withAlpha(textPrimary, theme.isDark ? 0.08 : 0.06)} !important; }
+            .q-icon-btn:active { transform: scale(0.94); }
           `}</style>
 
           {/* هدر شیشه‌ای صف پخش */}
@@ -775,25 +834,36 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
                       if (isSelectMode) {
                         setIsSelectMode(false);
                         setSelectedQueueIndices([]);
+                        lastSelectedAnchorRef.current = null;
                       } else {
                         setIsSelectMode(true);
                         setConfirmClear(false);
+                        lastSelectedAnchorRef.current = null;
                       }
                     }}
-                    title={isSelectMode ? t.cancel || 'لغو' : t.select || 'انتخاب'}
+                    title={isSelectMode ? (t.done || 'تایید') : (t.select || 'انتخاب')}
                     style={{
-                      background: isSelectMode ? withAlpha(primaryColor, 0.16) : 'none',
-                      border: 'none',
-                      color: isSelectMode ? primaryColor : textSecondary,
+                      background: isSelectMode
+                        ? primaryColor
+                        : withAlpha(textPrimary, theme.isDark ? 0.07 : 0.05),
+                      border: isSelectMode
+                        ? 'none'
+                        : `1px solid ${withAlpha(textPrimary, 0.1)}`,
+                      color: isSelectMode ? (theme.colors.onPrimary || '#ffffff') : textPrimary,
                       cursor: 'pointer',
-                      padding: '7px',
+                      padding: '5px 10px',
                       borderRadius: '9px',
-                      display: 'flex',
+                      display: 'inline-flex',
                       alignItems: 'center',
                       justifyContent: 'center',
+                      gap: '5px',
+                      fontSize: '0.7188rem',
+                      fontWeight: 600,
+                      whiteSpace: 'nowrap',
                     }}
                   >
-                    <CheckSquare size={17} />
+                    <CheckSquare size={14} />
+                    <span>{isSelectMode ? (t.done || (isRTL ? 'تایید' : 'Done')) : (t.select || (isRTL ? 'انتخاب' : 'Select'))}</span>
                   </button>
                 )}
 
@@ -1159,40 +1229,106 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
             }}
           >
             {displayQueue.length === 0 ? (
-              <div
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  padding: '48px 20px',
-                  textAlign: 'center',
-                  borderRadius: '16px',
-                  border: `1px dashed ${borderColor}`,
-                  backgroundColor: withAlpha(textPrimary, 0.02),
-                  gap: '10px',
-                  marginTop: '10px',
-                }}
-              >
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '6px' }}>
+                {currentSong && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '10px',
+                      padding: '9px 11px',
+                      borderRadius: '13px',
+                      backgroundColor: withAlpha(primaryColor, theme.isDark ? 0.14 : 0.09),
+                      border: `1px solid ${withAlpha(primaryColor, 0.3)}`,
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: '36px',
+                        height: '36px',
+                        borderRadius: '8px',
+                        overflow: 'hidden',
+                        flexShrink: 0,
+                      }}
+                    >
+                      <CoverImage
+                        src={currentSong.cover}
+                        alt=""
+                        iconSize={15}
+                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                      />
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div
+                        style={{
+                          fontSize: '0.6875rem',
+                          fontWeight: 700,
+                          color: primaryColor,
+                          marginBottom: '2px',
+                        }}
+                      >
+                        {t.nowPlayingOutsideQueue || (isRTL ? 'در حال پخش (خارج از صف)' : 'Now Playing (outside queue)')}
+                      </div>
+                      <div
+                        style={{
+                          fontSize: '0.8125rem',
+                          fontWeight: 600,
+                          color: textPrimary,
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                        }}
+                      >
+                        {currentSong.name}
+                      </div>
+                      <div
+                        style={{
+                          fontSize: '0.7188rem',
+                          color: textSecondary,
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                        }}
+                      >
+                        {currentSong.artist}
+                      </div>
+                    </div>
+                  </div>
+                )}
                 <div
                   style={{
-                    width: '44px',
-                    height: '44px',
-                    borderRadius: '50%',
-                    backgroundColor: withAlpha(primaryColor, 0.12),
                     display: 'flex',
+                    flexDirection: 'column',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    color: primaryColor,
+                    padding: '44px 20px',
+                    textAlign: 'center',
+                    borderRadius: '16px',
+                    border: `1px dashed ${borderColor}`,
+                    backgroundColor: withAlpha(textPrimary, 0.02),
+                    gap: '10px',
                   }}
                 >
-                  <ListMusic size={22} />
-                </div>
-                <div style={{ fontSize: '0.875rem', fontWeight: 600, color: textPrimary }}>
-                  {t.queueEmpty || 'صف پخش خالی است'}
-                </div>
-                <div style={{ fontSize: '0.75rem', color: textSecondary, maxWidth: '240px', lineHeight: 1.4 }}>
-                  {t.queueEmptyHint || 'آهنگ‌ها را برای پخش پیوسته به صف اضافه کنید.'}
+                  <div
+                    style={{
+                      width: '44px',
+                      height: '44px',
+                      borderRadius: '50%',
+                      backgroundColor: withAlpha(primaryColor, 0.12),
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: primaryColor,
+                    }}
+                  >
+                    <ListMusic size={22} />
+                  </div>
+                  <div style={{ fontSize: '0.875rem', fontWeight: 600, color: textPrimary }}>
+                    {t.queueEmpty || 'صف پخش خالی است'}
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: textSecondary, maxWidth: '240px', lineHeight: 1.4 }}>
+                    {t.queueEmptyHint || 'آهنگ‌ها را برای پخش پیوسته به صف اضافه کنید.'}
+                  </div>
                 </div>
               </div>
             ) : filteredList.length === 0 ? (
@@ -1219,7 +1355,7 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
                     ref={isCurrent ? currentSongRowRef : undefined}
                     data-queue-index={isQueueItem ? queueIndex : undefined}
                     className="q-row"
-                    onClick={() => handleRowClick(queueIndex)}
+                    onClick={(e) => handleRowClick(e, queueIndex)}
                     onContextMenu={(e) => {
                       if (!isQueueItem) return;
                       e.preventDefault();
@@ -1289,7 +1425,7 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
                         data-queue-no-drag="true"
                         onClick={(e) => {
                           e.stopPropagation();
-                          toggleSelectIndex(queueIndex);
+                          toggleSelectIndex(queueIndex, e.shiftKey);
                         }}
                         style={{
                           width: '20px',
@@ -1457,8 +1593,8 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'center',
-                            opacity: isMobile ? 0.72 : 0.42,
-                            transition: 'opacity 0.15s ease',
+                            opacity: isMobile ? 0.84 : 0.68,
+                            transition: 'opacity 0.15s ease, color 0.15s ease, background-color 0.15s ease',
                             flexShrink: 0,
                           }}
                         >

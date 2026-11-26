@@ -16,12 +16,17 @@ import {
   FolderOpen,
   SkipForward,
   ListPlus,
+  Music,
+  RefreshCw,
+  Unlink,
+  Sparkles,
 } from 'lucide-react';
-import type { LinkedFolder, Song, Playlist } from '../types';
+import type { LibraryScanProgress, LinkedFolder, Song, Playlist } from '../types';
 import { AllSongs } from './AllSongs';
 import { CoverImage } from '../components/CoverImage';
 import { extractSongsBatched, partitionDuplicateSongs } from '../utils/audioMetadata';
-import { isDesktopRuntime, syncDesktopFolderResult } from '../utils/desktopBridge';
+import { isDesktopRuntime, normalizeDiskPath, syncDesktopFolderResult } from '../utils/desktopBridge';
+import { formatFolderBreadcrumb } from '../utils/smartLibraryScanner';
 import { deleteAudioBlob } from '../storage/mediaStore';
 import { withAlpha } from '../utils/color';
 import {
@@ -58,6 +63,24 @@ interface FoldersProps {
   onBulkDeleteSongs?: (ids: string[]) => void;
   confirmBeforeDelete?: boolean;
   onLinkDesktopFolder?: (folder: LinkedFolder) => void;
+  linkedFolders?: LinkedFolder[];
+  scanProgress?: LibraryScanProgress | null;
+  onAddFolderLocation?: (options?: {
+    allowAutoPlay?: boolean;
+    fallbackFolder?: string;
+  }) => Promise<
+    | { status: 'completed'; addedCount: number; folderName?: string }
+    | { status: 'cancelled' }
+    | { status: 'fallback-needed' }
+  >;
+  onLinkDefaultMusicFolder?: () => Promise<{ addedCount: number; folderName?: string }>;
+  onSyncLinkedFolder?: (folder: LinkedFolder) => Promise<{ addedCount: number; missing?: boolean }>;
+  onUnlinkLinkedFolder?: (folderPathOrId: string) => void;
+  onImportBrowserDirectoryFiles?: (
+    files: File[],
+    fallbackFolder?: string,
+    allowAutoPlay?: boolean
+  ) => Promise<{ addedCount: number; folderName: string }>;
 }
 
 const UNCATEGORIZED_ID = '__uncategorized__';
@@ -160,6 +183,13 @@ export const Folders: React.FC<FoldersProps> = ({
   onBulkDeleteSongs,
   confirmBeforeDelete = true,
   onLinkDesktopFolder,
+  linkedFolders = [],
+  scanProgress = null,
+  onAddFolderLocation,
+  onLinkDefaultMusicFolder,
+  onSyncLinkedFolder,
+  onUnlinkLinkedFolder,
+  onImportBrowserDirectoryFiles,
 }) => {
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(() =>
     initialFolder ? initialFolder.id : null
@@ -172,12 +202,23 @@ export const Folders: React.FC<FoldersProps> = ({
   } | null>(null);
   const activeMenuId = ctxMenu?.folder.id ?? null;
   const [isImporting, setIsImporting] = useState(false);
+  const [syncingFolderId, setSyncingFolderId] = useState<string | null>(null);
+  const [defaultMusicFolder, setDefaultMusicFolder] = useState<{ path: string; name: string } | null>(null);
 
   useEffect(() => {
     if (initialFolder) {
       setSelectedFolderId(initialFolder.id);
     }
   }, [initialFolder]);
+
+  useEffect(() => {
+    if (isDesktopRuntime() && window.desktopRuntime?.getDefaultMusicFolder) {
+      window.desktopRuntime
+        .getDefaultMusicFolder()
+        .then((info) => setDefaultMusicFolder(info))
+        .catch(() => {});
+    }
+  }, []);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [createName, setCreateName] = useState('');
@@ -274,6 +315,19 @@ export const Folders: React.FC<FoldersProps> = ({
     [selectedFolderId, folders]
   );
 
+  const isDesktopApp = isDesktopRuntime();
+  const isScanning = isImporting || Boolean(scanProgress);
+  const hasLinkedDefaultMusic = useMemo(
+    () =>
+      Boolean(
+        defaultMusicFolder &&
+          linkedFolders.some(
+            (f) => normalizeDiskPath(f.path) === normalizeDiskPath(defaultMusicFolder.path)
+          )
+      ),
+    [defaultMusicFolder, linkedFolders]
+  );
+
   const handleImportDirectory = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const input = e.target;
     const files = input.files;
@@ -282,6 +336,11 @@ export const Folders: React.FC<FoldersProps> = ({
     setIsImporting(true);
     try {
       const fallbackName = activeFolder && !activeFolder.isUncategorized ? activeFolder.name : undefined;
+      if (onImportBrowserDirectoryFiles) {
+        await onImportBrowserDirectoryFiles(Array.from(files), fallbackName, true);
+        return;
+      }
+
       const imported = await extractSongsBatched(Array.from(files), fallbackName);
       if (imported.length > 0) {
         if (skipDuplicatesOnImport) {
@@ -304,12 +363,29 @@ export const Folders: React.FC<FoldersProps> = ({
   };
 
   const handleTriggerImportFolder = async () => {
-    if (isDesktopRuntime() && window.desktopRuntime?.pickMusicFolder) {
+    const fallbackName = activeFolder && !activeFolder.isUncategorized ? activeFolder.name : undefined;
+
+    if (onAddFolderLocation) {
+      setIsImporting(true);
+      try {
+        const result = await onAddFolderLocation({
+          allowAutoPlay: true,
+          fallbackFolder: fallbackName,
+        });
+        if (result.status === 'fallback-needed') {
+          folderInputRef.current?.click();
+        }
+      } finally {
+        setIsImporting(false);
+      }
+      return;
+    }
+
+    if (isDesktopApp && window.desktopRuntime?.pickMusicFolder) {
       setIsImporting(true);
       try {
         const scan = await window.desktopRuntime.pickMusicFolder();
         if (!scan) return;
-        const fallbackName = activeFolder && !activeFolder.isUncategorized ? activeFolder.name : undefined;
         const { newSongs, linkedFolder } = await syncDesktopFolderResult(scan, songs, fallbackName);
         onLinkDesktopFolder?.(linkedFolder);
         if (newSongs.length > 0) {
@@ -328,6 +404,26 @@ export const Folders: React.FC<FoldersProps> = ({
       return;
     }
     folderInputRef.current?.click();
+  };
+
+  const handleAddDefaultMusicFolder = async () => {
+    if (!onLinkDefaultMusicFolder || isScanning) return;
+    setIsImporting(true);
+    try {
+      await onLinkDefaultMusicFolder();
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
+  const handleSyncLocation = async (folder: LinkedFolder) => {
+    if (!onSyncLinkedFolder || syncingFolderId) return;
+    setSyncingFolderId(folder.id);
+    try {
+      await onSyncLinkedFolder(folder);
+    } finally {
+      setSyncingFolderId(null);
+    }
   };
 
   const handleCreateSubmit = () => {
@@ -487,7 +583,7 @@ export const Folders: React.FC<FoldersProps> = ({
                 <button
                   type="button"
                   onClick={handleTriggerImportFolder}
-                  disabled={isImporting}
+                  disabled={isScanning}
                   style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -497,14 +593,18 @@ export const Folders: React.FC<FoldersProps> = ({
                     border: 'none',
                     backgroundColor: theme.colors.primary,
                     color: theme.colors.onPrimary || '#ffffff',
-                    cursor: isImporting ? 'not-allowed' : 'pointer',
+                    cursor: isScanning ? 'not-allowed' : 'pointer',
                     fontSize: '0.8125rem',
                     fontWeight: 600,
-                    opacity: isImporting ? 0.65 : 1,
+                    opacity: isScanning ? 0.65 : 1,
                   }}
                 >
                   <FolderUp size={15} />
-                  <span>{isImporting ? (t.loading || 'در حال خواندن...') : (t.importFolder || 'وارد کردن پوشه')}</span>
+                  <span>
+                    {isScanning
+                      ? (t.smartAnalyzingTitle || t.loading || 'در حال آنالیز...')
+                      : (t.addFolderLocation || t.importFolder || 'انتخاب محل فولدر')}
+                  </span>
                 </button>
               </div>
             )}
@@ -559,7 +659,7 @@ export const Folders: React.FC<FoldersProps> = ({
           justifyContent: 'space-between',
           alignItems: 'center',
           gap: '14px',
-          marginBottom: '22px',
+          marginBottom: '20px',
         }}
       >
         <div>
@@ -654,11 +754,38 @@ export const Folders: React.FC<FoldersProps> = ({
             <span>{t.createFolder || 'ساخت پوشه'}</span>
           </button>
 
-          {/* دکمه وارد کردن پوشه از دستگاه */}
+          {/* افزودن سریع پوشه پیش‌فرض موسیقی در دسکتاپ */}
+          {isDesktopApp && defaultMusicFolder && !hasLinkedDefaultMusic && onLinkDefaultMusicFolder && (
+            <button
+              type="button"
+              onClick={handleAddDefaultMusicFolder}
+              disabled={isScanning}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '7px',
+                padding: '9px 14px',
+                borderRadius: theme.radius.md,
+                border: `1px solid ${theme.colors.border}`,
+                backgroundColor: theme.colors.surface,
+                color: theme.colors.primary,
+                cursor: isScanning ? 'not-allowed' : 'pointer',
+                fontSize: '0.8125rem',
+                fontWeight: 600,
+                whiteSpace: 'nowrap',
+                opacity: isScanning ? 0.65 : 1,
+              }}
+            >
+              <Music size={15} />
+              <span>{t.addSystemMusicLocation || 'افزودن پوشه Music سیستم'}</span>
+            </button>
+          )}
+
+          {/* دکمه انتخاب محل فولدر برای آنالیز هوشمند */}
           <button
             type="button"
             onClick={handleTriggerImportFolder}
-            disabled={isImporting}
+            disabled={isScanning}
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -668,25 +795,359 @@ export const Folders: React.FC<FoldersProps> = ({
               border: 'none',
               backgroundColor: theme.colors.primary,
               color: theme.colors.onPrimary || '#ffffff',
-              cursor: isImporting ? 'not-allowed' : 'pointer',
+              cursor: isScanning ? 'not-allowed' : 'pointer',
               fontSize: '0.8438rem',
               fontWeight: 700,
               whiteSpace: 'nowrap',
               boxShadow: `0 2px 10px ${theme.colors.primary}44`,
-              opacity: isImporting ? 0.65 : 1,
+              opacity: isScanning ? 0.65 : 1,
             }}
           >
             <FolderUp size={16} />
-            <span>{isImporting ? (t.loading || 'در حال خواندن...') : (t.importFolder || 'وارد کردن پوشه')}</span>
+            <span>
+              {isScanning
+                ? (t.smartAnalyzingTitle || t.loading || 'در حال آنالیز...')
+                : (t.addFolderLocation || 'انتخاب محل فولدر')}
+            </span>
           </button>
         </div>
       </div>
+
+      {/* بنر زنده آنالیز هوشمند کتابخانه */}
+      <AnimatePresence>
+        {scanProgress && (
+          <motion.div
+            key="smart-analyzer-banner"
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.2 }}
+            style={{
+              marginBottom: '18px',
+              padding: '14px 18px',
+              borderRadius: theme.radius.lg || '18px',
+              backgroundColor: theme.colors.surface,
+              backdropFilter: 'blur(24px) saturate(180%)',
+              WebkitBackdropFilter: 'blur(24px) saturate(180%)',
+              border: `1px solid ${withAlpha(theme.colors.primary, 0.45)}`,
+              boxShadow: `0 12px 28px rgba(0,0,0,0.22), 0 0 18px ${withAlpha(theme.colors.primary, 0.14)}`,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: 1 }}>
+                <div
+                  style={{
+                    width: '34px',
+                    height: '34px',
+                    borderRadius: '10px',
+                    backgroundColor: withAlpha(theme.colors.primary, 0.16),
+                    color: theme.colors.primary,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                  }}
+                >
+                  <Sparkles size={17} />
+                </div>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontSize: '0.875rem', fontWeight: 700, color: theme.colors.textPrimary }}>
+                    {scanProgress.phase === 'discovering'
+                      ? (t.smartDiscoveringFiles || 'در حال یافتن فایل‌های صوتی در پوشه...')
+                      : (t.smartAnalyzingTracks || 'در حال تحلیل هوشمند آهنگ‌ها و کاورها')}
+                    {scanProgress.phase === 'analyzing' && scanProgress.discoveredFiles > 0 && (
+                      <span style={{ marginInlineStart: '8px', color: theme.colors.primary, fontVariantNumeric: 'tabular-nums' }}>
+                        {scanProgress.analyzedFiles}/{scanProgress.discoveredFiles}
+                      </span>
+                    )}
+                    {scanProgress.phase === 'discovering' && scanProgress.discoveredFiles > 0 && (
+                      <span style={{ marginInlineStart: '8px', color: theme.colors.primary, fontVariantNumeric: 'tabular-nums' }}>
+                        ({scanProgress.discoveredFiles})
+                      </span>
+                    )}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: '0.7813rem',
+                      color: theme.colors.textSecondary,
+                      marginTop: '2px',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {scanProgress.folderName}
+                    {scanProgress.currentFileName ? ` · ${scanProgress.currentFileName}` : ''}
+                  </div>
+                </div>
+              </div>
+
+              {scanProgress.addedCount > 0 && (
+                <div
+                  style={{
+                    padding: '4px 10px',
+                    borderRadius: '999px',
+                    backgroundColor: withAlpha(theme.colors.primary, 0.16),
+                    color: theme.colors.primary,
+                    fontSize: '0.75rem',
+                    fontWeight: 700,
+                    fontVariantNumeric: 'tabular-nums',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  +{scanProgress.addedCount} {t.analyzedNewTracks || 'آهنگ جدید اضافه شد'}
+                </div>
+              )}
+            </div>
+
+            <div
+              style={{
+                marginTop: '10px',
+                height: '5px',
+                borderRadius: '999px',
+                backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
+                overflow: 'hidden',
+              }}
+            >
+              <div
+                style={{
+                  height: '100%',
+                  borderRadius: '999px',
+                  backgroundColor: theme.colors.primary,
+                  width:
+                    scanProgress.phase === 'discovering'
+                      ? '24%'
+                      : `${Math.min(100, Math.max(8, Math.round((scanProgress.analyzedFiles / Math.max(1, scanProgress.discoveredFiles)) * 100)))}%`,
+                  transition: 'width 0.22s ease',
+                }}
+              />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* نوار مسیرهای موسیقی متصل */}
+      {linkedFolders.length > 0 && (
+        <div
+          style={{
+            marginBottom: '20px',
+            padding: '14px 16px',
+            borderRadius: theme.radius.lg || '18px',
+            backgroundColor: theme.colors.surface,
+            backdropFilter: 'blur(22px) saturate(170%)',
+            WebkitBackdropFilter: 'blur(22px) saturate(170%)',
+            border: `1px solid ${theme.colors.border}`,
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '10px',
+              marginBottom: '10px',
+              flexWrap: 'wrap',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Folder size={15} color={theme.colors.primary} />
+              <span style={{ fontSize: '0.8438rem', fontWeight: 700, color: theme.colors.textPrimary }}>
+                {t.libraryLocationsTitle || 'مسیرهای موسیقی متصل'}
+              </span>
+              <span
+                style={{
+                  fontSize: '0.75rem',
+                  color: theme.colors.textSecondary,
+                  fontVariantNumeric: 'tabular-nums',
+                }}
+              >
+                ({linkedFolders.length})
+              </span>
+            </div>
+            <span style={{ fontSize: '0.75rem', color: theme.colors.textSecondary }}>
+              {t.browserFolderHint || ''}
+            </span>
+          </div>
+
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+              gap: '10px',
+            }}
+          >
+            {linkedFolders.map((loc) => {
+              const isDesktopLoc =
+                loc.sourceType === 'desktop' || (!loc.sourceType && !loc.path.startsWith('browser-'));
+              const isSyncingThis = syncingFolderId === loc.id;
+              return (
+                <div
+                  key={loc.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    padding: '9px 12px',
+                    borderRadius: '12px',
+                    backgroundColor: theme.isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)',
+                    border: `1px solid ${theme.colors.border}`,
+                    minWidth: 0,
+                  }}
+                >
+                  <div
+                    style={{
+                      width: '32px',
+                      height: '32px',
+                      borderRadius: '9px',
+                      backgroundColor: withAlpha(theme.colors.primary, 0.14),
+                      color: theme.colors.primary,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexShrink: 0,
+                    }}
+                  >
+                    <Folder size={16} />
+                  </div>
+
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span
+                        style={{
+                          fontSize: '0.8125rem',
+                          fontWeight: 700,
+                          color: theme.colors.textPrimary,
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                        }}
+                      >
+                        {loc.name}
+                      </span>
+                      {isDesktopLoc && (
+                        <span
+                          style={{
+                            fontSize: '0.6875rem',
+                            fontWeight: 600,
+                            padding: '1px 6px',
+                            borderRadius: '999px',
+                            backgroundColor: 'rgba(52, 199, 89, 0.16)',
+                            color: '#34C759',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {t.liveSyncActiveBadge || 'پایش خودکار'}
+                        </span>
+                      )}
+                    </div>
+                    <div
+                      dir="ltr"
+                      style={{
+                        fontSize: '0.72rem',
+                        color: theme.colors.textSecondary,
+                        marginTop: '2px',
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        unicodeBidi: 'plaintext',
+                      }}
+                    >
+                      {isDesktopLoc ? loc.path : ''}
+                      {typeof loc.fileCount === 'number'
+                        ? `${isDesktopLoc ? ' · ' : ''}${loc.fileCount} ${t.tracksCount || 'آهنگ'}`
+                        : ''}
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                    {onSyncLinkedFolder && (
+                      <button
+                        type="button"
+                        disabled={Boolean(syncingFolderId) || isScanning}
+                        onClick={() => void handleSyncLocation(loc)}
+                        title={
+                          loc.sourceType === 'browser-handle'
+                            ? (t.reanalyzeFolder || 'به‌روزرسانی و آنالیز مجدد')
+                            : (t.reanalyzeFolder || 'به‌روزرسانی و آنالیز مجدد')
+                        }
+                        aria-label={t.reanalyzeFolder || 'Rescan & Analyze'}
+                        style={{
+                          width: '28px',
+                          height: '28px',
+                          borderRadius: '8px',
+                          border: `1px solid ${theme.colors.border}`,
+                          backgroundColor: theme.colors.background,
+                          color: theme.colors.primary,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          cursor: Boolean(syncingFolderId) || isScanning ? 'not-allowed' : 'pointer',
+                          opacity: Boolean(syncingFolderId) || isScanning ? 0.6 : 1,
+                        }}
+                      >
+                        <RefreshCw
+                          size={13}
+                          style={isSyncingThis ? { animation: 'spin 1s linear infinite' } : undefined}
+                        />
+                      </button>
+                    )}
+                    {isDesktopLoc && window.desktopRuntime?.openFolder && (
+                      <button
+                        type="button"
+                        onClick={() => void window.desktopRuntime?.openFolder?.(loc.path)}
+                        title={t.openFolderTooltip || 'باز کردن پوشه'}
+                        aria-label={t.openFolderTooltip || 'Open Folder'}
+                        style={{
+                          width: '28px',
+                          height: '28px',
+                          borderRadius: '8px',
+                          border: `1px solid ${theme.colors.border}`,
+                          backgroundColor: theme.colors.background,
+                          color: theme.colors.textSecondary,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <FolderOpen size={13} />
+                      </button>
+                    )}
+                    {onUnlinkLinkedFolder && (
+                      <button
+                        type="button"
+                        onClick={() => onUnlinkLinkedFolder(loc.path || loc.id)}
+                        title={t.unlinkFolderBtn || 'قطع اتصال'}
+                        aria-label={t.unlinkFolderBtn || 'Unlink'}
+                        style={{
+                          width: '28px',
+                          height: '28px',
+                          borderRadius: '8px',
+                          border: `1px solid ${theme.colors.border}`,
+                          backgroundColor: theme.colors.background,
+                          color: '#ff453a',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <Unlink size={13} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* لیست فولدرها */}
       {folders.length === 0 ? (
         <div
           style={{
-            padding: '56px 20px',
+            padding: '48px 24px',
             textAlign: 'center',
             color: theme.colors.textSecondary,
             backgroundColor: theme.colors.surface,
@@ -695,13 +1156,63 @@ export const Folders: React.FC<FoldersProps> = ({
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
-            gap: '10px',
+            gap: '12px',
           }}
         >
-          <Folder size={36} style={{ opacity: 0.4 }} />
-          <p style={{ margin: 0, fontSize: '0.9375rem', fontWeight: 500 }}>
+          <Folder size={40} style={{ opacity: 0.48, color: theme.colors.primary }} />
+          <p style={{ margin: 0, fontSize: '0.9688rem', fontWeight: 700, color: theme.colors.textPrimary }}>
             {t.noFolders || 'هنوز پوشه‌ای ساخته یا وارد نشده است.'}
           </p>
+          <p style={{ margin: 0, maxWidth: '480px', fontSize: '0.8438rem', lineHeight: 1.65 }}>
+            {t.folderLocationEmptyHint ||
+              'فقط کافی است محل پوشه موسیقی خود را مشخص کنید تا برنامه به‌صورت خودکار تمام آهنگ‌ها، کاورها، آلبوم‌ها و خواننده‌ها را آنالیز و دسته‌بندی کند.'}
+          </p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', justifyContent: 'center', marginTop: '6px' }}>
+            <button
+              type="button"
+              onClick={handleTriggerImportFolder}
+              disabled={isScanning}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '7px',
+                padding: '10px 18px',
+                borderRadius: theme.radius.md,
+                border: 'none',
+                backgroundColor: theme.colors.primary,
+                color: theme.colors.onPrimary || '#ffffff',
+                cursor: isScanning ? 'not-allowed' : 'pointer',
+                fontSize: '0.875rem',
+                fontWeight: 700,
+              }}
+            >
+              <FolderUp size={16} />
+              <span>{t.addFolderLocation || 'انتخاب محل فولدر'}</span>
+            </button>
+            {isDesktopApp && defaultMusicFolder && !hasLinkedDefaultMusic && onLinkDefaultMusicFolder && (
+              <button
+                type="button"
+                onClick={handleAddDefaultMusicFolder}
+                disabled={isScanning}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '7px',
+                  padding: '10px 16px',
+                  borderRadius: theme.radius.md,
+                  border: `1px solid ${theme.colors.border}`,
+                  backgroundColor: theme.colors.background,
+                  color: theme.colors.primary,
+                  cursor: isScanning ? 'not-allowed' : 'pointer',
+                  fontSize: '0.8438rem',
+                  fontWeight: 600,
+                }}
+              >
+                <Music size={15} />
+                <span>{t.addSystemMusicLocation || 'افزودن پوشه Music سیستم'}</span>
+              </button>
+            )}
+          </div>
         </div>
       ) : viewMode === 'grid' ? (
         <div
@@ -816,32 +1327,45 @@ export const Folders: React.FC<FoldersProps> = ({
                     )}
                   </div>
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '12px' }}>
-                    <Folder size={15} color={theme.colors.primary} style={{ flexShrink: 0 }} />
-                    <h3
-                      style={{
-                        margin: 0,
-                        fontWeight: 700,
-                        fontSize: '0.9375rem',
-                        color: theme.colors.textPrimary,
-                        whiteSpace: 'nowrap',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                      }}
-                    >
-                      {folder.name}
-                    </h3>
-                  </div>
-                  <p
-                    style={{
-                      color: theme.colors.textSecondary,
-                      fontSize: '0.7813rem',
-                      margin: '3px 0 0 0',
-                      fontVariantNumeric: 'tabular-nums',
-                    }}
-                  >
-                    {folder.songs.length} {t.tracksCount || 'آهنگ'}
-                  </p>
+                  {(() => {
+                    const crumb = folder.isUncategorized
+                      ? { displayName: folder.name, parentLabel: undefined }
+                      : formatFolderBreadcrumb(folder.name);
+                    return (
+                      <>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '12px' }} title={folder.name}>
+                          <Folder size={15} color={theme.colors.primary} style={{ flexShrink: 0 }} />
+                          <h3
+                            style={{
+                              margin: 0,
+                              fontWeight: 700,
+                              fontSize: '0.9375rem',
+                              color: theme.colors.textPrimary,
+                              whiteSpace: 'nowrap',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                            }}
+                          >
+                            {crumb.displayName}
+                          </h3>
+                        </div>
+                        <p
+                          style={{
+                            color: theme.colors.textSecondary,
+                            fontSize: '0.7813rem',
+                            margin: '3px 0 0 0',
+                            fontVariantNumeric: 'tabular-nums',
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                          }}
+                        >
+                          {folder.songs.length} {t.tracksCount || 'آهنگ'}
+                          {crumb.parentLabel ? ` · ${crumb.parentLabel}` : ''}
+                        </p>
+                      </>
+                    );
+                  })()}
                 </div>
 
                   <div
@@ -929,23 +1453,41 @@ export const Folders: React.FC<FoldersProps> = ({
                 >
                   <Folder size={22} />
                 </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div
-                    style={{
-                      fontSize: '0.9375rem',
-                      fontWeight: 700,
-                      color: theme.colors.textPrimary,
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                    }}
-                  >
-                    {folder.name}
-                  </div>
-                  <div style={{ fontSize: '0.7813rem', color: theme.colors.textSecondary, marginTop: '2px', fontVariantNumeric: 'tabular-nums' }}>
-                    {folder.songs.length} {t.tracksCount || 'آهنگ'}
-                  </div>
-                </div>
+                {(() => {
+                  const crumb = folder.isUncategorized
+                    ? { displayName: folder.name, parentLabel: undefined }
+                    : formatFolderBreadcrumb(folder.name);
+                  return (
+                    <div style={{ flex: 1, minWidth: 0 }} title={folder.name}>
+                      <div
+                        style={{
+                          fontSize: '0.9375rem',
+                          fontWeight: 700,
+                          color: theme.colors.textPrimary,
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                        }}
+                      >
+                        {crumb.displayName}
+                      </div>
+                      <div
+                        style={{
+                          fontSize: '0.7813rem',
+                          color: theme.colors.textSecondary,
+                          marginTop: '2px',
+                          fontVariantNumeric: 'tabular-nums',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                        }}
+                      >
+                        {folder.songs.length} {t.tracksCount || 'آهنگ'}
+                        {crumb.parentLabel ? ` · ${crumb.parentLabel}` : ''}
+                      </div>
+                    </div>
+                  );
+                })()}
                 <div
                   ref={(el) => {
                     if (viewMode === 'list') menuRefs.current[folder.id] = el;
