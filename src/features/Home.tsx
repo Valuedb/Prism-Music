@@ -18,6 +18,10 @@ import {
   Maximize2,
   Check,
   X,
+  FolderOpen,
+  SkipForward,
+  ListPlus,
+  Heart,
 } from 'lucide-react';
 import type { HomeLayoutStyle, Playlist, SleepTimerState, Song } from '../types';
 import type { SearchNavigateTarget } from '../components/SearchBar';
@@ -27,6 +31,7 @@ import { SettingsIconBadge } from '../components/SettingsPrimitives';
 import { audioEffects } from '../player/audioEffects';
 import { getBidiTruncateStyle } from '../utils/bidi';
 import { withAlpha } from '../utils/color';
+import { clampContextMenuPosition, type ContextMenuPosition } from '../utils/contextMenu';
 
 interface HomeProps {
   songs: Song[];
@@ -39,6 +44,9 @@ interface HomeProps {
   onSelectTab: (tab: string) => void;
   sleepTimer: SleepTimerState;
   onSetSleepTimer: (timer: SleepTimerState) => void;
+  onPlayNext?: (songs: Song | Song[]) => void;
+  addToQueue?: (song: Song) => void;
+  onToggleFavorite?: (id: string) => void;
   t: any;
   theme: any;
   language: 'fa' | 'en';
@@ -103,6 +111,9 @@ export const Home: React.FC<HomeProps> = ({
   onSelectTab,
   sleepTimer,
   onSetSleepTimer,
+  onPlayNext,
+  addToQueue,
+  onToggleFavorite,
   t,
   theme,
   language,
@@ -116,9 +127,12 @@ export const Home: React.FC<HomeProps> = ({
   const [containerWidth, setContainerWidth] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth : 1280
   );
-  const isSmallPhone = containerWidth < 460;
-  const isMobile = containerWidth < 620;
-  const isTablet = containerWidth >= 620 && containerWidth < 880;
+  const [viewportWidth, setViewportWidth] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth : 1280
+  );
+  const isSmallPhone = viewportWidth < 460 && containerWidth < 460;
+  const isMobile = viewportWidth < 768 && containerWidth < 620;
+  const isTablet = !isMobile && containerWidth < 880;
   const isDesktop = containerWidth >= 880;
   const isWideDesktop = containerWidth >= 1060;
   const [pickSeed, setPickSeed] = useState(0);
@@ -129,8 +143,29 @@ export const Home: React.FC<HomeProps> = ({
   const [hoveredQuickId, setHoveredQuickId] = useState<string | null>(null);
   const [hoveredArtist, setHoveredArtist] = useState<string | null>(null);
   const [hoveredStatIdx, setHoveredStatIdx] = useState<number | null>(null);
+  const [ctxMenu, setCtxMenu] = useState<
+    | {
+        kind: 'song';
+        song: Song;
+        list: Song[];
+        isHero?: boolean;
+        position: ContextMenuPosition;
+      }
+    | {
+        kind: 'quickAccess';
+        item: QuickAccessEntry;
+        position: ContextMenuPosition;
+      }
+    | {
+        kind: 'artist';
+        artist: TopArtistEntry;
+        position: ContextMenuPosition;
+      }
+    | null
+  >(null);
   const sleepButtonRef = useRef<HTMLButtonElement>(null);
   const sleepPortalRef = useRef<HTMLDivElement>(null);
+  const ctxPortalRef = useRef<HTMLDivElement>(null);
   const waveBarsRef = useRef<(HTMLDivElement | null)[]>([]);
   const [sleepMenuPos, setSleepMenuPos] = useState<{ top: number; left: number }>({
     top: 0,
@@ -140,6 +175,7 @@ export const Home: React.FC<HomeProps> = ({
   useEffect(() => {
     const el = rootContainerRef.current;
     const syncWindowWidth = () => {
+      setViewportWidth(window.innerWidth);
       const next = el?.clientWidth || window.innerWidth;
       if (next > 0) setContainerWidth(next);
     };
@@ -162,6 +198,63 @@ export const Home: React.FC<HomeProps> = ({
       window.removeEventListener('resize', syncWindowWidth);
     };
   }, []);
+
+  const openHomeContextMenu = useCallback(
+    (
+      e: React.MouseEvent,
+      payload:
+        | { kind: 'song'; song: Song; list: Song[]; isHero?: boolean }
+        | { kind: 'quickAccess'; item: QuickAccessEntry }
+        | { kind: 'artist'; artist: TopArtistEntry }
+    ) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const vw = typeof window !== 'undefined' ? window.innerWidth : 1280;
+      const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+      const menuWidth = 212;
+      const estItems =
+        payload.kind === 'song'
+          ? 2 + (payload.isHero ? 1 : 0) + (onPlayNext ? 1 : 0) + (addToQueue ? 1 : 0) + (onToggleFavorite ? 1 : 0)
+          : payload.kind === 'quickAccess'
+          ? 1 + (payload.item.songs.length > 0 ? 1 + (onPlayNext ? 1 : 0) + (addToQueue ? 1 : 0) : 0)
+          : 1 + (payload.artist.songs.length > 0 ? 1 + (onPlayNext ? 1 : 0) + (addToQueue ? 1 : 0) : 0);
+      const menuHeight = Math.max(1, estItems) * 38 + 14;
+      const position = clampContextMenuPosition({
+        clientX: e.clientX,
+        clientY: e.clientY,
+        menuWidth,
+        menuHeight,
+        viewportWidth: vw,
+        viewportHeight: vh,
+        isRTL,
+      });
+      setCtxMenu({ ...payload, position });
+    },
+    [addToQueue, isRTL, onPlayNext, onToggleFavorite]
+  );
+
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const handleOutside = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (ctxPortalRef.current?.contains(target)) return;
+      setCtxMenu(null);
+    };
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setCtxMenu(null);
+    };
+    const closeOnViewport = () => setCtxMenu(null);
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('keydown', handleEscape);
+    window.addEventListener('scroll', closeOnViewport, true);
+    window.addEventListener('resize', closeOnViewport);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('keydown', handleEscape);
+      window.removeEventListener('scroll', closeOnViewport, true);
+      window.removeEventListener('resize', closeOnViewport);
+    };
+  }, [ctxMenu]);
 
   // به‌روزرسانی شمارنده تایمر خواب فقط وقتی تایمر زمان‌دار فعال است
   useEffect(() => {
@@ -593,6 +686,7 @@ export const Home: React.FC<HomeProps> = ({
                     key: item.id,
                   })
                 }
+                onContextMenu={(e) => openHomeContextMenu(e, { kind: 'quickAccess', item })}
                 onMouseEnter={() => setHoveredQuickId(keyId)}
                 onMouseLeave={() => setHoveredQuickId(null)}
                 style={{
@@ -770,6 +864,7 @@ export const Home: React.FC<HomeProps> = ({
                 onClick={() =>
                   onNavigateToItem({ tab: 'artists', key: artist.name })
                 }
+                onContextMenu={(e) => openHomeContextMenu(e, { kind: 'artist', artist })}
                 onMouseEnter={() => setHoveredArtist(artist.name)}
                 onMouseLeave={() => setHoveredArtist(null)}
                 style={{
@@ -934,6 +1029,9 @@ export const Home: React.FC<HomeProps> = ({
                 whileTap={reduceMotion ? undefined : { scale: 0.985 }}
                 transition={{ duration: 0.12 }}
                 onClick={() => onPlaySongFromList(song, quickPicks)}
+                onContextMenu={(e) =>
+                  openHomeContextMenu(e, { kind: 'song', song, list: quickPicks })
+                }
                 onMouseEnter={() => setHoveredSongId(song.id)}
                 onMouseLeave={() => setHoveredSongId(null)}
                 style={{
@@ -1409,15 +1507,16 @@ export const Home: React.FC<HomeProps> = ({
       ref={rootContainerRef}
       style={{
         flex: 1,
+        width: '100%',
         padding: isMobile
-          ? '10px 12px 156px'
-          : 'clamp(10px, 1.8vw, 18px) clamp(14px, 3.2vw, 34px) 136px',
-        overflowY: 'auto',
-        overflowX: 'hidden',
+          ? '10px 12px 116px'
+          : 'clamp(10px, 1.8vw, 18px) clamp(14px, 3vw, 34px) 116px',
+        overflowX: 'clip',
         boxSizing: 'border-box',
         direction: isRTL ? 'rtl' : 'ltr',
       }}
     >
+      <div style={{ maxWidth: '1400px', margin: '0 auto', width: '100%' }}>
       <AnimatePresence mode="wait" initial={false}>
         {homeLayout === 'wide' ? (
           /* ================================================================
@@ -1432,6 +1531,11 @@ export const Home: React.FC<HomeProps> = ({
           >
             {/* کارت پهن Continue Listening / Now Playing */}
             <div
+              onContextMenu={(e) => {
+                if (heroSong) {
+                  openHomeContextMenu(e, { kind: 'song', song: heroSong, list: songs, isHero: true });
+                }
+              }}
               style={{
                 position: 'relative',
                 borderRadius: theme.radius.xl || '24px',
@@ -1714,6 +1818,16 @@ export const Home: React.FC<HomeProps> = ({
               {/* ستون ۱: ویجت Now Playing + دکمه پویانمایی‌شده + اکولایزر زنده */}
               <motion.div
                 {...sectionAnim(0)}
+                onContextMenu={(e) => {
+                  if (heroSong) {
+                    openHomeContextMenu(e, {
+                      kind: 'song',
+                      song: heroSong,
+                      list: songs,
+                      isHero: true,
+                    });
+                  }
+                }}
                 style={{
                   position: 'relative',
                   minWidth: 0,
@@ -2174,6 +2288,7 @@ export const Home: React.FC<HomeProps> = ({
           </motion.div>
         )}
       </AnimatePresence>
+      </div>
 
       {/* منوی پورتال تایمر خواب */}
       {sleepMenuOpen &&
@@ -2321,6 +2436,496 @@ export const Home: React.FC<HomeProps> = ({
               </>
             )}
           </div>,
+          document.body
+        )}
+
+      {/* منوی شناور راست‌کلیک کارت‌های خانه */}
+      {typeof document !== 'undefined' &&
+        createPortal(
+          <AnimatePresence>
+            {ctxMenu && (
+              <motion.div
+                key={`home-ctx-${ctxMenu.kind}-${
+                  ctxMenu.kind === 'song'
+                    ? ctxMenu.song.id
+                    : ctxMenu.kind === 'quickAccess'
+                    ? ctxMenu.item.id
+                    : ctxMenu.artist.name
+                }`}
+                ref={ctxPortalRef}
+                initial={{ opacity: 0, scale: 0.96 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.97 }}
+                transition={{ duration: 0.13, ease: MOTION_EASE }}
+                onClick={(e) => e.stopPropagation()}
+                onContextMenu={(e) => e.preventDefault()}
+                style={{
+                  position: 'fixed',
+                  left: ctxMenu.position.left,
+                  top: ctxMenu.position.top,
+                  transformOrigin: `${ctxMenu.position.originY} ${ctxMenu.position.originX}`,
+                  willChange: 'transform, opacity',
+                  padding: '5px',
+                  backgroundColor: menuBg,
+                  backdropFilter: 'blur(26px) saturate(180%)',
+                  WebkitBackdropFilter: 'blur(26px) saturate(180%)',
+                  borderRadius: theme.radius.md || '14px',
+                  border: `1px solid ${theme.colors.border}`,
+                  boxShadow: '0 18px 42px rgba(0, 0, 0, 0.48)',
+                  zIndex: 999999,
+                  minWidth: '198px',
+                  maxWidth: 'calc(100vw - 24px)',
+                  direction: isRTL ? 'rtl' : 'ltr',
+                  fontFamily: theme.fonts?.main,
+                }}
+              >
+                {ctxMenu.kind === 'song' && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onPlaySongFromList(ctxMenu.song, ctxMenu.list);
+                        setCtxMenu(null);
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = menuItemHover;
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '9px 12px',
+                        borderRadius: '8px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px',
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        color: theme.colors.textPrimary,
+                        fontSize: '0.8438rem',
+                        fontWeight: 500,
+                        textAlign: 'start',
+                      }}
+                    >
+                      <Play size={15} /> <span>{t.play || (isRTL ? 'پخش' : 'Play')}</span>
+                    </button>
+                    {ctxMenu.isHero && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleHeroOpenFullScreen();
+                          setCtxMenu(null);
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = menuItemHover;
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = 'transparent';
+                        }}
+                        style={{
+                          width: '100%',
+                          padding: '9px 12px',
+                          borderRadius: '8px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '10px',
+                          background: 'none',
+                          border: 'none',
+                          cursor: 'pointer',
+                          color: theme.colors.textPrimary,
+                          fontSize: '0.8438rem',
+                          fontWeight: 500,
+                          textAlign: 'start',
+                        }}
+                      >
+                        <Maximize2 size={15} />{' '}
+                        <span>{t.fullPlayerLabel || (isRTL ? 'پخش تمام‌صفحه' : 'Full Player')}</span>
+                      </button>
+                    )}
+                    {onPlayNext && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onPlayNext(ctxMenu.song);
+                          setCtxMenu(null);
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = menuItemHover;
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = 'transparent';
+                        }}
+                        style={{
+                          width: '100%',
+                          padding: '9px 12px',
+                          borderRadius: '8px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '10px',
+                          background: 'none',
+                          border: 'none',
+                          cursor: 'pointer',
+                          color: theme.colors.textPrimary,
+                          fontSize: '0.8438rem',
+                          fontWeight: 500,
+                          textAlign: 'start',
+                        }}
+                      >
+                        <SkipForward size={15} /> <span>{t.playNext || 'پخش بعدی'}</span>
+                      </button>
+                    )}
+                    {addToQueue && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          addToQueue(ctxMenu.song);
+                          setCtxMenu(null);
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = menuItemHover;
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = 'transparent';
+                        }}
+                        style={{
+                          width: '100%',
+                          padding: '9px 12px',
+                          borderRadius: '8px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '10px',
+                          background: 'none',
+                          border: 'none',
+                          cursor: 'pointer',
+                          color: theme.colors.textPrimary,
+                          fontSize: '0.8438rem',
+                          fontWeight: 500,
+                          textAlign: 'start',
+                        }}
+                      >
+                        <ListPlus size={15} /> <span>{t.addToQueue || 'افزودن به صف'}</span>
+                      </button>
+                    )}
+                    {onToggleFavorite && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onToggleFavorite(ctxMenu.song.id);
+                          setCtxMenu(null);
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = menuItemHover;
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = 'transparent';
+                        }}
+                        style={{
+                          width: '100%',
+                          padding: '9px 12px',
+                          borderRadius: '8px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '10px',
+                          background: 'none',
+                          border: 'none',
+                          cursor: 'pointer',
+                          color: ctxMenu.song.isFavorite
+                            ? '#ff375f'
+                            : theme.colors.textPrimary,
+                          fontSize: '0.8438rem',
+                          fontWeight: 500,
+                          textAlign: 'start',
+                        }}
+                      >
+                        <Heart
+                          size={15}
+                          fill={ctxMenu.song.isFavorite ? '#ff375f' : 'none'}
+                        />{' '}
+                        <span>
+                          {ctxMenu.song.isFavorite
+                            ? t.removeFromFavorites || 'حذف از علاقه‌مندی'
+                            : t.addToFavorites || 'افزودن به علاقه‌مندی'}
+                        </span>
+                      </button>
+                    )}
+                  </>
+                )}
+
+                {ctxMenu.kind === 'quickAccess' && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onNavigateToItem({
+                          tab: ctxMenu.item.kind === 'playlist' ? 'playlists' : 'folders',
+                          key: ctxMenu.item.id,
+                        });
+                        setCtxMenu(null);
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = menuItemHover;
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '9px 12px',
+                        borderRadius: '8px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px',
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        color: theme.colors.textPrimary,
+                        fontSize: '0.8438rem',
+                        fontWeight: 500,
+                        textAlign: 'start',
+                      }}
+                    >
+                      <FolderOpen size={15} />{' '}
+                      <span>{t.open || (isRTL ? 'باز کردن' : 'Open')}</span>
+                    </button>
+                    {ctxMenu.item.songs.length > 0 && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onPlaySongFromList(ctxMenu.item.songs[0], ctxMenu.item.songs);
+                            setCtxMenu(null);
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.backgroundColor = menuItemHover;
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.backgroundColor = 'transparent';
+                          }}
+                          style={{
+                            width: '100%',
+                            padding: '9px 12px',
+                            borderRadius: '8px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '10px',
+                            background: 'none',
+                            border: 'none',
+                            cursor: 'pointer',
+                            color: theme.colors.textPrimary,
+                            fontSize: '0.8438rem',
+                            fontWeight: 500,
+                            textAlign: 'start',
+                          }}
+                        >
+                          <Play size={15} /> <span>{t.playAll || 'پخش همه'}</span>
+                        </button>
+                        {onPlayNext && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onPlayNext(ctxMenu.item.songs);
+                              setCtxMenu(null);
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.backgroundColor = menuItemHover;
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.backgroundColor = 'transparent';
+                            }}
+                            style={{
+                              width: '100%',
+                              padding: '9px 12px',
+                              borderRadius: '8px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '10px',
+                              background: 'none',
+                              border: 'none',
+                              cursor: 'pointer',
+                              color: theme.colors.textPrimary,
+                              fontSize: '0.8438rem',
+                              fontWeight: 500,
+                              textAlign: 'start',
+                            }}
+                          >
+                            <SkipForward size={15} /> <span>{t.playNext || 'پخش بعدی'}</span>
+                          </button>
+                        )}
+                        {addToQueue && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              ctxMenu.item.songs.forEach((s) => addToQueue(s));
+                              setCtxMenu(null);
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.backgroundColor = menuItemHover;
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.backgroundColor = 'transparent';
+                            }}
+                            style={{
+                              width: '100%',
+                              padding: '9px 12px',
+                              borderRadius: '8px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '10px',
+                              background: 'none',
+                              border: 'none',
+                              cursor: 'pointer',
+                              color: theme.colors.textPrimary,
+                              fontSize: '0.8438rem',
+                              fontWeight: 500,
+                              textAlign: 'start',
+                            }}
+                          >
+                            <ListPlus size={15} /> <span>{t.addToQueue || 'افزودن به صف'}</span>
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </>
+                )}
+
+                {ctxMenu.kind === 'artist' && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onNavigateToItem({ tab: 'artists', key: ctxMenu.artist.name });
+                        setCtxMenu(null);
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = menuItemHover;
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '9px 12px',
+                        borderRadius: '8px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px',
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        color: theme.colors.textPrimary,
+                        fontSize: '0.8438rem',
+                        fontWeight: 500,
+                        textAlign: 'start',
+                      }}
+                    >
+                      <FolderOpen size={15} />{' '}
+                      <span>{t.open || (isRTL ? 'باز کردن' : 'Open')}</span>
+                    </button>
+                    {ctxMenu.artist.songs.length > 0 && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onPlaySongFromList(ctxMenu.artist.songs[0], ctxMenu.artist.songs);
+                            setCtxMenu(null);
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.backgroundColor = menuItemHover;
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.backgroundColor = 'transparent';
+                          }}
+                          style={{
+                            width: '100%',
+                            padding: '9px 12px',
+                            borderRadius: '8px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '10px',
+                            background: 'none',
+                            border: 'none',
+                            cursor: 'pointer',
+                            color: theme.colors.textPrimary,
+                            fontSize: '0.8438rem',
+                            fontWeight: 500,
+                            textAlign: 'start',
+                          }}
+                        >
+                          <Play size={15} /> <span>{t.playAll || 'پخش همه'}</span>
+                        </button>
+                        {onPlayNext && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onPlayNext(ctxMenu.artist.songs);
+                              setCtxMenu(null);
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.backgroundColor = menuItemHover;
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.backgroundColor = 'transparent';
+                            }}
+                            style={{
+                              width: '100%',
+                              padding: '9px 12px',
+                              borderRadius: '8px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '10px',
+                              background: 'none',
+                              border: 'none',
+                              cursor: 'pointer',
+                              color: theme.colors.textPrimary,
+                              fontSize: '0.8438rem',
+                              fontWeight: 500,
+                              textAlign: 'start',
+                            }}
+                          >
+                            <SkipForward size={15} /> <span>{t.playNext || 'پخش بعدی'}</span>
+                          </button>
+                        )}
+                        {addToQueue && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              ctxMenu.artist.songs.forEach((s) => addToQueue(s));
+                              setCtxMenu(null);
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.backgroundColor = menuItemHover;
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.backgroundColor = 'transparent';
+                            }}
+                            style={{
+                              width: '100%',
+                              padding: '9px 12px',
+                              borderRadius: '8px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '10px',
+                              background: 'none',
+                              border: 'none',
+                              cursor: 'pointer',
+                              color: theme.colors.textPrimary,
+                              fontSize: '0.8438rem',
+                              fontWeight: 500,
+                              textAlign: 'start',
+                            }}
+                          >
+                            <ListPlus size={15} /> <span>{t.addToQueue || 'افزودن به صف'}</span>
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>,
           document.body
         )}
     </div>

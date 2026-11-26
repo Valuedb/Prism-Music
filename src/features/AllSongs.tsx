@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
   MoreHorizontal,
   SkipForward,
@@ -22,6 +22,11 @@ import { SongInfoModal } from '../components/SongInfoModal';
 import { CoverImage } from '../components/CoverImage';
 import { ConfirmDialog } from '../components/SettingsPrimitives';
 import { mixHex, withAlpha } from '../utils/color';
+import {
+  clampContextMenuPosition,
+  computeAnchorMenuPosition,
+  type ContextMenuPosition,
+} from '../utils/contextMenu';
 
 // ================= اینترفیس پراپ‌ها =================
 
@@ -88,11 +93,12 @@ export const AllSongs = ({
 
   // استیت‌های منوها
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
-  const [menuPosition, setMenuPosition] = useState<{
-    top?: number;
-    bottom?: number;
-    right: number;
-  }>({ top: 0, right: 16 });
+  const [menuPosition, setMenuPosition] = useState<ContextMenuPosition>({
+    top: 16,
+    left: 16,
+    originY: 'top',
+    originX: 'right',
+  });
   const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
   const [sortBy, setSortBy] = useState<'default' | 'date' | 'name' | 'artist'>(
     defaultSortBy
@@ -482,7 +488,37 @@ export const AllSongs = ({
     if (isSelectMode) exitSelectMode();
   };
 
-  /** محاسبه موقعیت منوی سه‌نقطه در ویوپورت با در نظر گرفتن نوار بالا و پلیر شناور پایین */
+  /** محاسبه موقعیت منوی سه‌نقطه یا راست‌کلیک در ویوپورت */
+  const computeSongMenuPosition = (
+    triggerRect: Pick<DOMRect, 'left' | 'right' | 'top' | 'bottom'> | null,
+    pointer?: { x: number; y: number }
+  ): ContextMenuPosition => {
+    const isRtl = t.deleteSong === 'حذف آهنگ';
+    const menuWidth = 205;
+    const menuHeight = onToggleFavorite ? 268 : 228;
+    if (pointer) {
+      return clampContextMenuPosition({
+        clientX: pointer.x,
+        clientY: pointer.y,
+        menuWidth,
+        menuHeight,
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+        bottomReserve: 112,
+        isRTL: isRtl,
+      });
+    }
+    return computeAnchorMenuPosition({
+      rect: triggerRect!,
+      menuWidth,
+      menuHeight,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      isRTL: isRtl,
+      bottomReserve: 112,
+    });
+  };
+
   const handleOpenMenu = (
     e: React.MouseEvent<HTMLButtonElement>,
     songId: string
@@ -492,26 +528,17 @@ export const AllSongs = ({
       setActiveMenuId(null);
       return;
     }
-    const buttonRect = e.currentTarget.getBoundingClientRect();
-    const estimatedMenuHeight = onToggleFavorite ? 255 : 218;
-    const spaceBelow = window.innerHeight - buttonRect.bottom - 115;
-    const spaceAbove = buttonRect.top - 80;
-    const openUp = spaceBelow < estimatedMenuHeight && spaceAbove > spaceBelow;
-    const right = Math.max(12, window.innerWidth - buttonRect.right);
+    setMenuPosition(computeSongMenuPosition(e.currentTarget.getBoundingClientRect()));
+    setActiveMenuId(songId);
+  };
 
-    if (openUp) {
-      setMenuPosition({
-        bottom: Math.max(12, window.innerHeight - buttonRect.top + 6),
-        right,
-      });
-    } else {
-      const rawTop = buttonRect.bottom + 6;
-      const maxTop = Math.max(12, window.innerHeight - estimatedMenuHeight - 16);
-      setMenuPosition({
-        top: Math.min(rawTop, maxTop),
-        right,
-      });
-    }
+  const handleSongContextMenu = (
+    e: React.MouseEvent<HTMLDivElement>,
+    songId: string
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setMenuPosition(computeSongMenuPosition(null, { x: e.clientX, y: e.clientY }));
     setActiveMenuId(songId);
   };
 
@@ -526,6 +553,7 @@ export const AllSongs = ({
   // ================= رندر =================
   return (
     <div ref={pageRef} style={styles.container}>
+      <div style={{ maxWidth: '1400px', margin: '0 auto', width: '100%' }}>
       {/* هدر دسته‌بندی در صورت باز شدن از بخش خانه */}
       {title && (
         <div
@@ -914,6 +942,7 @@ export const AllSongs = ({
                   setHoveredSongId(null);
                   setHoveredMenuId(null);
                 }}
+                onContextMenu={(e) => handleSongContextMenu(e, song.id)}
                 onClick={(e) =>
                   isSelectMode
                     ? toggleSelect(e, song.id)
@@ -1204,19 +1233,31 @@ export const AllSongs = ({
         </div>
       )}
 
-      {/* منوی سه‌نقطه آهنگ به صورت Portal برای جلوگیری از بریده شدن در لیست‌های کوتاه */}
-      {activeMenuSong &&
-        typeof document !== 'undefined' &&
+      </div>
+
+      {/* منوی سه‌نقطه / راست‌کلیک آهنگ به صورت Portal انیمیشن‌دار */}
+      {typeof document !== 'undefined' &&
         createPortal(
-          <div
-            ref={activeSongDropdownRef}
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              ...styles.songMenu(theme),
-              ...menuPosition,
-              direction: t.deleteSong === 'حذف آهنگ' ? 'rtl' : 'ltr',
-            }}
-          >
+          <AnimatePresence>
+            {activeMenuSong && (
+              <motion.div
+                key="allsongs-ctx-menu"
+                ref={activeSongDropdownRef}
+                initial={{ opacity: 0, scale: 0.96 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.97 }}
+                transition={{ duration: 0.13, ease: [0.22, 1, 0.36, 1] }}
+                onClick={(e) => e.stopPropagation()}
+                onContextMenu={(e) => e.preventDefault()}
+                style={{
+                  ...styles.songMenu(theme),
+                  left: menuPosition.left,
+                  top: menuPosition.top,
+                  transformOrigin: `${menuPosition.originY} ${menuPosition.originX}`,
+                  willChange: 'transform, opacity',
+                  direction: t.deleteSong === 'حذف آهنگ' ? 'rtl' : 'ltr',
+                }}
+              >
             <button
               type="button"
               onClick={(e) => {
@@ -1319,7 +1360,9 @@ export const AllSongs = ({
               <Trash2 size={16} />{' '}
               {deleteActionLabel || t.deleteSong}
             </button>
-          </div>,
+              </motion.div>
+            )}
+          </AnimatePresence>,
           document.body
         )}
 
@@ -1504,17 +1547,18 @@ const menuItemStyle = (
 const styles = {
   container: {
     flex: 1,
-    minHeight: '100%',
+    width: '100%',
     boxSizing: 'border-box' as const,
     padding:
-      'clamp(12px, 2vw, 24px) clamp(16px, 4vw, 40px) 130px',
-    overflowY: 'auto' as const,
-    overflowX: 'hidden' as const,
+      'clamp(12px, 2vw, 24px) clamp(16px, 3.2vw, 36px) 116px',
+    overflowX: 'clip' as const,
   },
   headerActions: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
+    flexWrap: 'wrap' as const,
+    gap: '10px',
     marginBottom: 'clamp(16px, 3vw, 24px)',
     minHeight: '34px',
     position: 'relative' as const,
@@ -1731,7 +1775,6 @@ const styles = {
     overflowX: 'hidden' as const,
     fontFamily: theme.fonts?.main,
     isolation: 'isolate' as const,
-    transform: 'translate3d(0, 0, 0)',
     backfaceVisibility: 'hidden' as const,
     contain: 'layout paint' as const,
   }),

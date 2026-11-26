@@ -5,6 +5,7 @@ export interface DesktopShortcutActions {
   onNext: () => void;
   onPrev: () => void;
   onSeekBy: (deltaSeconds: number) => void;
+  onSeekPercent?: (fraction: number) => void;
   onVolumeBy: (deltaVolume: number) => void;
   onToggleMute: () => void;
   onToggleShuffle: () => void;
@@ -17,11 +18,26 @@ export interface DesktopShortcutActions {
   onSelectTabIndex: (index: number) => void;
 }
 
+const NON_TEXT_INPUT_TYPES = new Set([
+  'range',
+  'checkbox',
+  'radio',
+  'button',
+  'submit',
+  'reset',
+  'file',
+  'color',
+]);
+
 const isEditableTarget = (target: EventTarget | null): boolean => {
   if (!(target instanceof HTMLElement)) return false;
-  const tag = target.tagName;
-  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
   if (target.isContentEditable) return true;
+  const tag = target.tagName;
+  if (tag === 'TEXTAREA' || tag === 'SELECT') return true;
+  if (tag === 'INPUT') {
+    const inputType = ((target as HTMLInputElement).type || 'text').toLowerCase();
+    return !NON_TEXT_INPUT_TYPES.has(inputType);
+  }
   return false;
 };
 
@@ -31,9 +47,9 @@ const hasOpenModal = (): boolean =>
 
 /**
  * میانبرهای کیبورد استاندارد دسکتاپ با پشتیبانی کامل از چیدمان فارسی/انگلیسی (بر اساس e.code):
- * Space / K / MediaPlayPause: پخش/توقف | Ctrl+Left/Right: قبلی/بعدی | Left/Right: جلو/عقب (تنظیمی، پیش‌فرض ۵ ثانیه)
- * Ctrl+Up/Down یا +/-: کنترل صدا | M: بی‌صدا | S: شافل | R: تکرار | L: محبوب | Q: صف | F: تمام‌صفحه
- * Ctrl+F: جستجو | Ctrl+,: تنظیمات | Alt+1..6: جابه‌جایی بین تب‌ها
+ * Space / K / MediaPlayPause: پخش/توقف | Ctrl+Left/Right یا N/P: قبلی/بعدی | Left/Right: جلو/عقب (تنظیمی، پیش‌فرض ۵ ثانیه)
+ * 0..9: پرش درصدی در آهنگ (۰٪ تا ۹۰٪) | Ctrl+Up/Down یا +/-: کنترل صدا | M: بی‌صدا
+ * S: شافل | R: تکرار | L: محبوب | Q: صف | F: تمام‌صفحه | Ctrl+F/K یا /: جستجو | Ctrl+,: تنظیمات | Alt+1..6: تب‌ها
  */
 export const useKeyboardShortcuts = (
   actions: DesktopShortcutActions,
@@ -41,6 +57,7 @@ export const useKeyboardShortcuts = (
 ) => {
   const actionsRef = useRef(actions);
   const seekStepRef = useRef(seekStepSeconds);
+  const interceptedSpaceRef = useRef(false);
 
   useEffect(() => {
     actionsRef.current = actions;
@@ -63,6 +80,11 @@ export const useKeyboardShortcuts = (
       if (e.key === 'MediaTrackPrevious') {
         e.preventDefault();
         actionsRef.current.onPrev();
+        return;
+      }
+      if (e.key === 'MediaStop') {
+        e.preventDefault();
+        actionsRef.current.onTogglePlay();
         return;
       }
 
@@ -120,9 +142,26 @@ export const useKeyboardShortcuts = (
 
       const step = Math.max(1, seekStepRef.current || 5);
 
-      if (e.code === 'Space' || e.code === 'KeyK') {
+      // اگر اسلایدر رنج ولوم یا اسکرول فوکوس داشت، کلیدهای چپ/راست باعث تداخل نشوند
+      if (e.code === 'Space') {
         e.preventDefault();
-        actionsRef.current.onTogglePlay();
+        e.stopPropagation();
+        if (!e.repeat) {
+          interceptedSpaceRef.current = true;
+          actionsRef.current.onTogglePlay();
+        }
+        return;
+      }
+
+      if (e.code === 'KeyK') {
+        e.preventDefault();
+        if (!e.repeat) actionsRef.current.onTogglePlay();
+      } else if (e.code === 'KeyN' && !e.shiftKey) {
+        e.preventDefault();
+        actionsRef.current.onNext();
+      } else if (e.code === 'KeyP' && !e.shiftKey) {
+        e.preventDefault();
+        actionsRef.current.onPrev();
       } else if (e.code === 'ArrowRight') {
         e.preventDefault();
         actionsRef.current.onSeekBy(e.shiftKey ? step * 3 : step);
@@ -153,11 +192,36 @@ export const useKeyboardShortcuts = (
       } else if (e.code === 'KeyF') {
         e.preventDefault();
         actionsRef.current.onToggleFullScreen();
+      } else if (!e.shiftKey) {
+        const seekDigitMatch = /^(?:Digit|Numpad)([0-9])$/.exec(e.code);
+        if (seekDigitMatch && actionsRef.current.onSeekPercent) {
+          e.preventDefault();
+          actionsRef.current.onSeekPercent(Number(seekDigitMatch[1]) / 10);
+        }
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && interceptedSpaceRef.current) {
+        interceptedSpaceRef.current = false;
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+
+    const handleBlur = () => {
+      interceptedSpaceRef.current = false;
+    };
+
+    window.addEventListener('keydown', handleKeyDown, { capture: true });
+    window.addEventListener('keyup', handleKeyUp, { capture: true });
+    window.addEventListener('blur', handleBlur);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, { capture: true });
+      window.removeEventListener('keyup', handleKeyUp, { capture: true });
+      window.removeEventListener('blur', handleBlur);
+    };
   }, []);
 };
+
 

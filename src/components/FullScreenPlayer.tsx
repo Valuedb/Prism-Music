@@ -82,6 +82,11 @@ interface FullScreenPlayerProps {
   queue: Song[];
   currentQueueIndex?: number;
   removeFromQueue: (index: number) => void;
+  removeFromQueueIndices?: (indices: number[]) => void;
+  onPlayNextInQueue?: (index: number) => void;
+  isQueueOpen?: boolean;
+  onToggleQueue?: () => void;
+  onCloseQueue?: () => void;
   onToggleFavorite?: (id: string) => void;
   reorderQueue?: (fromIndex: number, toIndex: number) => void;
   onPlayQueueSong?: (index: number) => void;
@@ -255,6 +260,11 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
   queue,
   currentQueueIndex,
   removeFromQueue,
+  removeFromQueueIndices,
+  onPlayNextInQueue,
+  isQueueOpen,
+  onToggleQueue,
+  onCloseQueue,
   onToggleFavorite,
   reorderQueue,
   onPlayQueueSong,
@@ -273,7 +283,8 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
   t,
   theme,
 }) => {
-  const [showQueue, setShowQueue] = useState(false);
+  const [internalShowQueue, setInternalShowQueue] = useState(false);
+  const resolvedShowQueue = isQueueOpen !== undefined ? isQueueOpen : internalShowQueue;
   const [showLyrics, setShowLyrics] = useState(false);
   const [isEditingLyrics, setIsEditingLyrics] = useState(false);
   const [lyricsDraft, setLyricsDraft] = useState('');
@@ -281,7 +292,14 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
   const [isHeartPopping, setIsHeartPopping] = useState(false);
   const heartTimerRef = useRef<number | null>(null);
 
-  const handleCloseQueue = useCallback(() => setShowQueue(false), []);
+  const handleCloseQueue = useCallback(() => {
+    if (onCloseQueue) onCloseQueue();
+    else setInternalShowQueue(false);
+  }, [onCloseQueue]);
+  const handleToggleQueueBtn = useCallback(() => {
+    if (onToggleQueue) onToggleQueue();
+    else setInternalShowQueue((prev) => !prev);
+  }, [onToggleQueue]);
   const handlePlayQueueSong = useCallback((idx: number) => onPlayQueueSong?.(idx), [onPlayQueueSong]);
   const handleReorderQueue = useCallback((from: number, to: number) => reorderQueue?.(from, to), [reorderQueue]);
   const handleClearQueue = useCallback(() => onClearQueue?.(), [onClearQueue]);
@@ -303,9 +321,13 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(null);
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const [pendingDeleteConfirm, setPendingDeleteConfirm] = useState(false);
-  const [isMobile, setIsMobile] = useState(() =>
-    typeof window !== 'undefined' ? window.innerWidth < 768 : false
+  const [viewportSize, setViewportSize] = useState(() =>
+    typeof window !== 'undefined'
+      ? { width: window.innerWidth, height: window.innerHeight }
+      : { width: 1200, height: 800 }
   );
+  const isMobile = viewportSize.width < 768;
+  const isShortWindow = !isMobile && viewportSize.height < 680;
   const ringHaloRef = useRef<HTMLDivElement>(null);
   const ringInnerHaloRef = useRef<HTMLDivElement>(null);
   const activeLyricRef = useRef<HTMLButtonElement | null>(null);
@@ -314,7 +336,8 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
 
   useEffect(() => {
     if (!isOpen) {
-      setShowQueue(false);
+      setInternalShowQueue(false);
+      onCloseQueue?.();
       setShowLyrics(false);
       setIsEditingLyrics(false);
       setIsMenuOpen(false);
@@ -326,7 +349,7 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
       setNewPlaylistName('');
       setPendingDeleteConfirm(false);
     }
-  }, [isOpen]);
+  }, [isOpen, onCloseQueue]);
 
   useEffect(() => {
     if (!isMenuOpen) return;
@@ -390,7 +413,8 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
   }, [liveVisualizer, visualizerStyle, isOpen, isPlaying]);
 
   useEffect(() => {
-    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    const handleResize = () =>
+      setViewportSize({ width: window.innerWidth, height: window.innerHeight });
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
@@ -433,7 +457,7 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
         setIsMenuOpen(false);
         return;
       }
-      if (!showQueue) {
+      if (!resolvedShowQueue) {
         if (isEditingLyrics) {
           setIsEditingLyrics(false);
         } else if (showLyrics) {
@@ -447,7 +471,7 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [
     isOpen,
-    showQueue,
+    resolvedShowQueue,
     isEditingLyrics,
     showLyrics,
     isMenuOpen,
@@ -623,6 +647,8 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
               margin: '0 auto',
               padding: isMobile
                 ? 'clamp(14px, 2.5vh, 22px) 22px clamp(26px, 5.5vh, 44px)'
+                : isShortWindow
+                ? '12px 24px 18px'
                 : 'clamp(16px, 2.5vh, 24px) 28px clamp(28px, 5.5vh, 46px)',
               boxSizing: 'border-box',
               justifyContent: 'space-between',
@@ -1110,12 +1136,20 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
                           width: showLyrics
                             ? isMobile
                               ? '96px'
+                              : isShortWindow
+                              ? '148px'
                               : '176px'
+                            : isShortWindow
+                            ? 'min(200px, 52vw, 25vh)'
                             : 'min(230px, 58vw, 29vh)',
                           height: showLyrics
                             ? isMobile
                               ? '96px'
+                              : isShortWindow
+                              ? '148px'
                               : '176px'
+                            : isShortWindow
+                            ? 'min(200px, 52vw, 25vh)'
                             : 'min(230px, 58vw, 29vh)',
                           borderRadius:
                             artworkStyle === 'vinyl'
@@ -1291,7 +1325,7 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
                           flex: 1,
                           minWidth: 0,
                           height: '100%',
-                          maxHeight: isMobile ? '44vh' : '50vh',
+                          maxHeight: isMobile ? '44vh' : isShortWindow ? '42vh' : '50vh',
                           display: 'flex',
                           flexDirection: 'column',
                           position: 'relative',
@@ -1450,6 +1484,7 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
                         ) : (
                           <div
                             className="lyrics-scroll"
+                            data-selectable="true"
                             style={{
                               flex: 1,
                               overflowY: 'auto',
@@ -1547,7 +1582,7 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
                 margin: '0 auto',
                 display: 'flex',
                 flexDirection: 'column',
-                gap: isMobile ? '10px' : '14px',
+                gap: isMobile || isShortWindow ? '10px' : '14px',
                 flexShrink: 0,
               }}
             >
@@ -1598,18 +1633,18 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
                   whileTap={{ scale: 0.9 }}
                   whileHover={{ opacity: 0.82 }}
                   transition={{ duration: 0.14, ease: 'easeOut' }}
-                  onClick={() => setShowQueue((prev) => !prev)}
+                  onClick={handleToggleQueueBtn}
                   title={t.queue || 'Queue'}
                   style={{
                     ...btnStyle,
                     width: '36px',
                     height: '36px',
                     borderRadius: '50%',
-                    backgroundColor: showQueue
+                    backgroundColor: resolvedShowQueue
                       ? withAlpha(primaryColor, 0.28)
                       : 'rgba(255, 255, 255, 0.1)',
-                    color: showQueue ? iconActiveColor : '#ffffff',
-                    boxShadow: showQueue ? `0 0 14px ${withAlpha(primaryColor, 0.45)}` : 'none',
+                    color: resolvedShowQueue ? iconActiveColor : '#ffffff',
+                    boxShadow: resolvedShowQueue ? `0 0 14px ${withAlpha(primaryColor, 0.45)}` : 'none',
                   }}
                 >
                   <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor">
@@ -1898,7 +1933,7 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
           </div>
 
           <QueueDrawer
-            isOpen={showQueue}
+            isOpen={resolvedShowQueue}
             onClose={handleCloseQueue}
             queue={queue}
             currentSong={currentSong}
@@ -1906,6 +1941,8 @@ export const FullScreenPlayer: React.FC<FullScreenPlayerProps> = memo(({
             isPlaying={isPlaying}
             onPlaySong={handlePlayQueueSong}
             onRemoveFromQueue={removeFromQueue}
+            onRemoveSelectedFromQueue={removeFromQueueIndices}
+            onPlayNextInQueue={onPlayNextInQueue}
             onReorderQueue={handleReorderQueue}
             onClearQueue={handleClearQueue}
             onShuffleQueue={handleShuffleQueue}

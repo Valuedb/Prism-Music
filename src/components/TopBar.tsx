@@ -3,6 +3,11 @@ import { motion } from 'framer-motion';
 import { Settings } from 'lucide-react';
 import { SearchBar, type SearchNavigateTarget } from './SearchBar';
 import { withAlpha } from '../utils/color';
+import {
+  clampTabIndex,
+  computeWheelStepDirection,
+  resolveDragTargetTabIndex,
+} from '../utils/tabScroll';
 
 import type { AppTab, Playlist, Song } from '../types';
 
@@ -21,6 +26,8 @@ interface TopBarProps {
   onAddSongsToPlaylist?: (playlistId: string, songs: Song[]) => void;
   onCreatePlaylist?: (name: string, songs: Song[]) => void;
   onSearchNavigate?: (target: SearchNavigateTarget) => void;
+  isRTL?: boolean;
+  reduceMotion?: boolean;
 }
 
 export const TopBar = ({
@@ -38,6 +45,8 @@ export const TopBar = ({
   onAddSongsToPlaylist,
   onCreatePlaylist,
   onSearchNavigate,
+  isRTL = false,
+  reduceMotion = false,
 }: TopBarProps) => {
   const menuItems = useMemo(
     () => [
@@ -55,6 +64,22 @@ export const TopBar = ({
   const trackRef = useRef<HTMLDivElement>(null);
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const [trackX, setTrackX] = useState(0);
+  const [dragOffsetX, setDragOffsetX] = useState(0);
+  const [isDraggingTabs, setIsDraggingTabs] = useState(false);
+
+  const currentTabRef = useRef(currentTab);
+  const setCurrentTabRef = useRef(setCurrentTab);
+  const isRTLRef = useRef(isRTL);
+  const suppressClickUntilRef = useRef(0);
+  const wheelAccumRef = useRef(0);
+  const wheelCooldownUntilRef = useRef(0);
+  const wheelLastEventAtRef = useRef(0);
+
+  useEffect(() => {
+    currentTabRef.current = currentTab;
+    setCurrentTabRef.current = setCurrentTab;
+    isRTLRef.current = isRTL;
+  }, [currentTab, setCurrentTab, isRTL]);
 
   // محاسبه قطعی موقعیت ترک بر اساس آفست نسبی درونی تا وسط انیمیشن فنری دوباره تریگر نشود و روی پیکسل صحیح بنشیند
   const centerActiveTab = useCallback(() => {
@@ -107,6 +132,162 @@ export const TopBar = ({
     };
   }, [centerActiveTab]);
 
+  // پشتیبانی از اسکرول با چرخ ماوس، تاچ‌پد و کشیدن افقی برای جابه‌جایی بین تب‌ها
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const resolvedDirectionIsRTL = () => {
+      if (typeof window !== 'undefined') {
+        return window.getComputedStyle(container).direction === 'rtl';
+      }
+      return isRTLRef.current;
+    };
+
+    const handleWheel = (e: WheelEvent) => {
+      const { deltaX, deltaY } = e;
+      if (deltaX === 0 && deltaY === 0) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      const now = Date.now();
+      if (now - wheelLastEventAtRef.current > 180) {
+        wheelAccumRef.current = 0;
+      }
+      wheelLastEventAtRef.current = now;
+
+      if (now < wheelCooldownUntilRef.current) {
+        return;
+      }
+
+      const useHorizontal = Math.abs(deltaX) > Math.abs(deltaY);
+      const dominantDelta = useHorizontal ? deltaX : deltaY;
+      wheelAccumRef.current += dominantDelta;
+
+      if (Math.abs(wheelAccumRef.current) < 18) {
+        return;
+      }
+
+      const accum = wheelAccumRef.current;
+      wheelAccumRef.current = 0;
+
+      const step = computeWheelStepDirection({
+        deltaX: useHorizontal ? accum : 0,
+        deltaY: useHorizontal ? 0 : accum,
+        isRTL: resolvedDirectionIsRTL(),
+      });
+      if (step === 0) return;
+
+      const activeIdx = menuItems.findIndex((item) => item.id === currentTabRef.current);
+      const safeCurrent = activeIdx >= 0 ? activeIdx : 0;
+      const targetIdx = clampTabIndex(safeCurrent + step, menuItems.length);
+
+      wheelCooldownUntilRef.current = now + 145;
+      if (targetIdx !== activeIdx) {
+        setCurrentTabRef.current(menuItems[targetIdx].id as AppTab);
+      }
+    };
+
+    let activePointerId: number | null = null;
+    let startX = 0;
+    let lastDx = 0;
+    let dragging = false;
+
+    const cleanupDragListeners = () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerCancel);
+    };
+
+    const finishDrag = (commit: boolean) => {
+      cleanupDragListeners();
+      const wasDragging = dragging;
+      const finalDx = lastDx;
+      activePointerId = null;
+      dragging = false;
+      lastDx = 0;
+
+      setIsDraggingTabs(false);
+      setDragOffsetX(0);
+
+      if (!wasDragging) return;
+
+      suppressClickUntilRef.current = Date.now() + 140;
+      if (!commit) return;
+
+      const containerRect = container.getBoundingClientRect();
+      const containerCenter = containerRect.left + containerRect.width / 2;
+      const tabCenters = menuItems.map((_, idx) => {
+        const rect = tabRefs.current[idx]?.getBoundingClientRect();
+        return rect ? rect.left + rect.width / 2 : containerCenter;
+      });
+      const activeIdx = menuItems.findIndex((item) => item.id === currentTabRef.current);
+      const targetIdx = resolveDragTargetTabIndex({
+        tabCenters,
+        containerCenter,
+        currentIndex: activeIdx >= 0 ? activeIdx : 0,
+        dragDeltaX: finalDx,
+        isRTL: resolvedDirectionIsRTL(),
+      });
+
+      if (targetIdx !== activeIdx) {
+        setCurrentTabRef.current(menuItems[targetIdx].id as AppTab);
+      }
+    };
+
+    const handlePointerMove = (e: PointerEvent) => {
+      if (activePointerId === null || e.pointerId !== activePointerId) return;
+      const rawDx = e.clientX - startX;
+      if (!dragging && Math.abs(rawDx) > 6) {
+        dragging = true;
+        setIsDraggingTabs(true);
+      }
+      if (!dragging) return;
+
+      const trackWidth = trackRef.current?.scrollWidth || 500;
+      const maxDrag = Math.max(120, Math.round(trackWidth * 0.65));
+      const clampedDx = Math.max(-maxDrag, Math.min(maxDrag, rawDx));
+      lastDx = clampedDx;
+      setDragOffsetX(Math.round(clampedDx));
+    };
+
+    const handlePointerUp = (e: PointerEvent) => {
+      if (activePointerId === null || e.pointerId !== activePointerId) return;
+      finishDrag(true);
+    };
+
+    const handlePointerCancel = (e: PointerEvent) => {
+      if (activePointerId === null || e.pointerId !== activePointerId) return;
+      finishDrag(false);
+    };
+
+    const handlePointerDown = (e: PointerEvent) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      activePointerId = e.pointerId;
+      startX = e.clientX;
+      lastDx = 0;
+      dragging = false;
+      window.addEventListener('pointermove', handlePointerMove);
+      window.addEventListener('pointerup', handlePointerUp);
+      window.addEventListener('pointercancel', handlePointerCancel);
+    };
+
+    container.addEventListener('wheel', handleWheel, { passive: false });
+    container.addEventListener('pointerdown', handlePointerDown);
+
+    return () => {
+      container.removeEventListener('wheel', handleWheel);
+      container.removeEventListener('pointerdown', handlePointerDown);
+      cleanupDragListeners();
+    };
+  }, [menuItems]);
+
+  const handleTabClick = useCallback((tabId: AppTab) => {
+    if (Date.now() < suppressClickUntilRef.current) return;
+    setCurrentTabRef.current(tabId);
+  }, []);
+
   const hoverBg = withAlpha(theme.colors.primary, theme.isDark ? 0.16 : 0.1);
   const topBarBg = withAlpha(
     theme.colors.surfaceSolid || theme.colors.background,
@@ -138,7 +319,7 @@ export const TopBar = ({
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          padding: '0 24px',
+          padding: '0 clamp(14px, 2.5vw, 28px)',
           marginBottom: '2px',
           width: '100%',
           boxSizing: 'border-box',
@@ -201,9 +382,11 @@ export const TopBar = ({
         </div>
       </div>
 
-      {/* کاروسل تب‌های سنترشده */}
+      {/* کاروسل تب‌های سنترشده با قابلیت اسکرول با ماوس و کشیدن افقی */}
       <div
         ref={containerRef}
+        role="tablist"
+        aria-label={t.navigationTabs || 'تب‌های ناوبری'}
         style={{
           width: '100%',
           overflow: 'hidden',
@@ -213,22 +396,33 @@ export const TopBar = ({
           alignItems: 'center',
           boxSizing: 'border-box',
           minHeight: '46px',
+          cursor: isDraggingTabs ? 'grabbing' : 'grab',
+          touchAction: 'pan-y',
+          userSelect: 'none',
+          WebkitMaskImage:
+            'linear-gradient(to right, transparent 0%, #000 5%, #000 95%, transparent 100%)',
+          maskImage:
+            'linear-gradient(to right, transparent 0%, #000 5%, #000 95%, transparent 100%)',
         }}
       >
         <motion.div
           ref={trackRef}
           initial={false}
-          animate={{ x: trackX }}
-          transition={{
-            type: 'spring',
-            stiffness: 420,
-            damping: 38,
-            mass: 0.75,
-          }}
+          animate={{ x: trackX + dragOffsetX }}
+          transition={
+            isDraggingTabs || reduceMotion
+              ? { duration: 0 }
+              : {
+                  type: 'spring',
+                  stiffness: 420,
+                  damping: 38,
+                  mass: 0.75,
+                }
+          }
           style={{
             display: 'inline-flex',
             alignItems: 'center',
-            gap: 'clamp(10px, 1.6vw, 18px)',
+            gap: 'clamp(6px, 1.4vw, 18px)',
             position: 'relative',
             whiteSpace: 'nowrap',
           }}
@@ -238,21 +432,23 @@ export const TopBar = ({
             return (
               <button
                 key={item.id}
+                role="tab"
+                aria-selected={isActive}
                 ref={(el) => {
                   tabRefs.current[index] = el;
                 }}
-                onClick={() => setCurrentTab(item.id as AppTab)}
+                onClick={() => handleTabClick(item.id as AppTab)}
                 style={{
                   background: 'transparent',
                   border: 'none',
-                  cursor: 'pointer',
+                  cursor: isDraggingTabs ? 'grabbing' : 'pointer',
                   position: 'relative',
                   display: 'flex',
                   flexDirection: 'column',
                   alignItems: 'center',
                   justifyContent: 'flex-end',
                   height: '44px',
-                  padding: '4px 10px 4px 10px',
+                  padding: '4px 8px 4px 8px',
                   fontSize: isActive
                     ? 'clamp(1.0625rem, 1.75vw, 1.1875rem)'
                     : 'clamp(0.8438rem, 1.3vw, 0.9375rem)',

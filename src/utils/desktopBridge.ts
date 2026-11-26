@@ -50,7 +50,9 @@ const probeMediaDuration = (mediaUrl: string): Promise<number> =>
   new Promise((resolve) => {
     const audio = new Audio();
     audio.preload = 'metadata';
-    audio.crossOrigin = 'anonymous';
+    if (/^https?:/i.test(mediaUrl) && !mediaUrl.includes('asset.localhost')) {
+      audio.crossOrigin = 'anonymous';
+    }
     const done = (val: number) => {
       audio.onloadedmetadata = null;
       audio.onerror = null;

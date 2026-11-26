@@ -51,6 +51,20 @@ import {
   syncDesktopFolderResult,
 } from './utils/desktopBridge';
 import { extractDominantHex } from './utils/artworkColor';
+import {
+  applyDesktopWebViewHardening,
+  initTauriDesktopBridge,
+  syncDesktopWindowTitle,
+} from './utils/tauriBridge';
+import {
+  CONTENT_WHEEL_COMMIT_THRESHOLD,
+  clampTabIndex,
+  dampSwipeOffset,
+  evaluateSwipeAxisLock,
+  extractFirmContentWheelDelta,
+  resolveContentSwipeStep,
+  type SwipeLockState,
+} from './utils/tabScroll';
 
 const isLegacyDemoTrack = (song: Song) =>
   (song.id === 'demo-1' || song.id === 'demo-2' || song.id === 'demo-3') &&
@@ -156,12 +170,30 @@ function App() {
     return () => media.removeEventListener('change', listener);
   }, []);
 
+  // بهینه‌سازی محیط Tauri و دسکتاپ ویندوز + اتصال پل Tauri در صورت وجود پلاگین‌ها
+  useEffect(() => {
+    initTauriDesktopBridge();
+    return applyDesktopWebViewHardening();
+  }, []);
+
   // فعال‌سازی واکنش لمسی فوری (Active state) در مرورگرهای لمسی
   useEffect(() => {
     const handleTouchStart = () => {};
     window.addEventListener('touchstart', handleTouchStart, { passive: true });
     return () => window.removeEventListener('touchstart', handleTouchStart);
   }, []);
+
+  const contentViewportRef = useRef<HTMLDivElement>(null);
+  const [contentSwipeX, setContentSwipeX] = useState(0);
+  const tabIndexRef = useRef(currentTabIndex);
+  const isSettingsOpenRef = useRef(isSettingsOpen);
+  const isRTLStateRef = useRef(language === 'fa');
+
+  useEffect(() => {
+    tabIndexRef.current = currentTabIndex;
+    isSettingsOpenRef.current = isSettingsOpen;
+    isRTLStateRef.current = language === 'fa';
+  }, [currentTabIndex, isSettingsOpen, language]);
 
   const [songs, setSongs] = usePersistentState<Song[]>(STORAGE_KEYS.library, [], isSongList);
 
@@ -685,6 +717,186 @@ function App() {
     displaySettings.reduceMotion,
   ]);
 
+  // همگام‌سازی عنوان پنجره دسکتاپ/ویندوز با آهنگ در حال پخش
+  useEffect(() => {
+    if (player.currentSong) {
+      const artistSuffix = player.currentSong.artist ? ` — ${player.currentSong.artist}` : '';
+      syncDesktopWindowTitle(`${player.currentSong.name}${artistSuffix} · Prism Music`);
+    } else {
+      syncDesktopWindowTitle('Prism Music');
+    }
+  }, [player.currentSong]);
+
+  // اسکرول و سوایپ افقی سفت و سخت روی محتوای اصلی برای جابه‌جایی بین تب‌ها بدون تداخل با اسکرول عمودی
+  useEffect(() => {
+    const viewport = contentViewportRef.current;
+    if (!viewport) return;
+
+    const isBlockedTarget = (target: EventTarget | null): boolean => {
+      if (!(target instanceof HTMLElement)) return false;
+      if (target.closest('[role="dialog"], [data-modal-open="true"], [data-no-tab-swipe="true"]')) {
+        return true;
+      }
+      if (target.isContentEditable) return true;
+      const tag = target.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'OPTION') {
+        return true;
+      }
+      return Boolean(target.closest('[role="slider"]'));
+    };
+
+    const hasInnerHorizontalScroll = (target: EventTarget | null): boolean => {
+      let cursor = target instanceof HTMLElement ? target : null;
+      while (cursor && cursor !== viewport) {
+        if (cursor.scrollWidth > cursor.clientWidth + 4) {
+          const ox = window.getComputedStyle(cursor).overflowX;
+          if (ox === 'auto' || ox === 'scroll') return true;
+        }
+        cursor = cursor.parentElement;
+      }
+      return false;
+    };
+
+    let wheelAccum = 0;
+    let lastWheelAt = 0;
+    let wheelCooldownUntil = 0;
+
+    const handleWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || isSettingsOpenRef.current) return;
+      if (document.querySelector('[role="dialog"], [data-modal-open="true"]')) return;
+      if (isSwipeBlockedTargetCheck(e.target) || hasInnerHorizontalScroll(e.target)) return;
+
+      const delta = extractFirmContentWheelDelta({
+        deltaX: e.deltaX,
+        deltaY: e.deltaY,
+        shiftKey: e.shiftKey,
+        isRTL: isRTLStateRef.current,
+      });
+
+      if (delta === 0) return;
+
+      e.preventDefault();
+      const now = Date.now();
+      if (now < wheelCooldownUntil) return;
+      if (now - lastWheelAt > 200) {
+        wheelAccum = 0;
+      }
+      lastWheelAt = now;
+      wheelAccum += delta;
+
+      if (Math.abs(wheelAccum) < CONTENT_WHEEL_COMMIT_THRESHOLD) return;
+
+      const step = wheelAccum > 0 ? 1 : -1;
+      wheelAccum = 0;
+      wheelCooldownUntil = now + 460;
+
+      const nextIdx = clampTabIndex(tabIndexRef.current + step, tabs.length);
+      if (nextIdx !== tabIndexRef.current) {
+        setNavTarget(null);
+        setCurrentTabIndex(nextIdx);
+      }
+    };
+
+    function isSwipeBlockedTargetCheck(target: EventTarget | null): boolean {
+      return isBlockedTarget(target);
+    }
+
+    let pointerId: number | null = null;
+    let startX = 0;
+    let startY = 0;
+    let startAt = 0;
+    let lastDx = 0;
+    let lock: SwipeLockState = 'pending';
+
+    const detachSwipe = () => {
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointercancel', onPointerCancel);
+    };
+
+    const resetSwipe = (commit: boolean) => {
+      detachSwipe();
+      const lockedHorizontal = lock === 'horizontal';
+      const finalDx = lastDx;
+      const elapsed = Date.now() - startAt;
+      pointerId = null;
+      lock = 'pending';
+      lastDx = 0;
+      setContentSwipeX(0);
+
+      if (!commit || !lockedHorizontal) return;
+      const step = resolveContentSwipeStep({
+        dx: finalDx,
+        elapsedMs: elapsed,
+        isRTL: isRTLStateRef.current,
+      });
+      if (step !== 0) {
+        const nextIdx = clampTabIndex(tabIndexRef.current + step, tabs.length);
+        if (nextIdx !== tabIndexRef.current) {
+          setNavTarget(null);
+          setCurrentTabIndex(nextIdx);
+        }
+      }
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      if (pointerId === null || e.pointerId !== pointerId) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+
+      if (lock === 'pending') {
+        const nextLock = evaluateSwipeAxisLock(dx, dy);
+        if (nextLock === 'pending') return;
+        lock = nextLock;
+        if (lock === 'vertical') {
+          resetSwipe(false);
+          return;
+        }
+      }
+
+      if (lock === 'horizontal') {
+        lastDx = dx;
+        setContentSwipeX(dampSwipeOffset(dx));
+      }
+    };
+
+    const onPointerUp = (e: PointerEvent) => {
+      if (pointerId === null || e.pointerId !== pointerId) return;
+      resetSwipe(true);
+    };
+
+    const onPointerCancel = (e: PointerEvent) => {
+      if (pointerId === null || e.pointerId !== pointerId) return;
+      resetSwipe(false);
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.pointerType === 'mouse' || isSettingsOpenRef.current) return;
+      if (document.querySelector('[role="dialog"], [data-modal-open="true"]')) return;
+      if (isBlockedTarget(e.target) || hasInnerHorizontalScroll(e.target)) return;
+
+      pointerId = e.pointerId;
+      startX = e.clientX;
+      startY = e.clientY;
+      startAt = Date.now();
+      lastDx = 0;
+      lock = 'pending';
+
+      window.addEventListener('pointermove', onPointerMove);
+      window.addEventListener('pointerup', onPointerUp);
+      window.addEventListener('pointercancel', onPointerCancel);
+    };
+
+    viewport.addEventListener('wheel', handleWheel, { passive: false });
+    viewport.addEventListener('pointerdown', onPointerDown);
+
+    return () => {
+      viewport.removeEventListener('wheel', handleWheel);
+      viewport.removeEventListener('pointerdown', onPointerDown);
+      detachSwipe();
+    };
+  }, []);
+
   const markSongStarted = useCallback(
     (id: string) => {
       const now = Date.now();
@@ -1196,6 +1408,9 @@ function App() {
             currentSong={player.currentSong}
             onPlaySongFromList={handlePlaySongFromList}
             onShuffleAll={handleShuffleAll}
+            onPlayNext={player.playNextSongs}
+            addToQueue={player.addToQueue}
+            onToggleFavorite={toggleFavoriteSong}
             onNavigateToItem={handleNavigateFromSearch}
             onSelectTab={setTab}
             sleepTimer={sleepTimer}
@@ -1368,7 +1583,7 @@ function App() {
       style={{
         display: 'flex',
         flexDirection: 'column',
-        height: '100vh',
+        height: '100dvh',
         backgroundColor: theme.colors.background,
         color: theme.colors.textPrimary,
         fontFamily: theme.fonts.main,
@@ -1499,7 +1714,8 @@ function App() {
       {(() => {
         const navLayout = displaySettings.navigationLayout ?? 'top';
         const isDesktopViewport = viewportWidth >= 768;
-        const expandedSidebarWidth = viewportWidth >= 1024 ? 204 : 196;
+        const expandedSidebarWidth =
+          viewportWidth >= 1440 ? 220 : viewportWidth >= 1024 ? 204 : 184;
         const sidebarWidth = sidebarCollapsed ? 64 : expandedSidebarWidth;
         const showDesktopSidebar = navLayout === 'sidebar' && isDesktopViewport;
         const isDockedPlayer = (displaySettings.playerBarStyle ?? 'floating') === 'docked';
@@ -1556,10 +1772,13 @@ function App() {
                   onAddSongsToPlaylist={handleAddSongsToPlaylist}
                   onCreatePlaylist={handleCreatePlaylist}
                   onSearchNavigate={handleNavigateFromSearch}
+                  isRTL={language === 'fa'}
+                  reduceMotion={displaySettings.reduceMotion}
                 />
               )}
 
               <div
+                ref={contentViewportRef}
                 dir={language === 'fa' ? 'rtl' : 'ltr'}
                 style={{
                   flex: 1,
@@ -1567,6 +1786,7 @@ function App() {
                   minHeight: 0,
                   position: 'relative',
                   overflow: 'hidden',
+                  touchAction: 'pan-y',
                   zIndex: 1,
                 }}
               >
@@ -1574,12 +1794,19 @@ function App() {
                   <motion.div
                     key={isSettingsOpen ? 'settings' : currentTab}
                     initial={displaySettings.reduceMotion ? false : { opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={displaySettings.reduceMotion ? { opacity: 1 } : { opacity: 0 }}
-                    transition={{
-                      duration: displaySettings.reduceMotion ? 0 : 0.11,
-                      ease: 'easeOut',
+                    animate={{
+                      opacity: 1,
+                      x: displaySettings.reduceMotion ? 0 : contentSwipeX,
                     }}
+                    exit={displaySettings.reduceMotion ? { opacity: 1 } : { opacity: 0 }}
+                    transition={
+                      contentSwipeX !== 0
+                        ? { x: { duration: 0 }, opacity: { duration: 0.1 } }
+                        : {
+                            duration: displaySettings.reduceMotion ? 0 : 0.13,
+                            ease: 'easeOut',
+                          }
+                    }
                     style={{
                       position: 'absolute',
                       top: 0,
@@ -1587,7 +1814,8 @@ function App() {
                       right: 0,
                       bottom: 0,
                       overflowY: 'auto',
-                      scrollbarGutter: 'stable both-edges',
+                      overscrollBehavior: 'contain',
+                      scrollbarGutter: 'stable',
                       backgroundColor: 'transparent',
                     }}
                   >
@@ -1624,6 +1852,8 @@ function App() {
           queue={player.queue}
           currentQueueIndex={player.currentQueueIndex}
           removeFromQueue={player.removeFromQueueAt}
+          removeFromQueueIndices={player.removeFromQueueIndices}
+          onPlayNextInQueue={player.playNextInQueue}
           playNext={player.playNext}
           playPrev={player.playPrev}
           reorderQueue={player.reorderQueue}

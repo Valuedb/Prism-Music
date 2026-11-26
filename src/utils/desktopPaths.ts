@@ -1,7 +1,28 @@
 import type { DesktopFolderScanResult, DesktopPickedFile, Song } from '../types/index.ts';
 
-export const buildDesktopMediaUrl = (sourcePath: string): string =>
-  `media://local?path=${encodeURIComponent(sourcePath)}`;
+export const buildDesktopMediaUrl = (sourcePath: string): string => {
+  const g = globalThis as {
+    desktopRuntime?: { isDesktop?: boolean };
+    __TAURI_INTERNALS__?: { convertFileSrc?: (path: string) => string };
+    __TAURI__?: {
+      core?: { convertFileSrc?: (path: string) => string };
+      tauri?: { convertFileSrc?: (path: string) => string };
+    };
+  };
+  const tauriConvert =
+    g.__TAURI_INTERNALS__?.convertFileSrc ??
+    g.__TAURI__?.core?.convertFileSrc ??
+    g.__TAURI__?.tauri?.convertFileSrc;
+
+  if (typeof tauriConvert === 'function') {
+    try {
+      return tauriConvert(sourcePath);
+    } catch {
+      // fallback to standard media URL
+    }
+  }
+  return `media://local?path=${encodeURIComponent(sourcePath)}`;
+};
 
 export const normalizeDiskPath = (targetPath: string, platform?: string): string => {
   const trimmed = targetPath.trim();

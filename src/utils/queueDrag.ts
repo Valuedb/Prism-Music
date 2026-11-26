@@ -56,3 +56,59 @@ export const computeAutoScrollDelta = (
 
   return 0;
 };
+
+export interface QueueIndicesRemovalResult<T> {
+  queue: T[];
+  currentIndex: number;
+  priorityIndices: number[];
+}
+
+/**
+ * حذف همزمان چند ایندکس انتخاب‌شده از صف پخش با حفظ دقیق ایندکس قطعه جاری و صف اولویت
+ */
+export const removeIndicesFromQueue = <T>(
+  queue: readonly T[],
+  indices: readonly number[],
+  currentIndex: number,
+  priorityIndices: readonly number[] = []
+): QueueIndicesRemovalResult<T> => {
+  if (queue.length === 0 || indices.length === 0) {
+    return {
+      queue: [...queue],
+      currentIndex,
+      priorityIndices: [...priorityIndices],
+    };
+  }
+
+  const removeSet = new Set(
+    indices.filter((idx) => Number.isInteger(idx) && idx >= 0 && idx < queue.length)
+  );
+  if (removeSet.size === 0) {
+    return {
+      queue: [...queue],
+      currentIndex,
+      priorityIndices: [...priorityIndices],
+    };
+  }
+
+  const indexMap = new Map<number, number>();
+  const nextQueue: T[] = [];
+  for (let oldIdx = 0; oldIdx < queue.length; oldIdx++) {
+    if (!removeSet.has(oldIdx)) {
+      indexMap.set(oldIdx, nextQueue.length);
+      nextQueue.push(queue[oldIdx]);
+    }
+  }
+
+  const nextCurrent = indexMap.get(currentIndex) ?? -1;
+  const nextPriority = priorityIndices
+    .map((idx) => indexMap.get(idx))
+    .filter((idx): idx is number => idx !== undefined);
+
+  return {
+    queue: nextQueue,
+    currentIndex: nextCurrent,
+    priorityIndices: nextPriority,
+  };
+};
+

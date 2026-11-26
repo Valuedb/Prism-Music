@@ -18,6 +18,9 @@ import {
   Heart,
   ChevronRight,
   ChevronLeft,
+  FolderOpen,
+  SkipForward,
+  ListPlus,
 } from 'lucide-react';
 import { CoverImage } from '../components/CoverImage';
 import { AllSongs } from './AllSongs';
@@ -26,6 +29,11 @@ import {
   getRecentlyAddedSongs,
   getRecentlyPlayedSongs,
 } from '../utils/smartPlaylists';
+import {
+  clampContextMenuPosition,
+  computeAnchorMenuPosition,
+  type ContextMenuPosition,
+} from '../utils/contextMenu';
 
 interface PlaylistsProps {
   playlists: Playlist[];
@@ -118,7 +126,7 @@ const PlaylistMenuButton = ({
   ariaLabel,
 }: {
   isOpen: boolean;
-  onClick: (e: React.MouseEvent) => void;
+  onClick: (e: React.MouseEvent<HTMLButtonElement>) => void;
   theme: any;
   position: 'top' | 'inline';
   offset?: number;
@@ -210,62 +218,14 @@ const MenuItem = ({
   );
 };
 
-/** منوی کشویی عملیات پلی‌لیست (تغییر نام، افزودن، حذف) */
-const PlaylistMenu = ({
-  onRename,
-  onAddSong,
-  onDelete,
-  theme,
-  t,
-  align,
-}: {
-  onRename: () => void;
-  onAddSong: () => void;
-  onDelete: () => void;
-  theme: any;
-  t: any;
-  align: 'start' | 'end';
-}) => (
-  <div
-    onClick={(e) => e.stopPropagation()}
-    style={{
-      position: 'absolute',
-      top: 'calc(100% + 6px)',
-      [align === 'end' ? 'insetInlineEnd' : 'insetInlineStart']: 0,
-      padding: '5px',
-      backgroundColor: theme.colors.surfaceSolid || (theme.isDark ? '#18181c' : '#ffffff'),
-      borderRadius: theme.radius.md,
-      border: `1px solid ${theme.colors.border}`,
-      boxShadow: '0 16px 36px rgba(0, 0, 0, 0.42)',
-      zIndex: 1000,
-      minWidth: 185,
-      overflow: 'hidden',
-      isolation: 'isolate',
-      transform: 'translate3d(0, 0, 0)',
-      backfaceVisibility: 'hidden',
-    }}
-  >
-    <MenuItem icon={<Edit2 size={16} />} label={t.renamePlaylist} onClick={onRename} theme={theme} />
-    <MenuItem icon={<Plus size={16} />} label={t.addSong} onClick={onAddSong} theme={theme} />
-    <MenuItem
-      icon={<Trash2 size={16} />}
-      label={t.deletePlaylist}
-      onClick={onDelete}
-      color={theme.colors.danger}
-      theme={theme}
-    />
-  </div>
-);
 
-/** کارت پلی‌لیست در حالت grid با شیشه بلوری اپل موزیک */
+/** کارت پلی‌لیست در حالت grid با شیشه بلوری */
 const PlaylistCard = ({
   playlist,
   onOpen,
   menuOpen,
   onToggleMenu,
-  onRename,
-  onAddSong,
-  onDelete,
+  onContextMenu,
   theme,
   t,
   menuRef,
@@ -273,10 +233,8 @@ const PlaylistCard = ({
   playlist: Playlist;
   onOpen: () => void;
   menuOpen: boolean;
-  onToggleMenu: (e: React.MouseEvent) => void;
-  onRename: () => void;
-  onAddSong: () => void;
-  onDelete: () => void;
+  onToggleMenu: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  onContextMenu: (e: React.MouseEvent<HTMLDivElement>) => void;
   theme: any;
   t: any;
   menuRef: (el: HTMLDivElement | null) => void;
@@ -287,6 +245,7 @@ const PlaylistCard = ({
     <div style={{ position: 'relative', zIndex: menuOpen ? 50 : 1 }}>
       <div
         onClick={onOpen}
+        onContextMenu={onContextMenu}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         style={{
@@ -326,7 +285,7 @@ const PlaylistCard = ({
         </p>
       </div>
 
-      <div ref={menuRef} style={{ position: 'absolute', top: 12, insetInlineEnd: 12, zIndex: 50 }}>
+      <div ref={menuRef} style={{ position: 'absolute', top: 12, insetInlineEnd: 12, zIndex: 10 }}>
         <PlaylistMenuButton
           isOpen={menuOpen}
           onClick={onToggleMenu}
@@ -335,9 +294,6 @@ const PlaylistCard = ({
           offset={0}
           ariaLabel={t.moreActions}
         />
-        {menuOpen && (
-          <PlaylistMenu onRename={onRename} onAddSong={onAddSong} onDelete={onDelete} theme={theme} t={t} align="end" />
-        )}
       </div>
     </div>
   );
@@ -349,9 +305,7 @@ const PlaylistRow = ({
   onOpen,
   menuOpen,
   onToggleMenu,
-  onRename,
-  onAddSong,
-  onDelete,
+  onContextMenu,
   theme,
   t,
   menuRef,
@@ -359,10 +313,8 @@ const PlaylistRow = ({
   playlist: Playlist;
   onOpen: () => void;
   menuOpen: boolean;
-  onToggleMenu: (e: React.MouseEvent) => void;
-  onRename: () => void;
-  onAddSong: () => void;
-  onDelete: () => void;
+  onToggleMenu: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  onContextMenu: (e: React.MouseEvent<HTMLDivElement>) => void;
   theme: any;
   t: any;
   menuRef: (el: HTMLDivElement | null) => void;
@@ -372,6 +324,7 @@ const PlaylistRow = ({
   return (
     <div
       onClick={onOpen}
+      onContextMenu={onContextMenu}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
@@ -416,7 +369,7 @@ const PlaylistRow = ({
         </div>
       </div>
 
-      <div ref={menuRef} style={{ position: 'relative', zIndex: 50 }}>
+      <div ref={menuRef} style={{ position: 'relative', zIndex: 10 }}>
         <PlaylistMenuButton
           isOpen={menuOpen}
           onClick={onToggleMenu}
@@ -424,9 +377,6 @@ const PlaylistRow = ({
           position="inline"
           ariaLabel={t.moreActions}
         />
-        {menuOpen && (
-          <PlaylistMenu onRename={onRename} onAddSong={onAddSong} onDelete={onDelete} theme={theme} t={t} align="end" />
-        )}
       </div>
     </div>
   );
@@ -826,6 +776,7 @@ const SmartPlaylistCard = ({
   emptyText,
   onClick,
   onQuickPlay,
+  onContextMenu,
   theme,
   t,
   language,
@@ -839,6 +790,7 @@ const SmartPlaylistCard = ({
   emptyText: string;
   onClick: () => void;
   onQuickPlay: () => void;
+  onContextMenu?: (e: React.MouseEvent<HTMLDivElement>) => void;
   theme: any;
   t: any;
   language: 'fa' | 'en';
@@ -852,6 +804,7 @@ const SmartPlaylistCard = ({
   return (
     <div
       onClick={onClick}
+      onContextMenu={onContextMenu}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
@@ -1085,7 +1038,15 @@ export const Playlists = ({
   );
 
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
-  const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
+  type PlaylistContextTarget =
+    | { kind: 'user'; playlist: Playlist }
+    | { kind: 'smart'; key: SmartPlaylistKey; title: string; songs: Song[] };
+  const [ctxMenu, setCtxMenu] = useState<{
+    id: string;
+    target: PlaylistContextTarget;
+    position: ContextMenuPosition;
+  } | null>(null);
+  const activeMenuId = ctxMenu?.id ?? null;
 
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameTargetId, setRenameTargetId] = useState<string | null>(null);
@@ -1101,17 +1062,38 @@ export const Playlists = ({
 
   const pageRef = useRef<HTMLDivElement>(null);
   const menuRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
+  const portalMenuRef = useRef<HTMLDivElement>(null);
 
-  // بستن منو هنگام کلیک بیرون از آن
+  // بستن منوی پورتال هنگام کلیک بیرون، اسکرول، تغییر اندازه یا Escape
   useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (!activeMenuId) return;
-      const ref = menuRefs.current[activeMenuId];
-      if (ref && !ref.contains(e.target as Node)) setActiveMenuId(null);
+    if (!ctxMenu) return;
+    const handleOutside = (e: MouseEvent) => {
+      const targetNode = e.target as Node;
+      if (portalMenuRef.current?.contains(targetNode)) return;
+      const triggerRef = menuRefs.current[ctxMenu.id];
+      if (triggerRef?.contains(targetNode)) return;
+      setCtxMenu(null);
     };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [activeMenuId]);
+    const handleClose = (e: Event) => {
+      if (e.type === 'scroll' && e.target instanceof Node && portalMenuRef.current?.contains(e.target)) {
+        return;
+      }
+      setCtxMenu(null);
+    };
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setCtxMenu(null);
+    };
+    document.addEventListener('mousedown', handleOutside);
+    window.addEventListener('scroll', handleClose, true);
+    window.addEventListener('resize', handleClose);
+    window.addEventListener('keydown', handleEsc);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      window.removeEventListener('scroll', handleClose, true);
+      window.removeEventListener('resize', handleClose);
+      window.removeEventListener('keydown', handleEsc);
+    };
+  }, [ctxMenu]);
 
   // ذخیره نام جدید پس از تغییر نام
   const handleSaveRename = () => {
@@ -1156,6 +1138,41 @@ export const Playlists = ({
   // پلی‌لیست هدف برای مودال افزودن آهنگ
   const addSongTarget = playlists.find((p) => p.id === addSongTargetId);
   const isRTL = language === 'fa';
+
+  const openPlaylistMenu = (
+    id: string,
+    target: PlaylistContextTarget,
+    triggerRect: Pick<DOMRect, 'left' | 'right' | 'top' | 'bottom'> | null,
+    pointer?: { x: number; y: number }
+  ) => {
+    const itemCount =
+      target.kind === 'user'
+        ? 4 + (target.playlist.songs.length > 0 ? 3 : 0)
+        : 1 + (target.songs.length > 0 ? 3 : 0);
+    const menuWidth = 200;
+    const menuHeight = itemCount * 38 + 16;
+    const position = pointer
+      ? clampContextMenuPosition({
+          clientX: pointer.x,
+          clientY: pointer.y,
+          menuWidth,
+          menuHeight,
+          viewportWidth: window.innerWidth,
+          viewportHeight: window.innerHeight,
+          bottomReserve: 112,
+          isRTL,
+        })
+      : computeAnchorMenuPosition({
+          rect: triggerRect!,
+          menuWidth,
+          menuHeight,
+          viewportWidth: window.innerWidth,
+          viewportHeight: window.innerHeight,
+          isRTL,
+          bottomReserve: 112,
+        });
+    setCtxMenu({ id, target, position });
+  };
 
   const smartConfig = activeSmartList
     ? {
@@ -1310,14 +1327,13 @@ export const Playlists = ({
             style={{
               flex: 1,
               width: '100%',
-              padding: 'clamp(10px, 1.8vw, 18px) clamp(14px, 3.5vw, 36px)',
-              paddingBottom: 150,
-              overflowY: 'auto',
-              overflowX: 'hidden',
+              padding: 'clamp(12px, 2vw, 20px) clamp(16px, 3.2vw, 36px) 116px',
+              overflowX: 'clip',
               boxSizing: 'border-box',
               direction: isRTL ? 'rtl' : 'ltr',
             }}
           >
+            <div style={{ maxWidth: '1400px', margin: '0 auto', width: '100%' }}>
       {/* بخش ۱: پلی‌لیست‌های هوشمند */}
       <div style={{ marginBottom: 24 }}>
         <h2
@@ -1350,6 +1366,21 @@ export const Playlists = ({
             onQuickPlay={() =>
               recentlyAdded.length > 0 && onPlaySongFromList(recentlyAdded[0], recentlyAdded)
             }
+            onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              openPlaylistMenu(
+                'smart:recentlyAdded',
+                {
+                  kind: 'smart',
+                  key: 'recentlyAdded',
+                  title: t.recentlyAdded || 'اخیراً اضافه شده',
+                  songs: recentlyAdded,
+                },
+                null,
+                { x: e.clientX, y: e.clientY }
+              );
+            }}
             theme={theme}
             t={t}
             language={language}
@@ -1366,6 +1397,21 @@ export const Playlists = ({
             onQuickPlay={() =>
               mostPlayed.length > 0 && onPlaySongFromList(mostPlayed[0], mostPlayed)
             }
+            onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              openPlaylistMenu(
+                'smart:mostPlayed',
+                {
+                  kind: 'smart',
+                  key: 'mostPlayed',
+                  title: t.mostPlayed || 'پرتکرارترین‌ها',
+                  songs: mostPlayed,
+                },
+                null,
+                { x: e.clientX, y: e.clientY }
+              );
+            }}
             theme={theme}
             t={t}
             language={language}
@@ -1383,6 +1429,21 @@ export const Playlists = ({
               recentlyPlayed.length > 0 &&
               onPlaySongFromList(recentlyPlayed[0], recentlyPlayed)
             }
+            onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              openPlaylistMenu(
+                'smart:recentlyPlayed',
+                {
+                  kind: 'smart',
+                  key: 'recentlyPlayed',
+                  title: t.recentlyPlayed || 'اخیراً پخش شده',
+                  songs: recentlyPlayed,
+                },
+                null,
+                { x: e.clientX, y: e.clientY }
+              );
+            }}
             theme={theme}
             t={t}
             language={language}
@@ -1400,6 +1461,21 @@ export const Playlists = ({
               favouriteSongs.length > 0 &&
               onPlaySongFromList(favouriteSongs[0], favouriteSongs)
             }
+            onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              openPlaylistMenu(
+                'smart:favorites',
+                {
+                  kind: 'smart',
+                  key: 'favorites',
+                  title: t.favouriteSongs || 'آهنگ‌های محبوب',
+                  songs: favouriteSongs,
+                },
+                null,
+                { x: e.clientX, y: e.clientY }
+              );
+            }}
             theme={theme}
             t={t}
             language={language}
@@ -1489,7 +1565,7 @@ export const Playlists = ({
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 160px), 1fr))',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(clamp(155px, 18vw, 200px), 1fr))',
             gap: 16,
           }}
         >
@@ -1501,22 +1577,23 @@ export const Playlists = ({
               menuOpen={activeMenuId === playlist.id}
               onToggleMenu={(e) => {
                 e.stopPropagation();
-                setActiveMenuId(activeMenuId === playlist.id ? null : playlist.id);
+                if (activeMenuId === playlist.id) {
+                  setCtxMenu(null);
+                  return;
+                }
+                openPlaylistMenu(
+                  playlist.id,
+                  { kind: 'user', playlist },
+                  e.currentTarget.getBoundingClientRect()
+                );
               }}
-              onRename={() => {
-                setRenameTargetId(playlist.id);
-                setRenameValue(playlist.name);
-                setRenameOpen(true);
-                setActiveMenuId(null);
-              }}
-              onAddSong={() => {
-                setAddSongTargetId(playlist.id);
-                setAddSongOpen(true);
-                setActiveMenuId(null);
-              }}
-              onDelete={() => {
-                setDeleteTargetId(playlist.id);
-                setActiveMenuId(null);
+              onContextMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                openPlaylistMenu(playlist.id, { kind: 'user', playlist }, null, {
+                  x: e.clientX,
+                  y: e.clientY,
+                });
               }}
               theme={theme}
               t={t}
@@ -1534,22 +1611,23 @@ export const Playlists = ({
               menuOpen={activeMenuId === playlist.id}
               onToggleMenu={(e) => {
                 e.stopPropagation();
-                setActiveMenuId(activeMenuId === playlist.id ? null : playlist.id);
+                if (activeMenuId === playlist.id) {
+                  setCtxMenu(null);
+                  return;
+                }
+                openPlaylistMenu(
+                  playlist.id,
+                  { kind: 'user', playlist },
+                  e.currentTarget.getBoundingClientRect()
+                );
               }}
-              onRename={() => {
-                setRenameTargetId(playlist.id);
-                setRenameValue(playlist.name);
-                setRenameOpen(true);
-                setActiveMenuId(null);
-              }}
-              onAddSong={() => {
-                setAddSongTargetId(playlist.id);
-                setAddSongOpen(true);
-                setActiveMenuId(null);
-              }}
-              onDelete={() => {
-                setDeleteTargetId(playlist.id);
-                setActiveMenuId(null);
+              onContextMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                openPlaylistMenu(playlist.id, { kind: 'user', playlist }, null, {
+                  x: e.clientX,
+                  y: e.clientY,
+                });
               }}
               theme={theme}
               t={t}
@@ -1558,9 +1636,149 @@ export const Playlists = ({
           ))}
         </div>
       )}
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* منوی شناور راست‌کلیک / سه‌نقطه پلی‌لیست‌ها */}
+      {typeof document !== 'undefined' &&
+        createPortal(
+          <AnimatePresence>
+            {ctxMenu && (
+              <motion.div
+                key={`pl-ctx-${ctxMenu.id}`}
+                ref={portalMenuRef}
+                initial={{ opacity: 0, scale: 0.96 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.97 }}
+                transition={{ duration: 0.13, ease: [0.22, 1, 0.36, 1] }}
+                onClick={(e) => e.stopPropagation()}
+                onContextMenu={(e) => e.preventDefault()}
+                style={{
+                  position: 'fixed',
+                  left: ctxMenu.position.left,
+                  top: ctxMenu.position.top,
+                  transformOrigin: `${ctxMenu.position.originY} ${ctxMenu.position.originX}`,
+                  willChange: 'transform, opacity',
+                  padding: '5px',
+                  backgroundColor:
+                    theme.colors.surfaceSolid || (theme.isDark ? '#18181c' : '#ffffff'),
+                  borderRadius: theme.radius.md,
+                  border: `1px solid ${theme.colors.border}`,
+                  boxShadow: '0 16px 36px rgba(0, 0, 0, 0.42)',
+                  zIndex: 99999,
+                  minWidth: 196,
+                  maxWidth: 'calc(100vw - 24px)',
+                  direction: isRTL ? 'rtl' : 'ltr',
+                  fontFamily: theme.fonts?.main,
+                }}
+              >
+                <MenuItem
+                  icon={<FolderOpen size={15} />}
+                  label={t.open || (isRTL ? 'باز کردن' : 'Open')}
+                  onClick={() => {
+                    if (ctxMenu.target.kind === 'user') {
+                      setActiveSmartList(null);
+                      setActivePlaylistId(ctxMenu.target.playlist.id);
+                    } else {
+                      setActivePlaylistId(null);
+                      setActiveSmartList(ctxMenu.target.key);
+                    }
+                    setCtxMenu(null);
+                  }}
+                  theme={theme}
+                />
+                {(() => {
+                  const targetSongs =
+                    ctxMenu.target.kind === 'user'
+                      ? ctxMenu.target.playlist.songs
+                      : ctxMenu.target.songs;
+                  if (targetSongs.length === 0) return null;
+                  return (
+                    <>
+                      <MenuItem
+                        icon={<Play size={15} />}
+                        label={t.playAll || 'پخش همه'}
+                        onClick={() => {
+                          onPlaySongFromList(targetSongs[0], targetSongs);
+                          setCtxMenu(null);
+                        }}
+                        theme={theme}
+                      />
+                      {onPlayNext && (
+                        <MenuItem
+                          icon={<SkipForward size={15} />}
+                          label={t.playNext || 'پخش بعدی'}
+                          onClick={() => {
+                            onPlayNext(targetSongs);
+                            setCtxMenu(null);
+                          }}
+                          theme={theme}
+                        />
+                      )}
+                      <MenuItem
+                        icon={<ListPlus size={15} />}
+                        label={t.addToQueue || 'افزودن به صف'}
+                        onClick={() => {
+                          targetSongs.forEach((s) => addToQueue(s));
+                          setCtxMenu(null);
+                        }}
+                        theme={theme}
+                      />
+                    </>
+                  );
+                })()}
+                {ctxMenu.target.kind === 'user' && (
+                  <>
+                    <div
+                      style={{
+                        height: '1px',
+                        backgroundColor: theme.colors.border,
+                        margin: '4px 6px',
+                      }}
+                    />
+                    <MenuItem
+                      icon={<Edit2 size={15} />}
+                      label={t.renamePlaylist}
+                      onClick={() => {
+                        if (ctxMenu.target.kind !== 'user') return;
+                        setRenameTargetId(ctxMenu.target.playlist.id);
+                        setRenameValue(ctxMenu.target.playlist.name);
+                        setRenameOpen(true);
+                        setCtxMenu(null);
+                      }}
+                      theme={theme}
+                    />
+                    <MenuItem
+                      icon={<Plus size={15} />}
+                      label={t.addSong}
+                      onClick={() => {
+                        if (ctxMenu.target.kind !== 'user') return;
+                        setAddSongTargetId(ctxMenu.target.playlist.id);
+                        setAddSongOpen(true);
+                        setCtxMenu(null);
+                      }}
+                      theme={theme}
+                    />
+                    <MenuItem
+                      icon={<Trash2 size={15} />}
+                      label={t.deletePlaylist}
+                      onClick={() => {
+                        if (ctxMenu.target.kind !== 'user') return;
+                        setDeleteTargetId(ctxMenu.target.playlist.id);
+                        setCtxMenu(null);
+                      }}
+                      color={theme.colors.danger}
+                      theme={theme}
+                    />
+                  </>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>,
+          document.body
+        )}
 
       <NameModal
         open={renameOpen}

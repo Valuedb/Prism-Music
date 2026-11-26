@@ -41,6 +41,8 @@ interface PlayerBarProps {
   queue: Song[];
   currentQueueIndex?: number;
   removeFromQueue: (index: number) => void;
+  removeFromQueueIndices?: (indices: number[]) => void;
+  onPlayNextInQueue?: (index: number) => void;
   playNext: () => boolean;
   playPrev: () => boolean;
   reorderQueue: (fromIndex: number, toIndex: number) => void;
@@ -105,6 +107,8 @@ export const PlayerBar = ({
   queue,
   currentQueueIndex,
   removeFromQueue,
+  removeFromQueueIndices,
+  onPlayNextInQueue,
   playNext,
   playPrev,
   reorderQueue,
@@ -161,6 +165,7 @@ export const PlayerBar = ({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [showQueue, setShowQueue] = useState(false);
+  const [showFsQueue, setShowFsQueue] = useState(false);
   const [volume, setVolume] = usePersistentState<number>(
     STORAGE_KEYS.volume,
     1,
@@ -713,6 +718,13 @@ export const PlayerBar = ({
       if (!audio || !currentSong) return;
       handleSeekRef.current(audio.currentTime + delta);
     },
+    onSeekPercent: (fraction) => {
+      if (!currentSong) return;
+      const live = getLivePlaybackTime();
+      if (live && live.duration > 0) {
+        handleSeekRef.current(live.duration * fraction);
+      }
+    },
     onVolumeBy: (delta) => handleDirectVolumeChange(volume + delta),
     onToggleMute: handleToggleMute,
     onToggleShuffle: () => setIsShuffle(!isShuffle),
@@ -720,9 +732,20 @@ export const PlayerBar = ({
     onToggleFavoriteCurrent: () => {
       if (currentSong) onToggleFavoriteRef.current?.(currentSong.id);
     },
-    onToggleQueue: () => setShowQueue((prev) => !prev),
+    onToggleQueue: () => {
+      if (isNowPlayingOpen) {
+        setShowFsQueue((prev) => !prev);
+      } else {
+        setShowQueue((prev) => !prev);
+      }
+    },
     onToggleFullScreen: () => {
-      if (currentSong) setIsNowPlayingOpen((prev) => !prev);
+      if (currentSong) {
+        setIsNowPlayingOpen((prev) => {
+          if (prev) setShowFsQueue(false);
+          return !prev;
+        });
+      }
     },
     onOpenSearch: () => window.dispatchEvent(new CustomEvent('app:open-search')),
     onOpenSettings: () => onOpenSettings?.(),
@@ -877,17 +900,22 @@ export const PlayerBar = ({
     handlePlayState(false);
   };
 
-  const [isMobile, setIsMobile] = useState(() =>
-    typeof window !== 'undefined' ? window.innerWidth < 768 : false
-  );
+  const [viewport, setViewport] = useState(() => ({
+    width: typeof window !== 'undefined' ? window.innerWidth : 1280,
+    height: typeof window !== 'undefined' ? window.innerHeight : 800,
+  }));
 
   useEffect(() => {
     const handleResize = () => {
-      setIsMobile(window.innerWidth < 768);
+      setViewport({ width: window.innerWidth, height: window.innerHeight });
     };
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  const isMobile = viewport.width < 768;
+  const isCompactDesktop = !isMobile && viewport.width < 960;
+  const isShortWindow = !isMobile && viewport.height < 680;
 
   const volumePercent = effectiveVolume * 100;
 
@@ -915,54 +943,64 @@ export const PlayerBar = ({
   const isDocked = displaySettings.playerBarStyle === 'docked';
 
   return (
-    <div
-      style={{
-        boxSizing: 'border-box',
-        height: isMobile ? '66px' : '92px',
-        width: isDocked ? '100%' : isMobile ? '320px' : '90%',
-        maxWidth: isDocked ? '100%' : isMobile ? 'calc(100% - 24px)' : '1000px',
-        // # سطح شیشه‌ای نوار (پس‌زمینه، لبه، بلور و سایه) از تم می‌آید
-        background: theme.glass.bar.background,
-        backdropFilter: theme.glass.bar.backdropFilter || `blur(${theme.display?.playerBarBlur ?? theme.display?.glassBlur ?? 28}px) saturate(190%)`,
-        WebkitBackdropFilter: theme.glass.bar.backdropFilter || `blur(${theme.display?.playerBarBlur ?? theme.display?.glassBlur ?? 28}px) saturate(190%)`,
-        borderRadius: isDocked ? '0px' : isMobile ? theme.radius.lg || '18px' : theme.radius.xl || '24px',
-        margin: isDocked ? '0' : isMobile ? '0 auto 12px auto' : '0 auto 16px auto',
-        display: isMobile ? 'flex' : 'grid',
-        gridTemplateColumns: isMobile
-          ? undefined
-          : 'minmax(0, 1fr) minmax(280px, min(560px, 48%)) minmax(0, 1fr)',
-        alignItems: 'center',
-        justifyContent: isMobile ? 'space-between' : undefined,
-        padding: isMobile ? '0 10px' : '0 24px',
-        position: 'relative',
-        color: songTitleColor,
-        zIndex: 20,
-        boxShadow: isDocked ? '0 -8px 28px rgba(0,0,0,0.22)' : theme.glass.bar.boxShadow,
-        border: isDocked ? 'none' : theme.glass.bar.border,
-        borderTop: isDocked ? theme.glass.bar.border : theme.glass.bar.border,
-        gap: isMobile ? '8px' : '14px',
-      }}
-    >
-      <style>{BUTTON_CSS}</style>
+      <div
+        style={{
+          boxSizing: 'border-box',
+          height: isMobile ? '66px' : isCompactDesktop || isShortWindow ? '80px' : '92px',
+          width: isDocked ? '100%' : isMobile ? '320px' : '92%',
+          maxWidth: isDocked ? '100%' : isMobile ? 'calc(100% - 24px)' : '1040px',
+          // # سطح شیشه‌ای نوار (پس‌زمینه، لبه، بلور و سایه) از تم می‌آید
+          background: theme.glass.bar.background,
+          backdropFilter: theme.glass.bar.backdropFilter || `blur(${theme.display?.playerBarBlur ?? theme.display?.glassBlur ?? 28}px) saturate(190%)`,
+          WebkitBackdropFilter: theme.glass.bar.backdropFilter || `blur(${theme.display?.playerBarBlur ?? theme.display?.glassBlur ?? 28}px) saturate(190%)`,
+          borderRadius: isDocked ? '0px' : isMobile ? theme.radius.lg || '18px' : theme.radius.xl || '24px',
+          margin: isDocked
+            ? '0'
+            : isMobile
+            ? '0 auto 12px auto'
+            : isShortWindow || isCompactDesktop
+            ? '0 auto 10px auto'
+            : '0 auto 16px auto',
+          display: isMobile ? 'flex' : 'grid',
+          gridTemplateColumns: isMobile
+            ? undefined
+            : isCompactDesktop
+            ? 'minmax(0, 1fr) minmax(240px, min(500px, 46%)) minmax(0, 1fr)'
+            : 'minmax(0, 1fr) minmax(280px, min(560px, 48%)) minmax(0, 1fr)',
+          alignItems: 'center',
+          justifyContent: isMobile ? 'space-between' : undefined,
+          padding: isMobile ? '0 10px' : isCompactDesktop ? '0 16px' : '0 24px',
+          position: 'relative',
+          color: songTitleColor,
+          zIndex: 20,
+          boxShadow: isDocked ? '0 -8px 28px rgba(0,0,0,0.22)' : theme.glass.bar.boxShadow,
+          border: isDocked ? 'none' : theme.glass.bar.border,
+          borderTop: isDocked ? theme.glass.bar.border : theme.glass.bar.border,
+          gap: isMobile ? '8px' : isCompactDesktop ? '10px' : '14px',
+        }}
+      >
+        <style>{BUTTON_CSS}</style>
 
-      {/* # کامپوننت حرفه‌ای صف پخش (دسکتاپ و موبایل) */}
-      <QueueDrawer
-        isOpen={showQueue}
-        onClose={() => setShowQueue(false)}
-        queue={queue}
-        currentSong={currentSong}
-        currentQueueIndex={currentQueueIndex}
-        isPlaying={isPlaying}
-        onPlaySong={(idx: number) => onPlayQueueSong?.(idx)}
-        onRemoveFromQueue={removeFromQueue}
-        onReorderQueue={reorderQueue}
-        onClearQueue={() => onClearQueue?.()}
-        onShuffleQueue={() => onShuffleQueue?.()}
-        onCreatePlaylist={onCreatePlaylist}
-        theme={theme}
-        t={t}
-        isMobile={isMobile}
-      />
+        {/* # کامپوننت حرفه‌ای صف پخش (دسکتاپ و موبایل) */}
+        <QueueDrawer
+          isOpen={showQueue}
+          onClose={() => setShowQueue(false)}
+          queue={queue}
+          currentSong={currentSong}
+          currentQueueIndex={currentQueueIndex}
+          isPlaying={isPlaying}
+          onPlaySong={(idx: number) => onPlayQueueSong?.(idx)}
+          onRemoveFromQueue={removeFromQueue}
+          onRemoveSelectedFromQueue={removeFromQueueIndices}
+          onPlayNextInQueue={onPlayNextInQueue}
+          onReorderQueue={reorderQueue}
+          onClearQueue={() => onClearQueue?.()}
+          onShuffleQueue={() => onShuffleQueue?.()}
+          onCreatePlaylist={onCreatePlaylist}
+          theme={theme}
+          t={t}
+          isMobile={isMobile}
+        />
 
       {/* # اطلاعات آهنگ (کلیک برای باز کردن تمام صفحه) */}
       <div
@@ -1073,7 +1111,13 @@ export const PlayerBar = ({
         )}
 
         {/* دکمه‌های کنترل */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '2px' : '24px' }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: isMobile ? '2px' : isCompactDesktop ? '14px' : '24px',
+          }}
+        >
           {!isMobile && (
             <button
               className="pb-btn"
@@ -1081,8 +1125,8 @@ export const PlayerBar = ({
               title={`${isShuffle ? (t.shuffleOn || 'Shuffle On') : (t.shuffleOff || 'Shuffle Off')} (S)`}
               style={{
                 ...btnStyle,
-                width: '36px',
-                height: '36px',
+                width: isCompactDesktop ? '32px' : '36px',
+                height: isCompactDesktop ? '32px' : '36px',
                 position: 'relative',
                 color: isShuffle ? iconActiveColor : iconInactiveColor,
               }}
@@ -1119,12 +1163,12 @@ export const PlayerBar = ({
             title={t.previous || 'Previous'}
             style={{
               ...btnStyle,
-              width: isMobile ? '26px' : '42px',
-              height: isMobile ? '26px' : '42px',
+              width: isMobile ? '26px' : isCompactDesktop ? '36px' : '42px',
+              height: isMobile ? '26px' : isCompactDesktop ? '36px' : '42px',
               color: iconColor,
             }}
           >
-            <svg width={isMobile ? '17' : '27'} height={isMobile ? '17' : '27'} viewBox="0 0 16 16" fill="currentColor">
+            <svg width={isMobile ? '17' : isCompactDesktop ? '22' : '27'} height={isMobile ? '17' : isCompactDesktop ? '22' : '27'} viewBox="0 0 16 16" fill="currentColor">
               <path d="M8.404 7.304a.802.802 0 0 0 0 1.392l6.363 3.692c.52.302 1.233-.043 1.233-.696V4.308c0-.653-.713-.998-1.233-.696z" />
               <path d="M.404 7.304a.802.802 0 0 0 0 1.392l6.363 3.692c.52.302 1.233-.043 1.233-.696V4.308c0-.653-.713-.998-1.233-.696z" />
             </svg>
@@ -1139,20 +1183,20 @@ export const PlayerBar = ({
             title={isPlaying ? t.pause || 'Pause' : t.play || 'Play'}
             style={{
               ...btnStyle,
-              width: isMobile ? '32px' : '48px',
-              height: isMobile ? '32px' : '48px',
+              width: isMobile ? '32px' : isCompactDesktop ? '42px' : '48px',
+              height: isMobile ? '32px' : isCompactDesktop ? '42px' : '48px',
               color: iconColor,
               flexShrink: 0,
             }}
           >
             {isPlaying ? (
-              <svg width={isMobile ? '22' : '38'} height={isMobile ? '22' : '38'} viewBox="0 0 16 16" fill="currentColor">
+              <svg width={isMobile ? '22' : isCompactDesktop ? '32' : '38'} height={isMobile ? '22' : isCompactDesktop ? '32' : '38'} viewBox="0 0 16 16" fill="currentColor">
                 <path d="M5.5 3.5A1.5 1.5 0 0 1 7 5v6a1.5 1.5 0 0 1-3 0V5a1.5 1.5 0 0 1 1.5-1.5m5 0A1.5 1.5 0 0 1 12 5v6a1.5 1.5 0 0 1-3 0V5a1.5 1.5 0 0 1 1.5-1.5" />
               </svg>
             ) : (
               <svg
-                width={isMobile ? '22' : '38'}
-                height={isMobile ? '22' : '38'}
+                width={isMobile ? '22' : isCompactDesktop ? '32' : '38'}
+                height={isMobile ? '22' : isCompactDesktop ? '32' : '38'}
                 viewBox="0 0 16 16"
                 fill="currentColor"
                 style={{ transform: 'translateX(1.5px)' }}
@@ -1171,12 +1215,12 @@ export const PlayerBar = ({
             title={t.next || 'Next'}
             style={{
               ...btnStyle,
-              width: isMobile ? '26px' : '42px',
-              height: isMobile ? '26px' : '42px',
+              width: isMobile ? '26px' : isCompactDesktop ? '36px' : '42px',
+              height: isMobile ? '26px' : isCompactDesktop ? '36px' : '42px',
               color: iconColor,
             }}
           >
-            <svg width={isMobile ? '17' : '27'} height={isMobile ? '17' : '27'} viewBox="0 0 16 16" fill="currentColor">
+            <svg width={isMobile ? '17' : isCompactDesktop ? '22' : '27'} height={isMobile ? '17' : isCompactDesktop ? '22' : '27'} viewBox="0 0 16 16" fill="currentColor">
               <path d="M7.596 7.304a.802.802 0 0 1 0 1.392l-6.363 3.692C.713 12.69 0 12.345 0 11.692V4.308c0-.653.713-.998 1.233-.696z" />
               <path d="M15.596 7.304a.802.802 0 0 1 0 1.392l-6.363 3.692C8.713 12.69 8 12.345 8 11.692V4.308c0-.653.713-.998 1.233-.696z" />
             </svg>
@@ -1195,8 +1239,8 @@ export const PlayerBar = ({
               } (R)`}
               style={{
                 ...btnStyle,
-                width: '36px',
-                height: '36px',
+                width: isCompactDesktop ? '32px' : '36px',
+                height: isCompactDesktop ? '32px' : '36px',
                 position: 'relative',
                 color: repeatMode !== 'off' ? iconActiveColor : iconInactiveColor,
               }}
@@ -1410,9 +1454,10 @@ export const PlayerBar = ({
             className="pb-btn"
             data-queue-toggle="true"
             onClick={() => setShowQueue(!showQueue)}
+            title={`${t.queue || 'Play Queue'} (Q)`}
             style={{
               ...btnStyle,
-              padding: '6px 8px',
+              padding: isCompactDesktop ? '6px' : '6px 8px',
               borderRadius: '10px',
               color: showQueue ? iconActiveColor : iconInactiveColor,
               backgroundColor: 'transparent',
@@ -1424,7 +1469,9 @@ export const PlayerBar = ({
             <svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor">
               <path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z" />
             </svg>
-            <span style={{ fontSize: '0.8125rem', fontWeight: '600' }}>{t.queue}</span>
+            {!isCompactDesktop && (
+              <span style={{ fontSize: '0.8125rem', fontWeight: '600' }}>{t.queue}</span>
+            )}
           </button>
         </div>
       )}
@@ -1487,7 +1534,10 @@ export const PlayerBar = ({
 
       <FullScreenPlayer
         isOpen={isNowPlayingOpen}
-        onClose={() => setIsNowPlayingOpen(false)}
+        onClose={() => {
+          setIsNowPlayingOpen(false);
+          setShowFsQueue(false);
+        }}
         currentSong={currentSong}
         isPlaying={isPlaying}
         onTogglePlay={togglePlay}
@@ -1507,6 +1557,11 @@ export const PlayerBar = ({
         queue={queue}
         currentQueueIndex={currentQueueIndex}
         removeFromQueue={removeFromQueue}
+        removeFromQueueIndices={removeFromQueueIndices}
+        onPlayNextInQueue={onPlayNextInQueue}
+        isQueueOpen={showFsQueue}
+        onToggleQueue={() => setShowFsQueue((prev) => !prev)}
+        onCloseQueue={() => setShowFsQueue(false)}
         reorderQueue={reorderQueue}
         onPlayQueueSong={onPlayQueueSong}
         onClearQueue={onClearQueue}

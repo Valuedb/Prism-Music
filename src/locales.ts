@@ -96,6 +96,8 @@ export const translations = {
     create: "ساخت",
     save: "ذخیره",
     addToQueue: "افزودن به صف",
+    deleteSelected: "حذف انتخاب‌شده‌ها",
+    open: "باز کردن",
     deleteSong: "حذف آهنگ",
     deleteConfirm: "آیا از حذف این آهنگ مطمئنی؟",
     
@@ -483,6 +485,7 @@ export const translations = {
     shortcutPrevNext: "آهنگ قبلی / بعدی",
     shortcutSeek: "جلو / عقب رفتن",
     shortcutSeekFast: "پرش سریع ۳ برابری",
+    shortcutSeekPercent: "پرش به درصد آهنگ (۰ تا ۹)",
     shortcutVolume: "افزایش / کاهش صدا",
     shortcutMute: "قطع / وصل صدا",
     shortcutShuffle: "روشن / خاموش کردن شافل",
@@ -616,6 +619,8 @@ export const translations = {
     save: "Save",
     create: "Create",
     addToQueue: "Add to Queue",
+    deleteSelected: "Delete Selected",
+    open: "Open",
     deleteSong: "Delete Song",
     deleteConfirm: "Are you sure you want to delete this song?",
     
@@ -1004,6 +1009,7 @@ export const translations = {
     shortcutPrevNext: "Previous / Next Track",
     shortcutSeek: "Seek Forward / Back",
     shortcutSeekFast: "Fast Seek (3x step)",
+    shortcutSeekPercent: "Jump to Song % (0%–90%)",
     shortcutVolume: "Volume Up / Down",
     shortcutMute: "Mute / Unmute",
     shortcutShuffle: "Toggle Shuffle",

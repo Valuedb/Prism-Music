@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Disc,
@@ -8,12 +9,22 @@ import {
   ArrowUpDown,
   Search,
   X,
+  MoreHorizontal,
+  FolderOpen,
+  SkipForward,
+  ListPlus,
 } from 'lucide-react';
 import type { Song, Playlist } from '../types';
 import { AllSongs } from './AllSongs';
 import { CoverImage } from '../components/CoverImage';
+import { MiniEqualizer } from '../components/MiniEqualizer';
 import { getBidiTruncateStyle } from '../utils/bidi';
 import { mixHex, withAlpha } from '../utils/color';
+import {
+  clampContextMenuPosition,
+  computeAnchorMenuPosition,
+  type ContextMenuPosition,
+} from '../utils/contextMenu';
 
 interface AlbumsProps {
   songs: Song[];
@@ -62,49 +73,6 @@ const formatTotalDuration = (seconds: number): string => {
   return `${mins}:${String(secs).padStart(2, '0')}`;
 };
 
-const MiniEqualizer: React.FC<{ active: boolean }> = ({ active }) => (
-  <span
-    aria-hidden="true"
-    style={{
-      display: 'inline-flex',
-      alignItems: 'flex-end',
-      gap: '2px',
-      height: '13px',
-    }}
-  >
-    <span
-      className={active ? 'mini-eq-1' : undefined}
-      style={{
-        width: '2.5px',
-        height: active ? '10px' : '5px',
-        borderRadius: '2px',
-        backgroundColor: '#ffffff',
-        display: 'block',
-      }}
-    />
-    <span
-      className={active ? 'mini-eq-2' : undefined}
-      style={{
-        width: '2.5px',
-        height: active ? '13px' : '9px',
-        borderRadius: '2px',
-        backgroundColor: '#ffffff',
-        display: 'block',
-      }}
-    />
-    <span
-      className={active ? 'mini-eq-3' : undefined}
-      style={{
-        width: '2.5px',
-        height: active ? '8px' : '6px',
-        borderRadius: '2px',
-        backgroundColor: '#ffffff',
-        display: 'block',
-      }}
-    />
-  </span>
-);
-
 export const Albums: React.FC<AlbumsProps> = ({
   songs,
   playlists,
@@ -134,15 +102,88 @@ export const Albums: React.FC<AlbumsProps> = ({
   const [filterQuery, setFilterQuery] = useState('');
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [focusedPlayId, setFocusedPlayId] = useState<string | null>(null);
+  const [ctxMenu, setCtxMenu] = useState<{
+    album: AlbumGroup;
+    position: ContextMenuPosition;
+  } | null>(null);
+  const portalMenuRef = useRef<HTMLDivElement | null>(null);
+  const menuTriggerRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const initialKey = initialAlbum?.key ?? null;
+  const initialToken = initialAlbum?.token ?? null;
 
   useEffect(() => {
-    if (initialAlbum) {
-      setSelectedAlbumKey(initialAlbum.key);
+    if (initialKey !== null && initialToken !== null) {
+      setSelectedAlbumKey(initialKey);
     }
-  }, [initialAlbum]);
+  }, [initialKey, initialToken]);
 
   const singlesLabel = t.singlesAlbum || 'تک‌آهنگ‌ها';
   const isRTL = language === 'fa';
+
+  const openAlbumMenu = useCallback(
+    (album: AlbumGroup, rect: DOMRect | null, coords?: { x: number; y: number }) => {
+      const vw = typeof window !== 'undefined' ? window.innerWidth : 1280;
+      const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+      const menuWidth = 200;
+      const itemCount = 1 + (album.songs.length > 0 ? 2 + (onPlayNext ? 1 : 0) : 0);
+      const menuHeight = itemCount * 38 + 14;
+      const position = coords
+        ? clampContextMenuPosition({
+            clientX: coords.x,
+            clientY: coords.y,
+            menuWidth,
+            menuHeight,
+            viewportWidth: vw,
+            viewportHeight: vh,
+            isRTL,
+          })
+        : rect
+        ? computeAnchorMenuPosition({
+            rect,
+            menuWidth,
+            menuHeight,
+            viewportWidth: vw,
+            viewportHeight: vh,
+            isRTL,
+          })
+        : clampContextMenuPosition({
+            clientX: vw / 2,
+            clientY: vh / 2,
+            menuWidth,
+            menuHeight,
+            viewportWidth: vw,
+            viewportHeight: vh,
+            isRTL,
+          });
+      setCtxMenu({ album, position });
+    },
+    [isRTL, onPlayNext]
+  );
+
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const handleOutside = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (portalMenuRef.current?.contains(target)) return;
+      const triggerEl = menuTriggerRefs.current[ctxMenu.album.key];
+      if (triggerEl?.contains(target)) return;
+      setCtxMenu(null);
+    };
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setCtxMenu(null);
+    };
+    const closeOnViewport = () => setCtxMenu(null);
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('keydown', handleEscape);
+    window.addEventListener('scroll', closeOnViewport, true);
+    window.addEventListener('resize', closeOnViewport);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('keydown', handleEscape);
+      window.removeEventListener('scroll', closeOnViewport, true);
+      window.removeEventListener('resize', closeOnViewport);
+    };
+  }, [ctxMenu]);
 
   const groups = useMemo<AlbumGroup[]>(() => {
     const map = new Map<string, Song[]>();
@@ -288,11 +329,12 @@ export const Albums: React.FC<AlbumsProps> = ({
             style={{
               flex: 1,
               width: '100%',
-              padding: 'clamp(12px, 2vw, 24px) clamp(16px, 4vw, 40px) 136px',
+              padding: 'clamp(12px, 2vw, 24px) clamp(16px, 3.2vw, 36px) 116px',
               direction: isRTL ? 'rtl' : 'ltr',
               boxSizing: 'border-box',
             }}
           >
+            <div style={{ maxWidth: '1400px', margin: '0 auto', width: '100%' }}>
             {/* هدر صفحه آلبوم‌ها */}
             <div
               style={{
@@ -568,13 +610,23 @@ export const Albums: React.FC<AlbumsProps> = ({
               >
                 {filteredGroups.map((album) => {
                   const isHovered = hoveredId === album.key;
-                  const isActiveAlbum = currentAlbumKey === album.key;
+                  const isActiveAlbum = Boolean(
+                    currentSong &&
+                      (album.songs.some((s) => s.id === currentSong.id) ||
+                        currentAlbumKey === album.key)
+                  );
                   const showPlay = isHovered || focusedPlayId === album.key;
+                  const isMenuOpen = ctxMenu?.album.key === album.key;
 
                   return (
                     <div
                       key={album.key}
                       onClick={() => setSelectedAlbumKey(album.key)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        openAlbumMenu(album, null, { x: e.clientX, y: e.clientY });
+                      }}
                       onMouseEnter={() => setHoveredId(album.key)}
                       onMouseLeave={() => setHoveredId(null)}
                       style={{
@@ -686,6 +738,7 @@ export const Albums: React.FC<AlbumsProps> = ({
                             width: '100%',
                             height: '100%',
                             objectFit: 'cover',
+                            display: 'block',
                           }}
                         />
 
@@ -695,21 +748,64 @@ export const Albums: React.FC<AlbumsProps> = ({
                               position: 'absolute',
                               bottom: '10px',
                               insetInlineStart: '10px',
-                              width: '32px',
-                              height: '32px',
+                              width: '34px',
+                              height: '34px',
                               borderRadius: '50%',
-                              backgroundColor: 'rgba(0, 0, 0, 0.62)',
+                              backgroundColor: 'rgba(0, 0, 0, 0.68)',
+                              border: '1px solid rgba(255, 255, 255, 0.22)',
                               backdropFilter: 'blur(8px)',
                               WebkitBackdropFilter: 'blur(8px)',
                               display: 'flex',
                               alignItems: 'center',
                               justifyContent: 'center',
                               pointerEvents: 'none',
+                              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.35)',
                             }}
                           >
-                            <MiniEqualizer active={isPlaying} />
+                            <MiniEqualizer active={isPlaying} color="#ffffff" size="sm" />
                           </div>
                         )}
+
+                        <button
+                          ref={(el) => {
+                            menuTriggerRefs.current[album.key] = el;
+                          }}
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (isMenuOpen) setCtxMenu(null);
+                            else openAlbumMenu(album, e.currentTarget.getBoundingClientRect());
+                          }}
+                          onFocus={() => setFocusedPlayId(album.key)}
+                          onBlur={() => setFocusedPlayId(null)}
+                          aria-label={t.moreActions || 'Actions'}
+                          title={t.moreActions || 'Actions'}
+                          style={{
+                            position: 'absolute',
+                            top: '10px',
+                            insetInlineEnd: '10px',
+                            width: '30px',
+                            height: '30px',
+                            borderRadius: '50%',
+                            border: '1px solid rgba(255, 255, 255, 0.22)',
+                            backgroundColor: isMenuOpen
+                              ? theme.colors.primary
+                              : 'rgba(0, 0, 0, 0.56)',
+                            backdropFilter: 'blur(8px)',
+                            WebkitBackdropFilter: 'blur(8px)',
+                            color: '#ffffff',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            cursor: 'pointer',
+                            opacity: showPlay || isMenuOpen ? 1 : 0,
+                            pointerEvents: showPlay || isMenuOpen ? 'auto' : 'none',
+                            transition: 'opacity 0.16s ease, background-color 0.16s ease',
+                            zIndex: 2,
+                          }}
+                        >
+                          <MoreHorizontal size={15} />
+                        </button>
 
                         <button
                           type="button"
@@ -736,6 +832,7 @@ export const Albums: React.FC<AlbumsProps> = ({
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'center',
+                            paddingLeft: '2px',
                             cursor: 'pointer',
                             opacity: showPlay ? 1 : 0,
                             pointerEvents: showPlay ? 'auto' : 'none',
@@ -818,13 +915,23 @@ export const Albums: React.FC<AlbumsProps> = ({
               <div style={{ display: 'flex', flexDirection: 'column', gap: listGap }}>
                 {filteredGroups.map((album) => {
                   const isHovered = hoveredId === album.key;
-                  const isActiveAlbum = currentAlbumKey === album.key;
+                  const isActiveAlbum = Boolean(
+                    currentSong &&
+                      (album.songs.some((s) => s.id === currentSong.id) ||
+                        currentAlbumKey === album.key)
+                  );
                   const totalDur = formatTotalDuration(album.totalDuration);
+                  const isMenuOpen = ctxMenu?.album.key === album.key;
 
                   return (
                     <div
                       key={album.key}
                       onClick={() => setSelectedAlbumKey(album.key)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        openAlbumMenu(album, null, { x: e.clientX, y: e.clientY });
+                      }}
                       onMouseEnter={() => setHoveredId(album.key)}
                       onMouseLeave={() => setHoveredId(null)}
                       style={{
@@ -922,6 +1029,7 @@ export const Albums: React.FC<AlbumsProps> = ({
                             width: '100%',
                             height: '100%',
                             objectFit: 'cover',
+                            display: 'block',
                           }}
                         />
                         {isActiveAlbum && (
@@ -929,14 +1037,14 @@ export const Albums: React.FC<AlbumsProps> = ({
                             style={{
                               position: 'absolute',
                               inset: 0,
-                              backgroundColor: 'rgba(0, 0, 0, 0.45)',
+                              backgroundColor: 'rgba(0, 0, 0, 0.48)',
                               display: 'flex',
                               alignItems: 'center',
                               justifyContent: 'center',
                               pointerEvents: 'none',
                             }}
                           >
-                            <MiniEqualizer active={isPlaying} />
+                            <MiniEqualizer active={isPlaying} color="#ffffff" size="sm" />
                           </div>
                         )}
                       </div>
@@ -1043,14 +1151,222 @@ export const Albums: React.FC<AlbumsProps> = ({
                       >
                         <Play size={15} fill="currentColor" />
                       </button>
+
+                      <button
+                        ref={(el) => {
+                          menuTriggerRefs.current[album.key] = el;
+                        }}
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (isMenuOpen) setCtxMenu(null);
+                          else openAlbumMenu(album, e.currentTarget.getBoundingClientRect());
+                        }}
+                        aria-label={t.moreActions || 'Actions'}
+                        title={t.moreActions || 'Actions'}
+                        style={{
+                          position: 'relative',
+                          zIndex: 1,
+                          width: '32px',
+                          height: '32px',
+                          borderRadius: '50%',
+                          border: 'none',
+                          backgroundColor: isMenuOpen
+                            ? withAlpha(theme.colors.primary, 0.16)
+                            : 'transparent',
+                          color: isMenuOpen ? theme.colors.primary : theme.colors.textSecondary,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          cursor: 'pointer',
+                          flexShrink: 0,
+                          transition: 'background-color 0.16s ease, color 0.16s ease',
+                        }}
+                      >
+                        <MoreHorizontal size={17} />
+                      </button>
                     </div>
                   );
                 })}
               </div>
             )}
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* منوی شناور راست‌کلیک / سه‌نقطه آلبوم‌ها */}
+      {typeof document !== 'undefined' &&
+        createPortal(
+          <AnimatePresence>
+            {ctxMenu && (
+              <motion.div
+                key={`album-ctx-${ctxMenu.album.key}`}
+                ref={portalMenuRef}
+                initial={{ opacity: 0, scale: 0.96 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.97 }}
+                transition={{ duration: 0.13, ease: [0.22, 1, 0.36, 1] }}
+                onClick={(e) => e.stopPropagation()}
+                onContextMenu={(e) => e.preventDefault()}
+                style={{
+                  position: 'fixed',
+                  left: ctxMenu.position.left,
+                  top: ctxMenu.position.top,
+                  transformOrigin: `${ctxMenu.position.originY} ${ctxMenu.position.originX}`,
+                  willChange: 'transform, opacity',
+                  padding: '5px',
+                  backgroundColor:
+                    theme.colors.surfaceSolid || (theme.isDark ? '#18181c' : '#ffffff'),
+                  borderRadius: theme.radius.md,
+                  border: `1px solid ${theme.colors.border}`,
+                  boxShadow: '0 16px 36px rgba(0, 0, 0, 0.42)',
+                  zIndex: 99999,
+                  minWidth: 192,
+                  maxWidth: 'calc(100vw - 24px)',
+                  direction: isRTL ? 'rtl' : 'ltr',
+                  fontFamily: theme.fonts?.main,
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedAlbumKey(ctxMenu.album.key);
+                    setCtxMenu(null);
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = theme.isDark
+                      ? 'rgba(255, 255, 255, 0.12)'
+                      : 'rgba(0, 0, 0, 0.07)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = 'transparent';
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '9px 12px',
+                    borderRadius: '8px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    color: theme.colors.textPrimary,
+                    fontSize: '0.8438rem',
+                    fontWeight: 500,
+                    textAlign: 'start',
+                  }}
+                >
+                  <FolderOpen size={15} /> <span>{t.open || (isRTL ? 'باز کردن' : 'Open')}</span>
+                </button>
+                {ctxMenu.album.songs.length > 0 && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onPlaySongFromList(ctxMenu.album.songs[0], ctxMenu.album.songs);
+                        setCtxMenu(null);
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = theme.isDark
+                          ? 'rgba(255, 255, 255, 0.12)'
+                          : 'rgba(0, 0, 0, 0.07)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '9px 12px',
+                        borderRadius: '8px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 10,
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        color: theme.colors.textPrimary,
+                        fontSize: '0.8438rem',
+                        fontWeight: 500,
+                        textAlign: 'start',
+                      }}
+                    >
+                      <Play size={15} /> <span>{t.playAll || 'پخش همه'}</span>
+                    </button>
+                    {onPlayNext && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onPlayNext(ctxMenu.album.songs);
+                          setCtxMenu(null);
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = theme.isDark
+                            ? 'rgba(255, 255, 255, 0.12)'
+                            : 'rgba(0, 0, 0, 0.07)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = 'transparent';
+                        }}
+                        style={{
+                          width: '100%',
+                          padding: '9px 12px',
+                          borderRadius: '8px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 10,
+                          background: 'none',
+                          border: 'none',
+                          cursor: 'pointer',
+                          color: theme.colors.textPrimary,
+                          fontSize: '0.8438rem',
+                          fontWeight: 500,
+                          textAlign: 'start',
+                        }}
+                      >
+                        <SkipForward size={15} /> <span>{t.playNext || 'پخش بعدی'}</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        ctxMenu.album.songs.forEach((s) => addToQueue(s));
+                        setCtxMenu(null);
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = theme.isDark
+                          ? 'rgba(255, 255, 255, 0.12)'
+                          : 'rgba(0, 0, 0, 0.07)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '9px 12px',
+                        borderRadius: '8px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 10,
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        color: theme.colors.textPrimary,
+                        fontSize: '0.8438rem',
+                        fontWeight: 500,
+                        textAlign: 'start',
+                      }}
+                    >
+                      <ListPlus size={15} /> <span>{t.addToQueue || 'افزودن به صف'}</span>
+                    </button>
+                  </>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>,
+          document.body
+        )}
     </div>
   );
 };

@@ -8,6 +8,7 @@ import {
 import { insertPlayNext, moveSongAfterCurrentInQueue } from '../player/queue';
 import type { RepeatMode, Song } from '../types/index';
 import { moveItem } from '../utils/array';
+import { removeIndicesFromQueue } from '../utils/queueDrag';
 import { usePersistentState } from './usePersistentState';
 import { STORAGE_KEYS } from '../storage/keys';
 
@@ -517,6 +518,23 @@ export const usePlayer = (songs: readonly Song[]) => {
     [commitQueue, setCurrentSong]
   );
 
+  /** حذف همزمان چند آهنگ انتخاب‌شده از صف پخش */
+  const removeFromQueueIndices = useCallback(
+    (indices: number[]) => {
+      prepickedNextRef.current = null;
+      const result = removeIndicesFromQueue(
+        queueRef.current,
+        indices,
+        currentIndexRef.current,
+        priorityIndicesRef.current
+      );
+      if (result.queue.length === queueRef.current.length) return;
+      priorityIndicesRef.current = result.priorityIndices;
+      commitQueue(result.queue, result.currentIndex);
+    },
+    [commitQueue]
+  );
+
   return {
     currentSong,
     queue,
@@ -534,6 +552,7 @@ export const usePlayer = (songs: readonly Song[]) => {
     addToQueue,
     playNextSongs,
     removeFromQueueAt,
+    removeFromQueueIndices,
     reorderQueue,
     playQueueSongAt,
     clearQueue,

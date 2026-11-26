@@ -13,6 +13,9 @@ import {
   Trash2,
   Plus,
   Check,
+  FolderOpen,
+  SkipForward,
+  ListPlus,
 } from 'lucide-react';
 import type { LinkedFolder, Song, Playlist } from '../types';
 import { AllSongs } from './AllSongs';
@@ -21,6 +24,11 @@ import { extractSongsBatched, partitionDuplicateSongs } from '../utils/audioMeta
 import { isDesktopRuntime, syncDesktopFolderResult } from '../utils/desktopBridge';
 import { deleteAudioBlob } from '../storage/mediaStore';
 import { withAlpha } from '../utils/color';
+import {
+  clampContextMenuPosition,
+  computeAnchorMenuPosition,
+  type ContextMenuPosition,
+} from '../utils/contextMenu';
 
 interface FoldersProps {
   songs: Song[];
@@ -158,7 +166,11 @@ export const Folders: React.FC<FoldersProps> = ({
   );
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
   const [hoveredId, setHoveredId] = useState<string | null>(null);
-  const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
+  const [ctxMenu, setCtxMenu] = useState<{
+    folder: FolderEntry;
+    position: ContextMenuPosition;
+  } | null>(null);
+  const activeMenuId = ctxMenu?.folder.id ?? null;
   const [isImporting, setIsImporting] = useState(false);
 
   useEffect(() => {
@@ -181,18 +193,37 @@ export const Folders: React.FC<FoldersProps> = ({
 
   const folderInputRef = useRef<HTMLInputElement>(null);
   const menuRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
+  const portalMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (!activeMenuId) return;
-      const ref = menuRefs.current[activeMenuId];
-      if (ref && !ref.contains(e.target as Node)) {
-        setActiveMenuId(null);
-      }
+    if (!ctxMenu) return;
+    const handleOutside = (e: MouseEvent) => {
+      const targetNode = e.target as Node;
+      if (portalMenuRef.current?.contains(targetNode)) return;
+      const triggerRef = menuRefs.current[ctxMenu.folder.id];
+      if (triggerRef?.contains(targetNode)) return;
+      setCtxMenu(null);
     };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [activeMenuId]);
+    const handleClose = (e: Event) => {
+      if (e.type === 'scroll' && e.target instanceof Node && portalMenuRef.current?.contains(e.target)) {
+        return;
+      }
+      setCtxMenu(null);
+    };
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setCtxMenu(null);
+    };
+    document.addEventListener('mousedown', handleOutside);
+    window.addEventListener('scroll', handleClose, true);
+    window.addEventListener('resize', handleClose);
+    window.addEventListener('keydown', handleEsc);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      window.removeEventListener('scroll', handleClose, true);
+      window.removeEventListener('resize', handleClose);
+      window.removeEventListener('keydown', handleEsc);
+    };
+  }, [ctxMenu]);
 
   const uncategorizedLabel = t.uncategorizedFolder || 'بدون فولدر';
 
@@ -333,7 +364,7 @@ export const Folders: React.FC<FoldersProps> = ({
     setAddSongsFolder(folderName);
     setSelectedSongIds([]);
     setModalQuery('');
-    setActiveMenuId(null);
+    setCtxMenu(null);
   };
 
   const handleConfirmAddSongs = () => {
@@ -371,6 +402,38 @@ export const Folders: React.FC<FoldersProps> = ({
   const isRTL = language === 'fa';
   const hoverBg = theme.colors.surfaceHover || 'rgba(255, 255, 255, 0.08)';
 
+  const openFolderMenu = (
+    folder: FolderEntry,
+    triggerRect: Pick<DOMRect, 'left' | 'right' | 'top' | 'bottom'> | null,
+    pointer?: { x: number; y: number }
+  ) => {
+    const itemCount =
+      1 + (folder.songs.length > 0 ? 3 : 0) + (!folder.isUncategorized ? 3 : 0);
+    const menuWidth = 196;
+    const menuHeight = itemCount * 38 + 16;
+    const position = pointer
+      ? clampContextMenuPosition({
+          clientX: pointer.x,
+          clientY: pointer.y,
+          menuWidth,
+          menuHeight,
+          viewportWidth: window.innerWidth,
+          viewportHeight: window.innerHeight,
+          bottomReserve: 112,
+          isRTL,
+        })
+      : computeAnchorMenuPosition({
+          rect: triggerRect!,
+          menuWidth,
+          menuHeight,
+          viewportWidth: window.innerWidth,
+          viewportHeight: window.innerHeight,
+          isRTL,
+          bottomReserve: 112,
+        });
+    setCtxMenu({ folder, position });
+  };
+
   return (
     <div style={{ width: '100%', flex: 1, overflowX: 'clip' }}>
       {hiddenDirectoryInput}
@@ -388,11 +451,15 @@ export const Folders: React.FC<FoldersProps> = ({
             {!activeFolder.isUncategorized && (
               <div
                 style={{
+                  maxWidth: '1400px',
+                  margin: '0 auto',
+                  width: '100%',
+                  boxSizing: 'border-box',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'flex-end',
                   gap: '10px',
-                  padding: '12px clamp(16px, 4vw, 40px) 0',
+                  padding: '12px clamp(16px, 3.2vw, 36px) 0',
                   flexWrap: 'wrap',
                 }}
               >
@@ -476,13 +543,13 @@ export const Folders: React.FC<FoldersProps> = ({
             style={{
               flex: 1,
               width: '100%',
-              padding: 'clamp(16px, 3vw, 36px) clamp(16px, 4vw, 40px) 130px',
-              overflowY: 'auto',
-              overflowX: 'hidden',
+              padding: 'clamp(14px, 2.2vw, 26px) clamp(16px, 3.2vw, 36px) 116px',
+              overflowX: 'clip',
               direction: isRTL ? 'rtl' : 'ltr',
               boxSizing: 'border-box',
             }}
           >
+      <div style={{ maxWidth: '1400px', margin: '0 auto', width: '100%' }}>
 
       {/* هدر فولدربندی‌ها */}
       <div
@@ -655,6 +722,11 @@ export const Folders: React.FC<FoldersProps> = ({
               >
                 <div
                   onClick={() => setSelectedFolderId(folder.id)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    openFolderMenu(folder, null, { x: e.clientX, y: e.clientY });
+                  }}
                   onMouseEnter={() => setHoveredId(folder.id)}
                   onMouseLeave={() => setHoveredId(null)}
                   style={{
@@ -772,18 +844,21 @@ export const Folders: React.FC<FoldersProps> = ({
                   </p>
                 </div>
 
-                {!folder.isUncategorized && (
                   <div
                     ref={(el) => {
                       menuRefs.current[folder.id] = el;
                     }}
-                    style={{ position: 'absolute', top: '12px', insetInlineEnd: '12px', zIndex: 50 }}
+                    style={{ position: 'absolute', top: '12px', insetInlineEnd: '12px', zIndex: 10 }}
                   >
                     <button
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
-                        setActiveMenuId(isMenuOpen ? null : folder.id);
+                        if (isMenuOpen) {
+                          setCtxMenu(null);
+                        } else {
+                          openFolderMenu(folder, e.currentTarget.getBoundingClientRect());
+                        }
                       }}
                       aria-label={t.moreActions || 'Actions'}
                       style={{
@@ -797,127 +872,13 @@ export const Folders: React.FC<FoldersProps> = ({
                         alignItems: 'center',
                         justifyContent: 'center',
                         cursor: 'pointer',
+                        opacity: isHovered || isMenuOpen ? 1 : 0.78,
+                        transition: 'opacity 0.16s ease, background-color 0.16s ease',
                       }}
                     >
                       <MoreHorizontal size={17} />
                     </button>
-
-                    {isMenuOpen && (
-                      <div
-                        onClick={(e) => e.stopPropagation()}
-                        style={{
-                          position: 'absolute',
-                          top: 'calc(100% + 6px)',
-                          insetInlineEnd: 0,
-                          padding: '5px',
-                          backgroundColor: theme.colors.surfaceSolid || (theme.isDark ? '#18181c' : '#ffffff'),
-                          borderRadius: theme.radius.md,
-                          border: `1px solid ${theme.colors.border}`,
-                          boxShadow: '0 16px 36px rgba(0, 0, 0, 0.42)',
-                          minWidth: 180,
-                          overflow: 'hidden',
-                          isolation: 'isolate',
-                          transform: 'translate3d(0, 0, 0)',
-                          backfaceVisibility: 'hidden',
-                        }}
-                      >
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setRenameTarget(folder.name);
-                            setRenameValue(folder.name);
-                            setActiveMenuId(null);
-                          }}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.backgroundColor = withAlpha(
-                              theme.colors.primary,
-                              theme.isDark ? 0.16 : 0.10
-                            );
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.backgroundColor = 'transparent';
-                          }}
-                          style={{
-                            width: '100%',
-                            padding: '9px 12px',
-                            borderRadius: '8px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 10,
-                            background: 'none',
-                            border: 'none',
-                            cursor: 'pointer',
-                            color: theme.colors.textPrimary,
-                            fontSize: '0.8438rem',
-                            fontWeight: 500,
-                            transition: 'background-color 0.12s ease',
-                          }}
-                        >
-                          <Edit2 size={15} /> <span>{t.renameFolder || 'تغییر نام'}</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => openAddSongsModal(folder.name)}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.backgroundColor = theme.isDark
-                              ? 'rgba(255, 255, 255, 0.12)'
-                              : 'rgba(0, 0, 0, 0.07)';
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.backgroundColor = 'transparent';
-                          }}
-                          style={{
-                            width: '100%',
-                            padding: '9px 12px',
-                            borderRadius: '8px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 10,
-                            background: 'none',
-                            border: 'none',
-                            cursor: 'pointer',
-                            color: theme.colors.textPrimary,
-                            fontSize: '0.8438rem',
-                            fontWeight: 500,
-                            transition: 'background-color 0.12s ease',
-                          }}
-                        >
-                          <Plus size={15} /> <span>{t.addSong || 'افزودن آهنگ'}</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setDeleteTarget(folder.name);
-                            setActiveMenuId(null);
-                          }}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.backgroundColor = 'rgba(255, 69, 58, 0.15)';
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.backgroundColor = 'transparent';
-                          }}
-                          style={{
-                            width: '100%',
-                            padding: '9px 12px',
-                            borderRadius: '8px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 10,
-                            background: 'none',
-                            border: 'none',
-                            cursor: 'pointer',
-                            color: theme.colors.danger,
-                            fontSize: '0.8438rem',
-                            fontWeight: 500,
-                            transition: 'background-color 0.12s ease',
-                          }}
-                        >
-                          <Trash2 size={15} /> <span>{t.deleteFolder || 'حذف فولدر'}</span>
-                        </button>
-                      </div>
-                    )}
                   </div>
-                )}
               </div>
             );
           })}
@@ -931,6 +892,11 @@ export const Folders: React.FC<FoldersProps> = ({
               <div
                 key={folder.id}
                 onClick={() => setSelectedFolderId(folder.id)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  openFolderMenu(folder, null, { x: e.clientX, y: e.clientY });
+                }}
                 onMouseEnter={() => setHoveredId(folder.id)}
                 onMouseLeave={() => setHoveredId(null)}
                 style={{
@@ -980,21 +946,54 @@ export const Folders: React.FC<FoldersProps> = ({
                     {folder.songs.length} {t.tracksCount || 'آهنگ'}
                   </div>
                 </div>
-                {folder.songs.length > 0 && (
+                <div
+                  ref={(el) => {
+                    if (viewMode === 'list') menuRefs.current[folder.id] = el;
+                  }}
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}
+                >
+                  {folder.songs.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onPlaySongFromList(folder.songs[0], folder.songs);
+                      }}
+                      title={t.playAll || 'پخش همه'}
+                      style={{
+                        width: '34px',
+                        height: '34px',
+                        borderRadius: '50%',
+                        border: 'none',
+                        backgroundColor: theme.colors.primary,
+                        color: theme.colors.onPrimary || '#ffffff',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        cursor: 'pointer',
+                        flexShrink: 0,
+                      }}
+                    >
+                      <Play size={15} fill={theme.colors.onPrimary || '#ffffff'} />
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
-                      onPlaySongFromList(folder.songs[0], folder.songs);
+                      if (isMenuOpen) setCtxMenu(null);
+                      else openFolderMenu(folder, e.currentTarget.getBoundingClientRect());
                     }}
-                    title={t.playAll || 'پخش همه'}
+                    aria-label={t.moreActions || 'Actions'}
                     style={{
-                      width: '34px',
-                      height: '34px',
+                      width: '32px',
+                      height: '32px',
                       borderRadius: '50%',
                       border: 'none',
-                      backgroundColor: theme.colors.primary,
-                      color: theme.colors.onPrimary || '#ffffff',
+                      backgroundColor: isMenuOpen
+                        ? withAlpha(theme.colors.primary, 0.16)
+                        : 'transparent',
+                      color: theme.colors.textSecondary,
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
@@ -1002,17 +1001,295 @@ export const Folders: React.FC<FoldersProps> = ({
                       flexShrink: 0,
                     }}
                   >
-                    <Play size={15} fill={theme.colors.onPrimary || '#ffffff'} />
+                    <MoreHorizontal size={17} />
                   </button>
-                )}
+                </div>
               </div>
             );
           })}
         </div>
       )}
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* منوی شناور راست‌کلیک / سه‌نقطه پوشه‌ها */}
+      {typeof document !== 'undefined' &&
+        createPortal(
+          <AnimatePresence>
+            {ctxMenu && (
+              <motion.div
+                key={`folder-ctx-${ctxMenu.folder.id}`}
+                ref={portalMenuRef}
+                initial={{ opacity: 0, scale: 0.96 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.97 }}
+                transition={{ duration: 0.13, ease: [0.22, 1, 0.36, 1] }}
+                onClick={(e) => e.stopPropagation()}
+                onContextMenu={(e) => e.preventDefault()}
+                style={{
+                  position: 'fixed',
+                  left: ctxMenu.position.left,
+                  top: ctxMenu.position.top,
+                  transformOrigin: `${ctxMenu.position.originY} ${ctxMenu.position.originX}`,
+                  willChange: 'transform, opacity',
+                  padding: '5px',
+                  backgroundColor:
+                    theme.colors.surfaceSolid || (theme.isDark ? '#18181c' : '#ffffff'),
+                  borderRadius: theme.radius.md,
+                  border: `1px solid ${theme.colors.border}`,
+                  boxShadow: '0 16px 36px rgba(0, 0, 0, 0.42)',
+                  zIndex: 99999,
+                  minWidth: 192,
+                  maxWidth: 'calc(100vw - 24px)',
+                  direction: isRTL ? 'rtl' : 'ltr',
+                  fontFamily: theme.fonts?.main,
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedFolderId(ctxMenu.folder.id);
+                    setCtxMenu(null);
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = theme.isDark
+                      ? 'rgba(255, 255, 255, 0.12)'
+                      : 'rgba(0, 0, 0, 0.07)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = 'transparent';
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '9px 12px',
+                    borderRadius: '8px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    color: theme.colors.textPrimary,
+                    fontSize: '0.8438rem',
+                    fontWeight: 500,
+                    textAlign: 'start',
+                  }}
+                >
+                  <FolderOpen size={15} /> <span>{t.open || (isRTL ? 'باز کردن' : 'Open')}</span>
+                </button>
+                {ctxMenu.folder.songs.length > 0 && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onPlaySongFromList(ctxMenu.folder.songs[0], ctxMenu.folder.songs);
+                        setCtxMenu(null);
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = theme.isDark
+                          ? 'rgba(255, 255, 255, 0.12)'
+                          : 'rgba(0, 0, 0, 0.07)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '9px 12px',
+                        borderRadius: '8px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 10,
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        color: theme.colors.textPrimary,
+                        fontSize: '0.8438rem',
+                        fontWeight: 500,
+                        textAlign: 'start',
+                      }}
+                    >
+                      <Play size={15} /> <span>{t.playAll || 'پخش همه'}</span>
+                    </button>
+                    {onPlayNext && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onPlayNext(ctxMenu.folder.songs);
+                          setCtxMenu(null);
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = theme.isDark
+                            ? 'rgba(255, 255, 255, 0.12)'
+                            : 'rgba(0, 0, 0, 0.07)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = 'transparent';
+                        }}
+                        style={{
+                          width: '100%',
+                          padding: '9px 12px',
+                          borderRadius: '8px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 10,
+                          background: 'none',
+                          border: 'none',
+                          cursor: 'pointer',
+                          color: theme.colors.textPrimary,
+                          fontSize: '0.8438rem',
+                          fontWeight: 500,
+                          textAlign: 'start',
+                        }}
+                      >
+                        <SkipForward size={15} /> <span>{t.playNext || 'پخش بعدی'}</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        ctxMenu.folder.songs.forEach((s) => addToQueue(s));
+                        setCtxMenu(null);
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = theme.isDark
+                          ? 'rgba(255, 255, 255, 0.12)'
+                          : 'rgba(0, 0, 0, 0.07)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '9px 12px',
+                        borderRadius: '8px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 10,
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        color: theme.colors.textPrimary,
+                        fontSize: '0.8438rem',
+                        fontWeight: 500,
+                        textAlign: 'start',
+                      }}
+                    >
+                      <ListPlus size={15} /> <span>{t.addToQueue || 'افزودن به صف'}</span>
+                    </button>
+                  </>
+                )}
+                {!ctxMenu.folder.isUncategorized && (
+                  <>
+                    <div
+                      style={{
+                        height: '1px',
+                        backgroundColor: theme.colors.border,
+                        margin: '4px 6px',
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRenameTarget(ctxMenu.folder.name);
+                        setRenameValue(ctxMenu.folder.name);
+                        setCtxMenu(null);
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = withAlpha(
+                          theme.colors.primary,
+                          theme.isDark ? 0.16 : 0.1
+                        );
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '9px 12px',
+                        borderRadius: '8px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 10,
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        color: theme.colors.textPrimary,
+                        fontSize: '0.8438rem',
+                        fontWeight: 500,
+                        textAlign: 'start',
+                      }}
+                    >
+                      <Edit2 size={15} /> <span>{t.renameFolder || 'تغییر نام'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openAddSongsModal(ctxMenu.folder.name)}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = theme.isDark
+                          ? 'rgba(255, 255, 255, 0.12)'
+                          : 'rgba(0, 0, 0, 0.07)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '9px 12px',
+                        borderRadius: '8px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 10,
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        color: theme.colors.textPrimary,
+                        fontSize: '0.8438rem',
+                        fontWeight: 500,
+                        textAlign: 'start',
+                      }}
+                    >
+                      <Plus size={15} /> <span>{t.addSong || 'افزودن آهنگ'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDeleteTarget(ctxMenu.folder.name);
+                        setCtxMenu(null);
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = 'rgba(255, 69, 58, 0.15)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '9px 12px',
+                        borderRadius: '8px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 10,
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        color: theme.colors.danger,
+                        fontSize: '0.8438rem',
+                        fontWeight: 500,
+                        textAlign: 'start',
+                      }}
+                    >
+                      <Trash2 size={15} /> <span>{t.deleteFolder || 'حذف فولدر'}</span>
+                    </button>
+                  </>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>,
+          document.body
+        )}
 
       {/* مودال ساخت فولدر */}
       <FolderModal open={createOpen} onClose={() => setCreateOpen(false)} theme={theme}>

@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Mic,
@@ -8,12 +9,22 @@ import {
   ArrowUpDown,
   Search,
   X,
+  MoreHorizontal,
+  FolderOpen,
+  SkipForward,
+  ListPlus,
 } from 'lucide-react';
 import type { Song, Playlist } from '../types';
 import { AllSongs } from './AllSongs';
 import { CoverImage } from '../components/CoverImage';
+import { MiniEqualizer } from '../components/MiniEqualizer';
 import { getBidiTruncateStyle } from '../utils/bidi';
 import { mixHex, withAlpha } from '../utils/color';
+import {
+  clampContextMenuPosition,
+  computeAnchorMenuPosition,
+  type ContextMenuPosition,
+} from '../utils/contextMenu';
 
 interface ArtistsProps {
   songs: Song[];
@@ -60,49 +71,6 @@ const formatTotalDuration = (seconds: number): string => {
   return `${mins}:${String(secs).padStart(2, '0')}`;
 };
 
-const MiniEqualizer: React.FC<{ active: boolean }> = ({ active }) => (
-  <span
-    aria-hidden="true"
-    style={{
-      display: 'inline-flex',
-      alignItems: 'flex-end',
-      gap: '2px',
-      height: '13px',
-    }}
-  >
-    <span
-      className={active ? 'mini-eq-1' : undefined}
-      style={{
-        width: '2.5px',
-        height: active ? '10px' : '5px',
-        borderRadius: '2px',
-        backgroundColor: '#ffffff',
-        display: 'block',
-      }}
-    />
-    <span
-      className={active ? 'mini-eq-2' : undefined}
-      style={{
-        width: '2.5px',
-        height: active ? '13px' : '9px',
-        borderRadius: '2px',
-        backgroundColor: '#ffffff',
-        display: 'block',
-      }}
-    />
-    <span
-      className={active ? 'mini-eq-3' : undefined}
-      style={{
-        width: '2.5px',
-        height: active ? '8px' : '6px',
-        borderRadius: '2px',
-        backgroundColor: '#ffffff',
-        display: 'block',
-      }}
-    />
-  </span>
-);
-
 export const Artists: React.FC<ArtistsProps> = ({
   songs,
   playlists,
@@ -132,12 +100,86 @@ export const Artists: React.FC<ArtistsProps> = ({
   const [filterQuery, setFilterQuery] = useState('');
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [focusedPlayId, setFocusedPlayId] = useState<string | null>(null);
+  const [ctxMenu, setCtxMenu] = useState<{
+    artist: ArtistGroup;
+    position: ContextMenuPosition;
+  } | null>(null);
+  const portalMenuRef = useRef<HTMLDivElement | null>(null);
+  const menuTriggerRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const initialName = initialArtist?.name ?? null;
+  const initialToken = initialArtist?.token ?? null;
 
   useEffect(() => {
-    if (initialArtist) {
-      setSelectedArtist(initialArtist.name);
+    if (initialName !== null && initialToken !== null) {
+      setSelectedArtist(initialName);
     }
-  }, [initialArtist]);
+  }, [initialName, initialToken]);
+
+  const openArtistMenu = useCallback(
+    (artist: ArtistGroup, rect: DOMRect | null, coords?: { x: number; y: number }) => {
+      const vw = typeof window !== 'undefined' ? window.innerWidth : 1280;
+      const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+      const isRtlDir = language === 'fa';
+      const menuWidth = 200;
+      const itemCount = 1 + (artist.songs.length > 0 ? 2 + (onPlayNext ? 1 : 0) : 0);
+      const menuHeight = itemCount * 38 + 14;
+      const position = coords
+        ? clampContextMenuPosition({
+            clientX: coords.x,
+            clientY: coords.y,
+            menuWidth,
+            menuHeight,
+            viewportWidth: vw,
+            viewportHeight: vh,
+            isRTL: isRtlDir,
+          })
+        : rect
+        ? computeAnchorMenuPosition({
+            rect,
+            menuWidth,
+            menuHeight,
+            viewportWidth: vw,
+            viewportHeight: vh,
+            isRTL: isRtlDir,
+          })
+        : clampContextMenuPosition({
+            clientX: vw / 2,
+            clientY: vh / 2,
+            menuWidth,
+            menuHeight,
+            viewportWidth: vw,
+            viewportHeight: vh,
+            isRTL: isRtlDir,
+          });
+      setCtxMenu({ artist, position });
+    },
+    [language, onPlayNext]
+  );
+
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const handleOutside = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (portalMenuRef.current?.contains(target)) return;
+      const triggerEl = menuTriggerRefs.current[ctxMenu.artist.name];
+      if (triggerEl?.contains(target)) return;
+      setCtxMenu(null);
+    };
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setCtxMenu(null);
+    };
+    const closeOnViewport = () => setCtxMenu(null);
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('keydown', handleEscape);
+    window.addEventListener('scroll', closeOnViewport, true);
+    window.addEventListener('resize', closeOnViewport);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('keydown', handleEscape);
+      window.removeEventListener('scroll', closeOnViewport, true);
+      window.removeEventListener('resize', closeOnViewport);
+    };
+  }, [ctxMenu]);
 
   const groups = useMemo<ArtistGroup[]>(() => {
     const map = new Map<string, Song[]>();
@@ -256,11 +298,12 @@ export const Artists: React.FC<ArtistsProps> = ({
             style={{
               flex: 1,
               width: '100%',
-              padding: 'clamp(12px, 2vw, 24px) clamp(16px, 4vw, 40px) 136px',
+              padding: 'clamp(12px, 2vw, 24px) clamp(16px, 3.2vw, 36px) 116px',
               direction: isRTL ? 'rtl' : 'ltr',
               boxSizing: 'border-box',
             }}
           >
+            <div style={{ maxWidth: '1400px', margin: '0 auto', width: '100%' }}>
             {/* هدر صفحه خواننده‌ها */}
             <div
               style={{
@@ -534,141 +577,179 @@ export const Artists: React.FC<ArtistsProps> = ({
               <div
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fill, minmax(clamp(150px, 19vw, 188px), 1fr))',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(clamp(146px, 18vw, 178px), 1fr))',
                   gap: gridGap,
+                  rowGap: density === 'compact' ? '18px' : '24px',
                 }}
               >
                 {filteredGroups.map((artist) => {
                   const isHovered = hoveredId === artist.name;
-                  const isActiveArtist = currentArtistKey === artist.name;
+                  const isActiveArtist = Boolean(
+                    currentSong &&
+                      (artist.songs.some((s) => s.id === currentSong.id) ||
+                        currentArtistKey === artist.name)
+                  );
                   const showPlay = isHovered || focusedPlayId === artist.name;
+                  const isMenuOpen = ctxMenu?.artist.name === artist.name;
 
                   return (
                     <div
                       key={artist.name}
+                      role="button"
+                      tabIndex={0}
                       onClick={() => setSelectedArtist(artist.name)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        openArtistMenu(artist, null, { x: e.clientX, y: e.clientY });
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          setSelectedArtist(artist.name);
+                        }
+                      }}
                       onMouseEnter={() => setHoveredId(artist.name)}
                       onMouseLeave={() => setHoveredId(null)}
                       style={{
-                        backgroundColor: isActiveArtist
-                          ? withAlpha(
-                              mixHex(surfaceBase, theme.colors.primary, theme.isDark ? 0.18 : 0.14),
-                              theme.isDark ? 0.72 : 0.85
-                            )
-                          : isHovered
-                          ? hoverBg
-                          : theme.colors.surface,
-                        backdropFilter: `blur(${glassBlur}px) saturate(180%)`,
-                        WebkitBackdropFilter: `blur(${glassBlur}px) saturate(180%)`,
-                        borderRadius: theme.radius.xl || '20px',
-                        padding: '18px 14px 16px',
+                        padding: '8px 6px 10px',
                         cursor: 'pointer',
-                        border: `1px solid ${
-                          isActiveArtist
-                            ? theme.colors.primary
-                            : isHovered
-                            ? theme.colors.borderLight || withAlpha(theme.colors.primary, 0.45)
-                            : theme.colors.border
-                        }`,
-                        boxShadow: isActiveArtist
-                          ? `0 12px 28px ${withAlpha(theme.colors.primary, 0.22)}`
-                          : isHovered
-                          ? `0 16px 34px rgba(0, 0, 0, ${theme.isDark ? 0.32 : 0.1}), 0 0 18px ${withAlpha(
-                              theme.colors.glow || theme.colors.primary,
-                              0.18
-                            )}`
-                          : theme.isDark
-                          ? '0 6px 20px rgba(0, 0, 0, 0.2)'
-                          : '0 3px 12px rgba(0, 0, 0, 0.045)',
-                        transition:
-                          'background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease',
                         display: 'flex',
                         flexDirection: 'column',
                         alignItems: 'center',
                         textAlign: 'center',
                         position: 'relative',
-                        overflow: 'hidden',
                         minWidth: 0,
+                        outline: 'none',
                       }}
                     >
-                      {/* هاله شیشه‌ای لطیف پشت کارت خواننده */}
-                      {glassCardCovers && artist.cover && (
-                        <div
-                          aria-hidden="true"
-                          style={{
-                            position: 'absolute',
-                            inset: 0,
-                            borderRadius: theme.radius.xl || '20px',
-                            overflow: 'hidden',
-                            contain: 'strict',
-                            transform: 'translateZ(0)',
-                            pointerEvents: 'none',
-                            zIndex: 0,
-                          }}
-                        >
-                          <img
-                            src={artist.cover}
-                            alt=""
-                            style={{
-                              position: 'absolute',
-                              inset: '-32px',
-                              width: 'calc(100% + 64px)',
-                              height: 'calc(100% + 64px)',
-                              objectFit: 'cover',
-                              filter: 'blur(30px) saturate(160%)',
-                              opacity: theme.isDark ? 0.24 : 0.15,
-                            }}
-                          />
-                          <div
-                            style={{
-                              position: 'absolute',
-                              inset: 0,
-                              backgroundColor: withAlpha(
-                                surfaceBase,
-                                theme.isDark ? 0.56 : 0.68
-                              ),
-                            }}
-                          />
-                        </div>
-                      )}
-
-                      {/* محفظه آواتار دایره‌ای با دکمه پخش بیرون‌زده بدون برش */}
+                      <button
+                        ref={(el) => {
+                          menuTriggerRefs.current[artist.name] = el;
+                        }}
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (isMenuOpen) setCtxMenu(null);
+                          else openArtistMenu(artist, e.currentTarget.getBoundingClientRect());
+                        }}
+                        onFocus={() => setFocusedPlayId(artist.name)}
+                        onBlur={() => setFocusedPlayId(null)}
+                        aria-label={t.moreActions || 'Actions'}
+                        title={t.moreActions || 'Actions'}
+                        style={{
+                          position: 'absolute',
+                          top: '8px',
+                          insetInlineEnd: '8px',
+                          width: '28px',
+                          height: '28px',
+                          borderRadius: '50%',
+                          border: `1px solid ${theme.colors.border}`,
+                          backgroundColor: isMenuOpen
+                            ? theme.colors.primary
+                            : theme.colors.surfaceSolid || (theme.isDark ? '#1c1c20' : '#ffffff'),
+                          color: isMenuOpen
+                            ? theme.colors.onPrimary || '#ffffff'
+                            : theme.colors.textSecondary,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          cursor: 'pointer',
+                          opacity: showPlay || isMenuOpen ? 1 : 0,
+                          pointerEvents: showPlay || isMenuOpen ? 'auto' : 'none',
+                          transition: 'opacity 0.16s ease, background-color 0.16s ease',
+                          zIndex: 3,
+                        }}
+                      >
+                        <MoreHorizontal size={14} />
+                      </button>
+                      {/* آواتار کاملاً دایره‌ای خواننده با ابعاد یکسان عرض و ارتفاع */}
                       <div
                         style={{
                           position: 'relative',
-                          width: 'min(76%, 126px)',
+                          width: 'clamp(124px, 15vw, 150px)',
+                          height: 'clamp(124px, 15vw, 150px)',
                           aspectRatio: '1 / 1',
                           flexShrink: 0,
                           zIndex: 1,
                         }}
                       >
+                        {/* هاله نوری دایره‌ای پشت آواتار */}
+                        {glassCardCovers && artist.cover && (
+                          <div
+                            aria-hidden="true"
+                            style={{
+                              position: 'absolute',
+                              inset: '-10px',
+                              borderRadius: '50%',
+                              overflow: 'hidden',
+                              pointerEvents: 'none',
+                              zIndex: 0,
+                              opacity: isActiveArtist || isHovered ? (theme.isDark ? 0.48 : 0.34) : theme.isDark ? 0.24 : 0.14,
+                              filter: 'blur(20px) saturate(165%)',
+                              transition: 'opacity 0.22s ease',
+                            }}
+                          >
+                            <img
+                              src={artist.cover}
+                              alt=""
+                              draggable={false}
+                              style={{
+                                width: '100%',
+                                height: '100%',
+                                borderRadius: '50%',
+                                objectFit: 'cover',
+                                display: 'block',
+                              }}
+                            />
+                          </div>
+                        )}
+
                         <div
                           style={{
-                            width: '100%',
-                            height: '100%',
+                            position: 'absolute',
+                            inset: 0,
                             borderRadius: '50%',
                             overflow: 'hidden',
-                            border: `2px solid ${
+                            backgroundColor: surfaceBase,
+                            border: `${isActiveArtist ? '2.5px' : '2px'} solid ${
                               isActiveArtist
                                 ? theme.colors.primary
+                                : isHovered
+                                ? theme.colors.borderLight || withAlpha(theme.colors.primary, 0.55)
                                 : theme.isDark
                                 ? 'rgba(255, 255, 255, 0.14)'
                                 : 'rgba(0, 0, 0, 0.08)'
                             }`,
-                            boxShadow: theme.isDark
+                            boxShadow: isActiveArtist
+                              ? `0 12px 28px ${withAlpha(theme.colors.primary, 0.34)}`
+                              : isHovered
+                              ? `0 16px 32px rgba(0, 0, 0, ${theme.isDark ? 0.42 : 0.14}), 0 0 22px ${withAlpha(
+                                  theme.colors.glow || theme.colors.primary,
+                                  0.26
+                                )}`
+                              : theme.isDark
                               ? '0 10px 24px rgba(0, 0, 0, 0.38)'
-                              : '0 8px 20px rgba(0, 0, 0, 0.12)',
-                            position: 'relative',
+                              : '0 8px 20px rgba(0, 0, 0, 0.11)',
+                            transition:
+                              'border-color 0.2s ease, box-shadow 0.2s ease',
+                            zIndex: 1,
                           }}
                         >
                           <CoverImage
                             src={artist.cover}
                             alt={artist.name}
-                            iconSize={36}
+                            iconSize={40}
                             style={{
+                              position: 'absolute',
+                              inset: 0,
                               width: '100%',
                               height: '100%',
+                              borderRadius: '50%',
                               objectFit: 'cover',
+                              display: 'block',
+                              transform: isHovered ? 'scale(1.045)' : 'scale(1)',
+                              transition: 'transform 0.28s cubic-bezier(0.22, 1, 0.36, 1)',
                             }}
                           />
 
@@ -677,14 +758,17 @@ export const Artists: React.FC<ArtistsProps> = ({
                               style={{
                                 position: 'absolute',
                                 inset: 0,
-                                backgroundColor: 'rgba(0, 0, 0, 0.42)',
+                                borderRadius: '50%',
+                                backgroundColor: 'rgba(0, 0, 0, 0.46)',
+                                backdropFilter: 'blur(2px)',
+                                WebkitBackdropFilter: 'blur(2px)',
                                 display: 'flex',
                                 alignItems: 'center',
                                 justifyContent: 'center',
                                 pointerEvents: 'none',
                               }}
                             >
-                              <MiniEqualizer active={isPlaying} />
+                              <MiniEqualizer active={isPlaying} color="#ffffff" size="md" />
                             </div>
                           )}
                         </div>
@@ -703,10 +787,10 @@ export const Artists: React.FC<ArtistsProps> = ({
                           title={t.playAll || 'پخش همه'}
                           style={{
                             position: 'absolute',
-                            bottom: '2px',
-                            insetInlineEnd: '2px',
-                            width: '36px',
-                            height: '36px',
+                            bottom: '4px',
+                            insetInlineEnd: '4px',
+                            width: '38px',
+                            height: '38px',
                             borderRadius: '50%',
                             border: `2px solid ${
                               theme.colors.surfaceSolid || theme.colors.background
@@ -716,11 +800,12 @@ export const Artists: React.FC<ArtistsProps> = ({
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'center',
+                            paddingLeft: '2px',
                             cursor: 'pointer',
                             opacity: showPlay ? 1 : 0,
                             pointerEvents: showPlay ? 'auto' : 'none',
                             transition: 'opacity 0.16s ease',
-                            boxShadow: `0 6px 16px ${withAlpha(theme.colors.primary, 0.45)}`,
+                            boxShadow: `0 6px 18px ${withAlpha(theme.colors.primary, 0.48)}`,
                             zIndex: 2,
                           }}
                         >
@@ -733,7 +818,7 @@ export const Artists: React.FC<ArtistsProps> = ({
                         style={{
                           position: 'relative',
                           zIndex: 1,
-                          margin: '14px 0 0 0',
+                          margin: '12px 0 0 0',
                           fontSize: '0.9375rem',
                           fontWeight: 700,
                           lineHeight: 1.35,
@@ -750,7 +835,7 @@ export const Artists: React.FC<ArtistsProps> = ({
                         style={{
                           position: 'relative',
                           zIndex: 1,
-                          marginTop: '4px',
+                          marginTop: '3px',
                           fontSize: '0.75rem',
                           color: theme.colors.textSecondary,
                           fontVariantNumeric: 'tabular-nums',
@@ -782,13 +867,23 @@ export const Artists: React.FC<ArtistsProps> = ({
               <div style={{ display: 'flex', flexDirection: 'column', gap: listGap }}>
                 {filteredGroups.map((artist) => {
                   const isHovered = hoveredId === artist.name;
-                  const isActiveArtist = currentArtistKey === artist.name;
+                  const isActiveArtist = Boolean(
+                    currentSong &&
+                      (artist.songs.some((s) => s.id === currentSong.id) ||
+                        currentArtistKey === artist.name)
+                  );
                   const totalDur = formatTotalDuration(artist.totalDuration);
+                  const isMenuOpen = ctxMenu?.artist.name === artist.name;
 
                   return (
                     <div
                       key={artist.name}
                       onClick={() => setSelectedArtist(artist.name)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        openArtistMenu(artist, null, { x: e.clientX, y: e.clientY });
+                      }}
                       onMouseEnter={() => setHoveredId(artist.name)}
                       onMouseLeave={() => setHoveredId(null)}
                       style={{
@@ -867,8 +962,11 @@ export const Artists: React.FC<ArtistsProps> = ({
                       <div
                         style={{
                           position: 'relative',
-                          width: '50px',
-                          height: '50px',
+                          width: '52px',
+                          height: '52px',
+                          minWidth: '52px',
+                          minHeight: '52px',
+                          aspectRatio: '1 / 1',
                           borderRadius: '50%',
                           overflow: 'hidden',
                           flexShrink: 0,
@@ -885,7 +983,9 @@ export const Artists: React.FC<ArtistsProps> = ({
                           style={{
                             width: '100%',
                             height: '100%',
+                            borderRadius: '50%',
                             objectFit: 'cover',
+                            display: 'block',
                           }}
                         />
                         {isActiveArtist && (
@@ -893,14 +993,15 @@ export const Artists: React.FC<ArtistsProps> = ({
                             style={{
                               position: 'absolute',
                               inset: 0,
-                              backgroundColor: 'rgba(0, 0, 0, 0.45)',
+                              borderRadius: '50%',
+                              backgroundColor: 'rgba(0, 0, 0, 0.46)',
                               display: 'flex',
                               alignItems: 'center',
                               justifyContent: 'center',
                               pointerEvents: 'none',
                             }}
                           >
-                            <MiniEqualizer active={isPlaying} />
+                            <MiniEqualizer active={isPlaying} color="#ffffff" size="sm" />
                           </div>
                         )}
                       </div>
@@ -997,14 +1098,222 @@ export const Artists: React.FC<ArtistsProps> = ({
                       >
                         <Play size={15} fill="currentColor" />
                       </button>
+
+                      <button
+                        ref={(el) => {
+                          menuTriggerRefs.current[artist.name] = el;
+                        }}
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (isMenuOpen) setCtxMenu(null);
+                          else openArtistMenu(artist, e.currentTarget.getBoundingClientRect());
+                        }}
+                        aria-label={t.moreActions || 'Actions'}
+                        title={t.moreActions || 'Actions'}
+                        style={{
+                          position: 'relative',
+                          zIndex: 1,
+                          width: '32px',
+                          height: '32px',
+                          borderRadius: '50%',
+                          border: 'none',
+                          backgroundColor: isMenuOpen
+                            ? withAlpha(theme.colors.primary, 0.16)
+                            : 'transparent',
+                          color: isMenuOpen ? theme.colors.primary : theme.colors.textSecondary,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          cursor: 'pointer',
+                          flexShrink: 0,
+                          transition: 'background-color 0.16s ease, color 0.16s ease',
+                        }}
+                      >
+                        <MoreHorizontal size={17} />
+                      </button>
                     </div>
                   );
                 })}
               </div>
             )}
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* منوی شناور راست‌کلیک / سه‌نقطه خواننده‌ها */}
+      {typeof document !== 'undefined' &&
+        createPortal(
+          <AnimatePresence>
+            {ctxMenu && (
+              <motion.div
+                key={`artist-ctx-${ctxMenu.artist.name}`}
+                ref={portalMenuRef}
+                initial={{ opacity: 0, scale: 0.96 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.97 }}
+                transition={{ duration: 0.13, ease: [0.22, 1, 0.36, 1] }}
+                onClick={(e) => e.stopPropagation()}
+                onContextMenu={(e) => e.preventDefault()}
+                style={{
+                  position: 'fixed',
+                  left: ctxMenu.position.left,
+                  top: ctxMenu.position.top,
+                  transformOrigin: `${ctxMenu.position.originY} ${ctxMenu.position.originX}`,
+                  willChange: 'transform, opacity',
+                  padding: '5px',
+                  backgroundColor:
+                    theme.colors.surfaceSolid || (theme.isDark ? '#18181c' : '#ffffff'),
+                  borderRadius: theme.radius.md,
+                  border: `1px solid ${theme.colors.border}`,
+                  boxShadow: '0 16px 36px rgba(0, 0, 0, 0.42)',
+                  zIndex: 99999,
+                  minWidth: 192,
+                  maxWidth: 'calc(100vw - 24px)',
+                  direction: isRTL ? 'rtl' : 'ltr',
+                  fontFamily: theme.fonts?.main,
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedArtist(ctxMenu.artist.name);
+                    setCtxMenu(null);
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = theme.isDark
+                      ? 'rgba(255, 255, 255, 0.12)'
+                      : 'rgba(0, 0, 0, 0.07)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = 'transparent';
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '9px 12px',
+                    borderRadius: '8px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    color: theme.colors.textPrimary,
+                    fontSize: '0.8438rem',
+                    fontWeight: 500,
+                    textAlign: 'start',
+                  }}
+                >
+                  <FolderOpen size={15} /> <span>{t.open || (isRTL ? 'باز کردن' : 'Open')}</span>
+                </button>
+                {ctxMenu.artist.songs.length > 0 && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onPlaySongFromList(ctxMenu.artist.songs[0], ctxMenu.artist.songs);
+                        setCtxMenu(null);
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = theme.isDark
+                          ? 'rgba(255, 255, 255, 0.12)'
+                          : 'rgba(0, 0, 0, 0.07)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '9px 12px',
+                        borderRadius: '8px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 10,
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        color: theme.colors.textPrimary,
+                        fontSize: '0.8438rem',
+                        fontWeight: 500,
+                        textAlign: 'start',
+                      }}
+                    >
+                      <Play size={15} /> <span>{t.playAll || 'پخش همه'}</span>
+                    </button>
+                    {onPlayNext && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onPlayNext(ctxMenu.artist.songs);
+                          setCtxMenu(null);
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = theme.isDark
+                            ? 'rgba(255, 255, 255, 0.12)'
+                            : 'rgba(0, 0, 0, 0.07)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = 'transparent';
+                        }}
+                        style={{
+                          width: '100%',
+                          padding: '9px 12px',
+                          borderRadius: '8px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 10,
+                          background: 'none',
+                          border: 'none',
+                          cursor: 'pointer',
+                          color: theme.colors.textPrimary,
+                          fontSize: '0.8438rem',
+                          fontWeight: 500,
+                          textAlign: 'start',
+                        }}
+                      >
+                        <SkipForward size={15} /> <span>{t.playNext || 'پخش بعدی'}</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        ctxMenu.artist.songs.forEach((s) => addToQueue(s));
+                        setCtxMenu(null);
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = theme.isDark
+                          ? 'rgba(255, 255, 255, 0.12)'
+                          : 'rgba(0, 0, 0, 0.07)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '9px 12px',
+                        borderRadius: '8px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 10,
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        color: theme.colors.textPrimary,
+                        fontSize: '0.8438rem',
+                        fontWeight: 500,
+                        textAlign: 'start',
+                      }}
+                    >
+                      <ListPlus size={15} /> <span>{t.addToQueue || 'افزودن به صف'}</span>
+                    </button>
+                  </>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>,
+          document.body
+        )}
     </div>
   );
 };

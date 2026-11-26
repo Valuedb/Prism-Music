@@ -1149,9 +1149,9 @@ export const Settings = ({
                   theme={theme}
                   icon={<SettingsIconBadge color="#34C759" gradientTo="#30D158"><Upload size={16} /></SettingsIconBadge>}
                   title={t.selectFiles || 'انتخاب فایل‌های موسیقی'}
-                  subtitle={isDesktopApp ? (t.directDiskBadge || 'اتصال مستقیم هارد') : undefined}
+                  subtitle={isDesktopApp && window.desktopRuntime?.pickAudioFiles ? (t.directDiskBadge || 'اتصال مستقیم هارد') : undefined}
                   trailing={
-                    isDesktopApp ? (
+                    isDesktopApp && window.desktopRuntime?.pickAudioFiles ? (
                       <button
                         type="button"
                         disabled={isLoading}
@@ -1194,9 +1194,9 @@ export const Settings = ({
                   isLast
                   icon={<SettingsIconBadge color="#30B0C7" gradientTo="#0A84FF"><FolderUp size={16} /></SettingsIconBadge>}
                   title={t.importFolderBtn || 'انتخاب پوشه کامل'}
-                  subtitle={isDesktopApp ? (t.directDiskBadge || 'اتصال مستقیم هارد') : undefined}
+                  subtitle={isDesktopApp && window.desktopRuntime?.pickMusicFolder ? (t.directDiskBadge || 'اتصال مستقیم هارد') : undefined}
                   trailing={
-                    isDesktopApp ? (
+                    isDesktopApp && window.desktopRuntime?.pickMusicFolder ? (
                       <button
                         type="button"
                         disabled={isLoading}
@@ -1351,17 +1351,18 @@ export const Settings = ({
 
               <SettingsSection header={t.shortcutsPlaybackSection || 'کنترل پخش و صدا'} theme={theme}>
                 <SettingsRow theme={theme} title={t.shortcutPlayPause || 'پخش / توقف'} trailing={<KbdBadge theme={theme}>Space / K</KbdBadge>} />
-                <SettingsRow theme={theme} title={t.shortcutPrevNext || 'آهنگ قبلی / بعدی'} trailing={<KbdBadge theme={theme}>Ctrl + ← / →</KbdBadge>} />
+                <SettingsRow theme={theme} title={t.shortcutPrevNext || 'آهنگ قبلی / بعدی'} trailing={<KbdBadge theme={theme}>Ctrl + ← / → · N / P</KbdBadge>} />
                 <SettingsRow theme={theme} title={t.shortcutSeek || 'جلو / عقب رفتن'} trailing={<KbdBadge theme={theme}>← / →</KbdBadge>} />
                 <SettingsRow theme={theme} title={t.shortcutSeekFast || 'پرش سریع ۳ برابری'} trailing={<KbdBadge theme={theme}>Shift + ← / →</KbdBadge>} />
+                <SettingsRow theme={theme} title={t.shortcutSeekPercent || 'پرش به درصد آهنگ'} trailing={<KbdBadge theme={theme}>0 – 9</KbdBadge>} />
                 <SettingsRow theme={theme} title={t.shortcutVolume || 'افزایش / کاهش صدا'} trailing={<KbdBadge theme={theme}>+ / - · Ctrl + ↑ / ↓</KbdBadge>} />
                 <SettingsRow theme={theme} title={t.shortcutMute || 'قطع / وصل صدا'} trailing={<KbdBadge theme={theme}>M</KbdBadge>} />
                 <SettingsRow theme={theme} title={t.shortcutShuffle || 'روشن / خاموش کردن شافل'} trailing={<KbdBadge theme={theme}>S</KbdBadge>} />
-                <SettingsRow theme={theme} title={t.shortcutRepeat || 'تغییر حالت تکرار'} trailing={<KbdBadge theme={theme}>R</KbdBadge>} />
-                <SettingsRow theme={theme} isLast title={t.shortcutFavorite || 'افزودن / حذف از محبوب‌ها'} trailing={<KbdBadge theme={theme}>L</KbdBadge>} />
+                <SettingsRow theme={theme} isLast title={t.shortcutRepeat || 'تغییر حالت تکرار'} trailing={<KbdBadge theme={theme}>R</KbdBadge>} />
               </SettingsSection>
 
               <SettingsSection header={t.shortcutsNavSection || 'ناوبری و پنجره‌ها'} theme={theme}>
+                <SettingsRow theme={theme} title={t.shortcutFavorite || 'افزودن / حذف از محبوب‌ها'} trailing={<KbdBadge theme={theme}>L</KbdBadge>} />
                 <SettingsRow theme={theme} title={t.shortcutQueue || 'باز / بسته کردن صف پخش'} trailing={<KbdBadge theme={theme}>Q</KbdBadge>} />
                 <SettingsRow theme={theme} title={t.shortcutFullscreen || 'پخش‌کننده تمام‌صفحه'} trailing={<KbdBadge theme={theme}>F</KbdBadge>} />
                 <SettingsRow theme={theme} title={t.shortcutSearch || 'باز کردن جستجوی هوشمند'} trailing={<KbdBadge theme={theme}>Ctrl + K / F / /</KbdBadge>} />

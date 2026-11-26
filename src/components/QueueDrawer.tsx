@@ -11,10 +11,15 @@ import {
   Volume2,
   BookmarkPlus,
   Check,
+  CheckSquare,
+  ListStart,
+  Play,
+  MoreHorizontal,
 } from 'lucide-react';
 import type { Song } from '../types';
 import { withAlpha } from '../utils/color';
 import { CoverImage } from './CoverImage';
+import { clampContextMenuPosition, computeAnchorMenuPosition } from '../utils/contextMenu';
 import {
   computeAutoScrollDelta,
   computeTargetIndexFromInsertionSlot,
@@ -29,6 +34,8 @@ interface QueueDrawerProps {
   isPlaying: boolean;
   onPlaySong: (index: number) => void;
   onRemoveFromQueue: (index: number) => void;
+  onRemoveSelectedFromQueue?: (indices: number[]) => void;
+  onPlayNextInQueue?: (index: number) => void;
   onReorderQueue: (fromIndex: number, toIndex: number) => void;
   onClearQueue: () => void;
   onShuffleQueue: () => void;
@@ -57,6 +64,8 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
   isPlaying,
   onPlaySong,
   onRemoveFromQueue,
+  onRemoveSelectedFromQueue,
+  onPlayNextInQueue,
   onReorderQueue,
   onClearQueue,
   onShuffleQueue,
@@ -72,9 +81,18 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [dragState, setDragState] = useState<ActiveDragState | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [isSelectMode, setIsSelectMode] = useState(false);
+  const [selectedQueueIndices, setSelectedQueueIndices] = useState<number[]>([]);
+  const [contextMenu, setContextMenu] = useState<{
+    queueIndex: number;
+    left: number;
+    top: number;
+    originY: 'top' | 'bottom';
+  } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const listScrollRef = useRef<HTMLDivElement>(null);
   const currentSongRowRef = useRef<HTMLDivElement>(null);
+  const contextMenuRef = useRef<HTMLDivElement>(null);
   const dragSessionRef = useRef<{
     pointerId: number;
     sourceQueueIndex: number;
@@ -90,9 +108,26 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
   const queueLengthRef = useRef(queue.length);
   const onReorderQueueRef = useRef(onReorderQueue);
   const wasOpenRef = useRef(false);
+  const [isShortWindow, setIsShortWindow] = useState(() =>
+    typeof window !== 'undefined' ? window.innerHeight < 680 : false
+  );
+
+  useEffect(() => {
+    const handleResize = () => setIsShortWindow(window.innerHeight < 680);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   useEffect(() => {
     queueLengthRef.current = queue.length;
+    setSelectedQueueIndices((prev) => {
+      const valid = prev.filter((idx) => idx >= 0 && idx < queue.length);
+      return valid.length === prev.length ? prev : valid;
+    });
+    if (queue.length === 0) {
+      setIsSelectMode(false);
+      setContextMenu(null);
+    }
   }, [queue.length]);
 
   useEffect(() => {
@@ -127,9 +162,31 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
       setConfirmClear(false);
       setIsSavingPlaylist(false);
       setFilterQuery('');
+      setIsSelectMode(false);
+      setSelectedQueueIndices([]);
+      setContextMenu(null);
       cancelDragSession();
     }
   }, [isOpen, cancelDragSession]);
+
+  // بستن منوی سه‌نقطه/راست‌کلیک صف با کلیک بیرون، اسکرول یا ریسایز
+  useEffect(() => {
+    if (!contextMenu) return;
+    const handleOutside = (e: MouseEvent) => {
+      if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
+        setContextMenu(null);
+      }
+    };
+    const handleClose = () => setContextMenu(null);
+    document.addEventListener('mousedown', handleOutside);
+    window.addEventListener('resize', handleClose);
+    window.addEventListener('scroll', handleClose, true);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      window.removeEventListener('resize', handleClose);
+      window.removeEventListener('scroll', handleClose, true);
+    };
+  }, [contextMenu]);
 
   // بستن کشو با کلید Escape پیش از پنجره‌های زیرین (در حال کشیدن ابتدا درگ لغو می‌شود)
   useEffect(() => {
@@ -137,8 +194,17 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation();
+        if (contextMenu) {
+          setContextMenu(null);
+          return;
+        }
         if (dragSessionRef.current || activeDragRef.current) {
           cancelDragSession();
+          return;
+        }
+        if (isSelectMode) {
+          setIsSelectMode(false);
+          setSelectedQueueIndices([]);
           return;
         }
         onClose();
@@ -146,7 +212,7 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
     };
     window.addEventListener('keydown', handleKeyDown, true);
     return () => window.removeEventListener('keydown', handleKeyDown, true);
-  }, [isOpen, onClose, cancelDragSession]);
+  }, [isOpen, contextMenu, isSelectMode, onClose, cancelDragSession]);
 
   // زمان‌سنج ریست تأیید پاک‌کردن صف
   useEffect(() => {
@@ -454,7 +520,7 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
 
   const handleListPointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
-      if (queue.length <= 1) return;
+      if (isSelectMode || queue.length <= 1) return;
       if (e.pointerType === 'mouse' && e.button !== 0) return;
 
       const targetEl = e.target as HTMLElement | null;
@@ -491,17 +557,55 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
         isActive: false,
       };
     },
-    [queue]
+    [isSelectMode, queue]
   );
+
+  const selectedSet = useMemo(() => new Set(selectedQueueIndices), [selectedQueueIndices]);
+
+  const selectableIndices = useMemo(
+    () =>
+      filteredList
+        .map((item) => item.queueIndex)
+        .filter((idx) => idx >= 0 && idx < queue.length),
+    [filteredList, queue.length]
+  );
+
+  const allVisibleSelected =
+    selectableIndices.length > 0 &&
+    selectableIndices.every((idx) => selectedSet.has(idx));
+
+  const toggleSelectIndex = useCallback((queueIndex: number) => {
+    if (queueIndex < 0) return;
+    setSelectedQueueIndices((prev) =>
+      prev.includes(queueIndex)
+        ? prev.filter((idx) => idx !== queueIndex)
+        : [...prev, queueIndex]
+    );
+  }, []);
+
+  const handleDeleteSelected = useCallback(() => {
+    if (selectedQueueIndices.length === 0) return;
+    if (onRemoveSelectedFromQueue) {
+      onRemoveSelectedFromQueue(selectedQueueIndices);
+    } else {
+      const sortedDesc = [...selectedQueueIndices].sort((a, b) => b - a);
+      sortedDesc.forEach((idx) => onRemoveFromQueue(idx));
+    }
+    setSelectedQueueIndices([]);
+    setIsSelectMode(false);
+  }, [selectedQueueIndices, onRemoveSelectedFromQueue, onRemoveFromQueue]);
 
   const handleRowClick = useCallback(
     (queueIndex: number) => {
       if (justDraggedRef.current) return;
-      if (queueIndex >= 0) {
-        onPlaySong(queueIndex);
+      if (queueIndex < 0) return;
+      if (isSelectMode) {
+        toggleSelectIndex(queueIndex);
+        return;
       }
+      onPlaySong(queueIndex);
     },
-    [onPlaySong]
+    [isSelectMode, onPlaySong, toggleSelectIndex]
   );
 
   if (typeof document === 'undefined') return null;
@@ -524,6 +628,7 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
     (theme.isDark ? '-16px 0 48px rgba(0,0,0,0.52)' : '-12px 0 40px rgba(0,0,0,0.14)');
 
   return createPortal(
+    <>
     <AnimatePresence>
       {isOpen && (
         <motion.div
@@ -558,8 +663,16 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
           onClick={(e) => e.stopPropagation()}
           style={{
             position: 'fixed',
-            top: isMobile ? 0 : '16px',
-            bottom: isMobile ? 0 : inFullScreen ? '16px' : '112px',
+            top: isMobile ? 0 : isShortWindow ? '10px' : '16px',
+            bottom: isMobile
+              ? 0
+              : inFullScreen
+              ? isShortWindow
+                ? '10px'
+                : '16px'
+              : isShortWindow
+              ? '92px'
+              : '112px',
             right: isMobile ? 0 : '16px',
             left: 'auto',
             width: isMobile ? 'min(380px, 88vw)' : 'min(395px, calc(100vw - 32px))',
@@ -653,7 +766,38 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
 
               {/* ابزارهای هدر */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
-                {queue.length > 2 && (
+                {queue.length > 0 && (
+                  <button
+                    type="button"
+                    className="q-icon-btn"
+                    onClick={() => {
+                      setContextMenu(null);
+                      if (isSelectMode) {
+                        setIsSelectMode(false);
+                        setSelectedQueueIndices([]);
+                      } else {
+                        setIsSelectMode(true);
+                        setConfirmClear(false);
+                      }
+                    }}
+                    title={isSelectMode ? t.cancel || 'لغو' : t.select || 'انتخاب'}
+                    style={{
+                      background: isSelectMode ? withAlpha(primaryColor, 0.16) : 'none',
+                      border: 'none',
+                      color: isSelectMode ? primaryColor : textSecondary,
+                      cursor: 'pointer',
+                      padding: '7px',
+                      borderRadius: '9px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <CheckSquare size={17} />
+                  </button>
+                )}
+
+                {queue.length > 2 && !isSelectMode && (
                   <button
                     type="button"
                     className="q-icon-btn"
@@ -675,7 +819,7 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
                   </button>
                 )}
 
-                {onCreatePlaylist && displayQueue.length > 0 && (
+                {onCreatePlaylist && displayQueue.length > 0 && !isSelectMode && (
                   <button
                     type="button"
                     className="q-icon-btn"
@@ -706,7 +850,7 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
                   </button>
                 )}
 
-                {queue.length > 0 && (
+                {queue.length > 0 && !isSelectMode && (
                   <button
                     type="button"
                     className="q-icon-btn"
@@ -759,6 +903,93 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
                 </button>
               </div>
             </div>
+
+            {/* نوار انتخاب و حذف گروهی آهنگ‌های صف */}
+            <AnimatePresence>
+              {isSelectMode && queue.length > 0 && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '8px',
+                    padding: '6px 8px',
+                    borderRadius: '11px',
+                    backgroundColor: withAlpha(primaryColor, theme.isDark ? 0.12 : 0.08),
+                    border: `1px solid ${withAlpha(primaryColor, 0.25)}`,
+                    overflow: 'hidden',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (allVisibleSelected) {
+                          setSelectedQueueIndices([]);
+                        } else {
+                          setSelectedQueueIndices(selectableIndices);
+                        }
+                      }}
+                      style={{
+                        border: `1px solid ${borderColor}`,
+                        backgroundColor: allVisibleSelected ? primaryColor : 'transparent',
+                        color: allVisibleSelected ? theme.colors.onPrimary || '#fff' : textPrimary,
+                        borderRadius: '8px',
+                        padding: '4px 10px',
+                        fontSize: '0.7188rem',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {allVisibleSelected
+                        ? t.deselectAll || 'لغو انتخاب همه'
+                        : t.selectAll || 'انتخاب همه'}
+                    </button>
+                    <span
+                      style={{
+                        fontSize: '0.7188rem',
+                        color: textSecondary,
+                        fontVariantNumeric: 'tabular-nums',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {selectedQueueIndices.length}
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={selectedQueueIndices.length === 0}
+                    onClick={handleDeleteSelected}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      border: 'none',
+                      borderRadius: '8px',
+                      padding: '5px 10px',
+                      backgroundColor:
+                        selectedQueueIndices.length > 0
+                          ? '#ef4444'
+                          : withAlpha(textSecondary, 0.16),
+                      color: selectedQueueIndices.length > 0 ? '#ffffff' : textSecondary,
+                      fontSize: '0.7188rem',
+                      fontWeight: 600,
+                      cursor: selectedQueueIndices.length > 0 ? 'pointer' : 'not-allowed',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    <Trash2 size={13} />
+                    <span>{t.deleteSelected || (isRTL ? 'حذف انتخاب‌شده‌ها' : 'Delete Selected')}</span>
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             {/* فرم ذخیره پلی‌لیست */}
             <AnimatePresence>
@@ -973,6 +1204,7 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
                 const isCurrent = currentDisplayIndex !== -1 && displayIndex === currentDisplayIndex;
                 const isPast = currentDisplayIndex !== -1 && displayIndex < currentDisplayIndex;
                 const isQueueItem = queueIndex >= 0;
+                const isItemSelected = isQueueItem && selectedSet.has(queueIndex);
                 const isItemDragged = isQueueItem && draggedQueueIndex === queueIndex;
                 const isIndicatorRow =
                   Boolean(dragState) &&
@@ -988,6 +1220,26 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
                     data-queue-index={isQueueItem ? queueIndex : undefined}
                     className="q-row"
                     onClick={() => handleRowClick(queueIndex)}
+                    onContextMenu={(e) => {
+                      if (!isQueueItem) return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      const pos = clampContextMenuPosition({
+                        clientX: e.clientX,
+                        clientY: e.clientY,
+                        menuWidth: 185,
+                        menuHeight: onPlayNextInQueue ? 170 : 132,
+                        viewportWidth: window.innerWidth,
+                        viewportHeight: window.innerHeight,
+                        isRTL,
+                      });
+                      setContextMenu({
+                        queueIndex,
+                        left: pos.left,
+                        top: pos.top,
+                        originY: pos.originY,
+                      });
+                    }}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
@@ -996,13 +1248,15 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
                       borderRadius: '13px',
                       backgroundColor: isItemDragged
                         ? withAlpha(primaryColor, 0.08)
+                        : isItemSelected
+                        ? withAlpha(primaryColor, theme.isDark ? 0.24 : 0.16)
                         : isCurrent
                         ? withAlpha(primaryColor, theme.isDark ? 0.2 : 0.12)
                         : withAlpha(textPrimary, theme.isDark ? 0.04 : 0.025),
                       border: isItemDragged
                         ? `1px dashed ${withAlpha(primaryColor, 0.55)}`
-                        : isCurrent
-                        ? `1px solid ${withAlpha(primaryColor, theme.isDark ? 0.45 : 0.34)}`
+                        : isItemSelected || isCurrent
+                        ? `1px solid ${withAlpha(primaryColor, theme.isDark ? 0.5 : 0.38)}`
                         : `1px solid ${withAlpha(textPrimary, 0.06)}`,
                       boxShadow: isCurrent ? `0 4px 16px ${withAlpha(primaryColor, 0.14)}` : 'none',
                       opacity: isItemDragged ? 0.42 : isPast ? 0.62 : 1,
@@ -1029,51 +1283,78 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
                       />
                     )}
 
-                    {/* شماره یا اکولایزر آهنگ جاری */}
-                    <div
-                      style={{
-                        width: '24px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        flexShrink: 0,
-                      }}
-                    >
-                      {isCurrent ? (
-                        isPlaying ? (
-                          <div style={{ display: 'flex', alignItems: 'flex-end', gap: '2px', height: '14px' }}>
-                            <motion.div
-                              animate={{ height: ['4px', '14px', '6px', '12px', '4px'] }}
-                              transition={{ repeat: Infinity, duration: 0.85, ease: 'easeInOut' }}
-                              style={{ width: '2.5px', backgroundColor: primaryColor, borderRadius: '1px' }}
-                            />
-                            <motion.div
-                              animate={{ height: ['12px', '5px', '14px', '6px', '12px'] }}
-                              transition={{ repeat: Infinity, duration: 0.95, ease: 'easeInOut' }}
-                              style={{ width: '2.5px', backgroundColor: primaryColor, borderRadius: '1px' }}
-                            />
-                            <motion.div
-                              animate={{ height: ['7px', '13px', '4px', '14px', '7px'] }}
-                              transition={{ repeat: Infinity, duration: 0.75, ease: 'easeInOut' }}
-                              style={{ width: '2.5px', backgroundColor: primaryColor, borderRadius: '1px' }}
-                            />
-                          </div>
+                    {/* چک‌باکس در حالت انتخاب چندتایی، یا شماره / اکولایزر */}
+                    {isSelectMode && isQueueItem ? (
+                      <div
+                        data-queue-no-drag="true"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleSelectIndex(queueIndex);
+                        }}
+                        style={{
+                          width: '20px',
+                          height: '20px',
+                          borderRadius: '6px',
+                          border: isItemSelected
+                            ? `2px solid ${primaryColor}`
+                            : `2px solid ${textSecondary}`,
+                          backgroundColor: isItemSelected ? primaryColor : 'transparent',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          flexShrink: 0,
+                          marginInline: '2px',
+                          transition: 'background-color 0.14s ease, border-color 0.14s ease',
+                        }}
+                      >
+                        {isItemSelected && <Check size={13} color={theme.colors.onPrimary || '#fff'} />}
+                      </div>
+                    ) : (
+                      <div
+                        style={{
+                          width: '24px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          flexShrink: 0,
+                        }}
+                      >
+                        {isCurrent ? (
+                          isPlaying ? (
+                            <div style={{ display: 'flex', alignItems: 'flex-end', gap: '2px', height: '14px' }}>
+                              <motion.div
+                                animate={{ height: ['4px', '14px', '6px', '12px', '4px'] }}
+                                transition={{ repeat: Infinity, duration: 0.85, ease: 'easeInOut' }}
+                                style={{ width: '2.5px', backgroundColor: primaryColor, borderRadius: '1px' }}
+                              />
+                              <motion.div
+                                animate={{ height: ['12px', '5px', '14px', '6px', '12px'] }}
+                                transition={{ repeat: Infinity, duration: 0.95, ease: 'easeInOut' }}
+                                style={{ width: '2.5px', backgroundColor: primaryColor, borderRadius: '1px' }}
+                              />
+                              <motion.div
+                                animate={{ height: ['7px', '13px', '4px', '14px', '7px'] }}
+                                transition={{ repeat: Infinity, duration: 0.75, ease: 'easeInOut' }}
+                                style={{ width: '2.5px', backgroundColor: primaryColor, borderRadius: '1px' }}
+                              />
+                            </div>
+                          ) : (
+                            <Volume2 size={15} style={{ color: primaryColor }} />
+                          )
                         ) : (
-                          <Volume2 size={15} style={{ color: primaryColor }} />
-                        )
-                      ) : (
-                        <span
-                          style={{
-                            fontSize: '0.6875rem',
-                            color: textSecondary,
-                            fontVariantNumeric: 'tabular-nums',
-                            fontWeight: 500,
-                          }}
-                        >
-                          {displayIndex + 1}
-                        </span>
-                      )}
-                    </div>
+                          <span
+                            style={{
+                              fontSize: '0.6875rem',
+                              color: textSecondary,
+                              fontVariantNumeric: 'tabular-nums',
+                              fontWeight: 500,
+                            }}
+                          >
+                            {displayIndex + 1}
+                          </span>
+                        )}
+                      </div>
+                    )}
 
                     {/* کاور آهنگ */}
                     <div
@@ -1154,8 +1435,8 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
                       {formatDuration(song.duration)}
                     </span>
 
-                    {/* حذف از صف (فقط برای آیتم‌های واقعی صف) */}
-                    {isQueueItem && (
+                    {/* حذف / منو / درگ (فقط برای آیتم‌های واقعی صف و خارج از حالت انتخاب) */}
+                    {isQueueItem && !isSelectMode && (
                       <>
                         <button
                           type="button"
@@ -1176,12 +1457,50 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'center',
-                            opacity: isMobile ? 0.72 : 0,
+                            opacity: isMobile ? 0.72 : 0.42,
                             transition: 'opacity 0.15s ease',
                             flexShrink: 0,
                           }}
                         >
-                          <X size={15} />
+                          <Trash2 size={14} />
+                        </button>
+
+                        <button
+                          type="button"
+                          data-queue-no-drag="true"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            const pos = computeAnchorMenuPosition({
+                              rect,
+                              menuWidth: 185,
+                              menuHeight: onPlayNextInQueue ? 170 : 132,
+                              viewportWidth: window.innerWidth,
+                              viewportHeight: window.innerHeight,
+                              isRTL,
+                              bottomReserve: inFullScreen ? (isShortWindow ? 10 : 16) : isShortWindow ? 92 : 112,
+                            });
+                            setContextMenu((prev) =>
+                              prev?.queueIndex === queueIndex
+                                ? null
+                                : { queueIndex, left: pos.left, top: pos.top, originY: pos.originY }
+                            );
+                          }}
+                          title={t.moreActions || 'Actions'}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            color: textSecondary,
+                            cursor: 'pointer',
+                            padding: '4px',
+                            borderRadius: '6px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            flexShrink: 0,
+                          }}
+                        >
+                          <MoreHorizontal size={15} />
                         </button>
 
                         {/* دستگیره جابه‌جایی لمسی و ماوس */}
@@ -1278,9 +1597,160 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
               <GripVertical size={16} style={{ color: primaryColor, flexShrink: 0 }} />
             </div>
           )}
+
         </motion.aside>
       )}
-    </AnimatePresence>,
+    </AnimatePresence>
+
+    {/* منوی سه‌نقطه و راست‌کلیک آیتم‌های صف در لایه مستقیم پورتال (خارج از transform پنل) */}
+    <AnimatePresence>
+      {isOpen && contextMenu && queue[contextMenu.queueIndex] && (() => {
+        const menuQueueIndex = contextMenu.queueIndex;
+        return (
+          <motion.div
+            ref={contextMenuRef}
+            key="queue-context-menu"
+            initial={{ opacity: 0, scale: 0.96 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.97 }}
+            transition={{ duration: 0.13, ease: [0.22, 1, 0.36, 1] }}
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: 'fixed',
+              left: contextMenu.left,
+              top: contextMenu.top,
+              transformOrigin: contextMenu.originY === 'bottom' ? 'bottom center' : 'top center',
+              minWidth: '185px',
+              padding: '5px',
+              borderRadius: theme.radius?.md || '12px',
+              backgroundColor: theme.colors.surfaceSolid || (theme.isDark ? '#18181c' : '#ffffff'),
+              border: `1px solid ${borderColor}`,
+              boxShadow: '0 16px 36px rgba(0, 0, 0, 0.44)',
+              zIndex: 1000030,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '2px',
+              direction: isRTL ? 'rtl' : 'ltr',
+              fontFamily: theme.fonts?.main,
+            }}
+          >
+            <button
+              type="button"
+              className="q-icon-btn"
+              onClick={() => {
+                onPlaySong(menuQueueIndex);
+                setContextMenu(null);
+              }}
+              style={{
+                width: '100%',
+                padding: '8px 10px',
+                borderRadius: '8px',
+                border: 'none',
+                background: 'transparent',
+                color: textPrimary,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '9px',
+                fontSize: '0.8125rem',
+                fontWeight: 500,
+                cursor: 'pointer',
+                textAlign: 'start',
+              }}
+            >
+              <Play size={15} />
+              <span>{t.play || 'پخش'}</span>
+            </button>
+
+            {onPlayNextInQueue && menuQueueIndex !== currentQueueIndex && (
+              <button
+                type="button"
+                className="q-icon-btn"
+                onClick={() => {
+                  onPlayNextInQueue(menuQueueIndex);
+                  setContextMenu(null);
+                }}
+                style={{
+                  width: '100%',
+                  padding: '8px 10px',
+                  borderRadius: '8px',
+                  border: 'none',
+                  background: 'transparent',
+                  color: textPrimary,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '9px',
+                  fontSize: '0.8125rem',
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                  textAlign: 'start',
+                }}
+              >
+                <ListStart size={15} />
+                <span>{t.playNext || 'پخش بعدی'}</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              className="q-icon-btn"
+              onClick={() => {
+                setIsSelectMode(true);
+                setSelectedQueueIndices((prev) =>
+                  prev.includes(menuQueueIndex) ? prev : [...prev, menuQueueIndex]
+                );
+                setContextMenu(null);
+              }}
+              style={{
+                width: '100%',
+                padding: '8px 10px',
+                borderRadius: '8px',
+                border: 'none',
+                background: 'transparent',
+                color: textPrimary,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '9px',
+                fontSize: '0.8125rem',
+                fontWeight: 500,
+                cursor: 'pointer',
+                textAlign: 'start',
+              }}
+            >
+              <CheckSquare size={15} />
+              <span>{t.select || 'انتخاب'}</span>
+            </button>
+
+            <button
+              type="button"
+              className="q-icon-btn"
+              onClick={() => {
+                onRemoveFromQueue(menuQueueIndex);
+                setContextMenu(null);
+              }}
+              style={{
+                width: '100%',
+                padding: '8px 10px',
+                borderRadius: '8px',
+                border: 'none',
+                background: 'transparent',
+                color: '#ef4444',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '9px',
+                fontSize: '0.8125rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                textAlign: 'start',
+              }}
+            >
+              <Trash2 size={15} />
+              <span>{t.removeFromQueue || 'حذف از صف'}</span>
+            </button>
+          </motion.div>
+        );
+      })()}
+    </AnimatePresence>
+    </>,
     document.body
   );
 };
